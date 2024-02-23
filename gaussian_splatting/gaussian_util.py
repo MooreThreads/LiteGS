@@ -40,8 +40,9 @@ class View:
         self.project_matrix=getProjectionMatrix(znear=self.z_near, zfar=self.z_far, fovX=self.fovX, fovY=self.fovY).transpose(0,1)
         self.camera_center = np.linalg.inv(self.world2view_matrix)[3, :3]
 
-        self.focal_x=self.image.shape[0]/(math.tan(fovX*0.5)*2)
-        self.focal_y=self.image.shape[1]/(math.tan(fovY*0.5)*2)
+        self.focal_x=self.image.shape[1]/(math.tan(fovX*0.5)*2)
+        self.focal_y=self.image.shape[0]/(math.tan(fovY*0.5)*2)
+        
 
         
         return

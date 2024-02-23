@@ -2,3 +2,4 @@
 .vscode
 output
 build
+trace_*.json

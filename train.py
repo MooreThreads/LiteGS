@@ -36,8 +36,8 @@ if __name__ == "__main__":
     cameras_info,images_info,scene,_,NerfNormRadius=TrainingDataLoader.load(lp.source_path,lp.images,lp.sh_degree)
 
     #params & optimizer
-    gaussian_model=GaussianSplattingModel(None,scene,NerfNormRadius)
-    training=GaussianTrain(gaussian_model,op,NerfNormRadius,images_info,cameras_info)
+    gaussian_model=GaussianSplattingModel(scene,NerfNormRadius)
+    training=GaussianTrain(gaussian_model,lp,op,NerfNormRadius,images_info,cameras_info)
 
     #start
     training.start(op.iterations)
