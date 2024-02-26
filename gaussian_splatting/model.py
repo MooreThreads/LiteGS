@@ -26,10 +26,25 @@ class GaussianSplattingModel:
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).cuda())#.sigmoid
         return
     
-    def cuda(self):
+    def get_params(self):
+        return (self._xyz,self._features_dc,self._features_rest,self._rotation,self.spatial_lr_scale,self._scaling,self._opacity)
+    
+    def load_params(self,params_tuple):
+        (self._xyz,self._features_dc,self._features_rest,self._rotation,self.spatial_lr_scale,self._scaling,self._opacity)=params_tuple
         return
 
-    def __calc_cov3d(scaling_vec,rotator_vec):
+    @torch.no_grad
+    def save_to_scene(self,scene:GaussianScene):
+        scene.position=self._xyz.cpu().numpy()
+        scene.sh_coefficient_dc=self._features_dc.cpu().numpy()
+        scene.sh_coefficient_rest=self._features_rest.cpu().numpy()
+        scene.rotator=self._rotation.cpu().numpy()
+        scene.scale=self._scaling.cpu().numpy()
+        scene.opacity=self._opacity.cpu().numpy()
+
+        return
+
+    def transform_to_cov3d(self,scaling_vec,rotator_vec):
         #todo implement cuda: scale&rot -> matrix
         scale_matrix=torch.zeros((*(scaling_vec.shape[0:-1]),3,3),device='cuda')
         scale_matrix[...,0,0]=scaling_vec[...,0]
@@ -60,7 +75,7 @@ class GaussianSplattingModel:
         cov3d=torch.matmul(M_matrix.transpose(-1,-2),M_matrix)
         return cov3d
     
-    def __calc_cov3d_faster(scaling_vec,rotator_vec):
+    def transform_to_cov3d_faster(self,scaling_vec,rotator_vec):
         rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
 
         r=rotator_vec[...,0]
@@ -81,49 +96,27 @@ class GaussianSplattingModel:
         rotation_matrix[...,2,1]=2 * (y * z - r * x)
         rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
 
-        M_matrix_3d=rotation_matrix*scaling_vec.unsqueeze(3)
-        #cov3d=torch.matmul(M_matrix_3d.transpose(-1,-2),M_matrix_3d)
-        return M_matrix_3d
+        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(3)
+        cov3d=TransformCovarianceMatrix.apply(transform_matrix)
+        #cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
+        return cov3d,transform_matrix
     
-    def __calc_cov2d(cov3d,point_positions,view_matrix,camera_focal):
-        #assert(cov3d.shape[0]==point_positions.shape[0] and cov3d.shape[1]==point_positions.shape[1])
-
-        t=torch.matmul(point_positions,view_matrix)
-        
-        J_transposed=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
-        camera_focal=camera_focal.unsqueeze(1)
-        tz_square=t[:,:,2]*t[:,:,2]
-        J_transposed[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-        J_transposed[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-        J_transposed[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-        J_transposed[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
-        #with autocast():
-        view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-        T_trans=torch.matmul(J_transposed,view_matrix.transpose(2,3))
+    def proj_cov3d_to_cov2d(self,cov3d,point_positions,view_matrix,camera_focal):
+        with torch.no_grad():
+            t=torch.matmul(point_positions,view_matrix)
+            
+            J_transposed=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
+            camera_focal=camera_focal.unsqueeze(1)
+            tz_square=t[:,:,2]*t[:,:,2]
+            J_transposed[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
+            J_transposed[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
+            J_transposed[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
+            J_transposed[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            #with autocast():
+            view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
+            T_trans=torch.matmul(J_transposed,view_matrix.transpose(2,3))
         #T' x cov3d' x T
-        cov2d=torch.matmul(torch.matmul(T_trans,cov3d.transpose(2,3)),T_trans.transpose(2,3))
-
-        return cov2d[:,:,0:2,0:2]
-    
-    def __calc_cov2d_faster(M_matrix_3d,point_positions,view_matrix,camera_focal):
-        #assert(cov3d.shape[0]==point_positions.shape[0] and cov3d.shape[1]==point_positions.shape[1])
-
-        t=torch.matmul(point_positions,view_matrix)
-        
-        J=torch.zeros_like(M_matrix_3d,device='cuda')#view point mat3x3
-        camera_focal=camera_focal.unsqueeze(1)
-        tz_square=t[:,:,2]*t[:,:,2]
-        J[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-        J[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-        J[:,:,2,0]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-        J[:,:,2,1]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
-        #with autocast():
-        view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-        T=view_matrix@J
-        temp=M_matrix_3d@T
-        #T' x cov3d' x T
-        cov2d=temp.transpose(-1,-2)@temp
-        #cov2d_slow=T.transpose(-1,-2)@(M_matrix_3d.transpose(-1,-2)@M_matrix_3d).transpose(-1,-2)@T
+        cov2d=torch.matmul(torch.matmul(T_trans,cov3d.transpose(2,3)),T_trans.transpose(2,3))#forward backward 1s
 
         return cov2d[:,:,0:2,0:2]
 
@@ -136,12 +129,13 @@ class GaussianSplattingModel:
 
         return
     
-
-    def worldpose_2_ndc(self,pos,view_matrix,project_matrix):
-        translated_pos=torch.matmul(pos,view_matrix)
-        hom_pos=torch.matmul(translated_pos,project_matrix)
+    def world_to_ndc(self,position,view_project_matrix):
+        hom_pos=torch.matmul(position,view_project_matrix)
         ndc_pos=hom_pos/(hom_pos[:,:,3:4]+1e-6)
-        return ndc_pos,translated_pos
+        return ndc_pos
+
+    def world_to_view(self,position,view_matrix):
+        return position@view_matrix
 
     @torch.no_grad()
     def culling_and_sort(self,ndc_pos,translated_pos):
@@ -165,25 +159,13 @@ class GaussianSplattingModel:
     
     def sample_by_visibility(self,visible_points_for_views,visible_points_num_for_views):
         #visible_cov3d=GaussianSplattingModel.__calc_cov3d(self._scaling[visible_points_for_views].exp(),torch.nn.functional.normalize(self._rotation[visible_points_for_views]))
-        M_matrix_3d=GaussianSplattingModel.__calc_cov3d_faster(self._scaling[visible_points_for_views].exp(),torch.nn.functional.normalize(self._rotation[visible_points_for_views]))
+        scales=self._scaling[visible_points_for_views].exp()
+        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views])
 
         visible_positions=self._xyz[visible_points_for_views]
         visible_opacities=self._opacity[visible_points_for_views].sigmoid()
         visible_sh0=self._features_dc[visible_points_for_views]
-        return M_matrix_3d,visible_positions,visible_opacities,visible_sh0
-    
-    def proj_cov3d_to_cov2d(self,M_matrix_3d,visible_positions,
-                            view_matrix,camera_focal):
-        '''
-        output: conv2d tensor  
-            tensor size: ViewsNum x PointsNum(max num: 8M) x 2 x 2 
-            memory size: 32 x 8M x 2 x 2 x sizeof(float)    ->  4G(backward +4G)
-
-        '''
-        #cov2d=GaussianSplattingModel.__calc_cov2d(visible_cov3d,visible_positions,view_matrix,camera_focal)
-        cov2d=GaussianSplattingModel.__calc_cov2d_faster(M_matrix_3d,visible_positions,view_matrix,camera_focal)
-
-        return cov2d
+        return scales,rotators,visible_positions,visible_opacities,visible_sh0
 
     
     @torch.no_grad
@@ -241,8 +223,17 @@ class GaussianSplattingModel:
         return tile_start_index,sorted_pointId,sorted_tileId,tiles_touched
     
     def pixel_raster_in_tile(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,b_gather=False):
+        
+        #cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
+        #faster but unstable
+        reci_det=1/(torch.det(cov2d)+1e-9)
+        cov2d_inv=cov2d*reci_det.unsqueeze(2).unsqueeze(2)
+        cov2d_inv[...,0,1]=-cov2d_inv[...,0,1]
+        cov2d_inv[...,1,0]=-cov2d_inv[...,1,0]
+        temp=cov2d_inv[...,0,0]
+        cov2d_inv[...,0,0]=cov2d_inv[...,1,1]
+        cov2d_inv[...,1,1]=temp
 
-        cov2d_inv=torch.linalg.inv(cov2d)
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
 
         if b_gather:
@@ -261,7 +252,19 @@ class GaussianSplattingModel:
 
         return img,transmitance
     
+
+class TransformCovarianceMatrix(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,transforms:torch.Tensor):
+        ctx.save_for_backward(transforms)
+        cov=transforms.transpose(-1,-2)@transforms
+        return cov
     
+    @staticmethod
+    def backward(ctx,CovarianceMatrixGradient:torch.Tensor):
+        (transforms,)=ctx.saved_tensors
+        return (2*transforms@CovarianceMatrixGradient)
+
 class GaussiansRaster(torch.autograd.Function):
     @staticmethod
     def forward(

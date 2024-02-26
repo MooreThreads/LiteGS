@@ -364,7 +364,7 @@ __global__ void raster_forward_kernel(
 
             int valid_num = min(tilesize * tilesize, end_index_in_tile - offset);
             //load to shared memory
-            if(threadIdx.y*blockDim.x+threadIdx.x<valid_num)
+            if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
             {
                 int i=threadIdx.y * blockDim.x + threadIdx.x;
                 int index = offset + i;
@@ -560,8 +560,9 @@ __global__ void raster_backward_kernel(
 
             int valid_num = min(tilesize * tilesize, offset- start_index_in_tile+1);
             //load to shared memory
-            for (int i = 0; i < valid_num; i++)
+            if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
             {
+                int i = threadIdx.y * blockDim.x + threadIdx.x;
                 int index = offset - i;
                 int point_id = sorted_points[batch_id][index];
                 collected_point_id[i] = point_id;
@@ -639,7 +640,8 @@ __global__ void raster_backward_kernel(
                 float d_power = G * d_G;
                 atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][0][0]), -0.5f * d.x * d.x * d_power);
                 atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][1][1]), -0.5f * d.y * d.y * d_power);
-                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][0][1]), -d.x * d.y * d_power);
+                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][0][1]), -0.5f * d.x * d.y * d_power);
+                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][1][0]), -0.5f * d.y * d.x * d_power);
 
                 //mean2d
                 float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
