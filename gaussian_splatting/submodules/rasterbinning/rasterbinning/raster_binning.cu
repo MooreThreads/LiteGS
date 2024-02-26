@@ -161,9 +161,9 @@ __global__ void rasterize_gathered_forward_kernel(
 
 
     __shared__ float2 collected_xy[tilesize* tilesize];
-    __shared__ float collected_opacity[tilesize * tilesize];
+    __shared__ float collected_opacity[tilesize * tilesize/2];
     __shared__ float3 collected_cov2d_inv[tilesize* tilesize];
-    __shared__ float3 collected_color[tilesize * tilesize];
+    __shared__ float3 collected_color[tilesize * tilesize/2];
 
     const int batch_id = blockIdx.y;
     const int tile_id = blockIdx.x+1;
@@ -186,7 +186,7 @@ __global__ void rasterize_gathered_forward_kernel(
             if (num_done == blockDim.x*blockDim.y)
                 break;
 
-            int valid_num = min(tilesize * tilesize, end_index_in_tile - offset);
+            int valid_num = min(tilesize * tilesize/2, end_index_in_tile - offset);
             //load to shared memory
             for (int i = 0; i < valid_num; i++)
             {
@@ -333,10 +333,10 @@ __global__ void raster_forward_kernel(
 {
 
 
-    __shared__ float2 collected_xy[tilesize * tilesize];
-    __shared__ float collected_opacity[tilesize * tilesize];
-    __shared__ float3 collected_cov2d_inv[tilesize * tilesize];
-    __shared__ float3 collected_color[tilesize * tilesize];
+    __shared__ float2 collected_xy[tilesize * tilesize/2];
+    __shared__ float collected_opacity[tilesize * tilesize/2];
+    __shared__ float3 collected_cov2d_inv[tilesize * tilesize/2];
+    __shared__ float3 collected_color[tilesize * tilesize/2];
 
     const int batch_id = blockIdx.y;
     const int tile_id = blockIdx.x + 1;
@@ -356,13 +356,13 @@ __global__ void raster_forward_kernel(
         bool done = false;
         float3 final_color{ 0,0,0 };
         int last_contributor = 0;
-        for (int offset = start_index_in_tile; offset < end_index_in_tile; offset += tilesize * tilesize)
+        for (int offset = start_index_in_tile; offset < end_index_in_tile; offset += tilesize * tilesize/2)
         {
             int num_done = __syncthreads_count(done);
             if (num_done == blockDim.x * blockDim.y)
                 break;
 
-            int valid_num = min(tilesize * tilesize, end_index_in_tile - offset);
+            int valid_num = min(tilesize * tilesize/2, end_index_in_tile - offset);
             //load to shared memory
             if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
             {
@@ -519,12 +519,18 @@ __global__ void raster_backward_kernel(
 )
 {
 
+    __shared__ int collected_point_id[tilesize * tilesize / 2];
 
-    __shared__ float2 collected_xy[tilesize * tilesize];
-    __shared__ float collected_opacity[tilesize * tilesize];
-    __shared__ float3 collected_cov2d_inv[tilesize * tilesize];
-    __shared__ float3 collected_color[tilesize * tilesize];
-    __shared__ int collected_point_id[tilesize * tilesize];
+    __shared__ float2 collected_xy[tilesize * tilesize/2];
+    __shared__ float collected_opacity[tilesize * tilesize/2];
+    __shared__ float3 collected_cov2d_inv[tilesize * tilesize/2];
+    __shared__ float3 collected_color[tilesize * tilesize/2];
+
+    __shared__ float2 shared_grad_xy[tilesize * tilesize / 2];
+    __shared__ float shared_grad_opacity[tilesize * tilesize / 2];
+    __shared__ float3 shared_grad_cov2d_inv[tilesize * tilesize / 2];
+    __shared__ float3 shared_grad_color[tilesize * tilesize / 2];
+    
 
     const int batch_id = blockIdx.y;
     const int tile_id = blockIdx.x + 1;
@@ -555,10 +561,10 @@ __global__ void raster_backward_kernel(
         float3 last_color{ 0,0,0 };
         float last_alpha = 0;
 
-        for (int offset = end_index_in_tile-1; offset >= start_index_in_tile; offset -= tilesize * tilesize)
+        for (int offset = end_index_in_tile-1; offset >= start_index_in_tile; offset -= tilesize * tilesize/2)
         {
 
-            int valid_num = min(tilesize * tilesize, offset- start_index_in_tile+1);
+            int valid_num = min(tilesize * tilesize/2, offset- start_index_in_tile+1);
             //load to shared memory
             if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
             {
@@ -576,6 +582,16 @@ __global__ void raster_backward_kernel(
                 collected_color[i].y = color[batch_id][point_id][1];
                 collected_color[i].z = color[batch_id][point_id][2];
                 collected_opacity[i] = opacity[batch_id][point_id][0];
+
+                shared_grad_xy[i].x = 0;
+                shared_grad_xy[i].y = 0;
+                shared_grad_cov2d_inv[i].x = 0;
+                shared_grad_cov2d_inv[i].y = 0;
+                shared_grad_cov2d_inv[i].z = 0;
+                shared_grad_color[i].x = 0;
+                shared_grad_color[i].y = 0;
+                shared_grad_color[i].z = 0;
+                shared_grad_opacity[i] = 0;
             }
             __syncthreads();
 
@@ -612,9 +628,9 @@ __global__ void raster_backward_kernel(
 
 
                 //color
-                atomicAdd(&(d_color[batch_id][collected_point_id[i]][0]), alpha * transmittance * d_pixel.x);
-                atomicAdd(&(d_color[batch_id][collected_point_id[i]][1]), alpha * transmittance * d_pixel.y);
-                atomicAdd(&(d_color[batch_id][collected_point_id[i]][2]), alpha * transmittance * d_pixel.z);
+                atomicAdd(&shared_grad_color[i].x, alpha * transmittance * d_pixel.x);//d_color[batch_id][collected_point_id[i]][0]
+                atomicAdd(&shared_grad_color[i].y, alpha * transmittance * d_pixel.y);
+                atomicAdd(&shared_grad_color[i].z, alpha * transmittance * d_pixel.z);
 
                 //alpha
                 accum_rec.x = last_alpha * last_color.x + (1.0f - last_alpha) * accum_rec.x;
@@ -629,7 +645,7 @@ __global__ void raster_backward_kernel(
                 d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
 
                 //opacity
-                atomicAdd(&(d_opacity[batch_id][collected_point_id[i]][0]), G* d_alpha);
+                atomicAdd(&shared_grad_opacity[i], G* d_alpha);//d_opacity[batch_id][collected_point_id[i]][0]
                 /*if (collected_point_id[i] == 669 && abs(G * d_alpha) > 1e-8f)
                 {
                     printf("\n %e %d %d", G * d_alpha, pixel_x, pixel_y);
@@ -638,20 +654,40 @@ __global__ void raster_backward_kernel(
                 //cov2d_inv
                 float d_G = cur_opacity * d_alpha;
                 float d_power = G * d_G;
-                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][0][0]), -0.5f * d.x * d.x * d_power);
-                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][1][1]), -0.5f * d.y * d.y * d_power);
-                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][0][1]), -0.5f * d.x * d.y * d_power);
-                atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][1][0]), -0.5f * d.y * d.x * d_power);
+                atomicAdd(&shared_grad_cov2d_inv[i].x, -0.5f * d.x * d.x * d_power);
+                atomicAdd(&shared_grad_cov2d_inv[i].z, -0.5f * d.y * d.y * d_power);
+                atomicAdd(&shared_grad_cov2d_inv[i].y, -0.5f * d.x * d.y * d_power);
+                //atomicAdd(&shared_grad_cov2d_inv[i][1][0], -0.5f * d.y * d.x * d_power);
 
                 //mean2d
                 float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
                 float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
                 //d_x=d_deltax
                 //d_y=d_deltay
-                atomicAdd(&(d_mean2d[batch_id][collected_point_id[i]][0]), d_deltax);
-                atomicAdd(&(d_mean2d[batch_id][collected_point_id[i]][1]), d_deltay);
+                atomicAdd(&shared_grad_xy[i].x, d_deltax);
+                atomicAdd(&shared_grad_xy[i].y, d_deltay);
+            }
+            __syncthreads();
+            if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
+            {
+                int i = threadIdx.y * blockDim.x + threadIdx.x;
+                int point_id = collected_point_id[i];
+                atomicAdd(&d_color[batch_id][point_id][0], shared_grad_color[i].x);
+                atomicAdd(&d_color[batch_id][point_id][1], shared_grad_color[i].y);
+                atomicAdd(&d_color[batch_id][point_id][2], shared_grad_color[i].z);
+
+                atomicAdd(&d_opacity[batch_id][point_id][0], shared_grad_opacity[i]);
+
+                atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], shared_grad_cov2d_inv[i].x);
+                atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], shared_grad_cov2d_inv[i].y);
+                atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], shared_grad_cov2d_inv[i].y);
+                atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], shared_grad_cov2d_inv[i].z);
+
+                atomicAdd(&d_mean2d[batch_id][point_id][0], shared_grad_xy[i].x);
+                atomicAdd(&d_mean2d[batch_id][point_id][1], shared_grad_xy[i].y);
 
             }
+
             __syncthreads();
         }
 

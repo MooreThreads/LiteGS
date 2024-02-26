@@ -312,3 +312,20 @@ class GaussianTrain:
                 pass
         return
     
+    def test(self,iteration:int,load_checkpoint:str=None,checkpoint_iterations:typing.List=[],saving_iterations:typing.List=[]):
+        if load_checkpoint is not None:
+            self.restore(load_checkpoint)
+
+        with torch.no_grad():
+            self.model.update_tiles_coord(self.image_size,self.tile_size)
+            view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
+            view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
+            camera_center=torch.Tensor(self.view_manager.camera_center_tensor).cuda()
+            camera_focal=torch.Tensor(self.view_manager.camera_focal_tensor).cuda()
+            ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
+            total_views_num=view_matrix.shape[0]
+
+
+        self.__iter_update_cache(0,1,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
+
+        return
