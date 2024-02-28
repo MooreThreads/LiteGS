@@ -596,20 +596,7 @@ __global__ void raster_backward_kernel(
                 collected_color_y[i] = color[batch_id][point_id][1];
                 collected_color_z[i] = color[batch_id][point_id][2];
             }
-            
-            if (threadIdx.y * blockDim.x + threadIdx.x < tilesize * tilesize)
-            {
-                int i = threadIdx.y * blockDim.x + threadIdx.x;
-                grad_color_x[i]=0;
-                grad_color_y[i]=0;
-                grad_color_z[i]=0;
-                grad_invcov_x[i]=0;
-                grad_invcov_y[i]=0;
-                grad_invcov_z[i]=0;
-                grad_mean_x[i]=0;
-                grad_mean_y[i]=0;
-                grad_opacity[i]=0;
-            }
+
             __syncthreads();
 
 
