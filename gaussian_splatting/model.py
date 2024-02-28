@@ -105,18 +105,18 @@ class GaussianSplattingModel:
         with torch.no_grad():
             t=torch.matmul(point_positions,view_matrix)
             
-            J=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
+            J_trans=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
             camera_focal=camera_focal.unsqueeze(1)
             tz_square=t[:,:,2]*t[:,:,2]
-            J[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-            J[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-            J[:,:,2,0]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            J[:,:,2,1]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            J_trans[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
+            J_trans[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
+            J_trans[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
+            J_trans[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
             #with autocast():
             view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-            T=view_matrix@J
+            T=J_trans@view_matrix.transpose(-1,-2)
         #T' x cov3d' x T
-        cov2d=T.transpose(-1,-2)@cov3d.transpose(-1,-2)@T#forward backward 1s
+        cov2d=T@cov3d.transpose(-1,-2)@T.transpose(-1,-2)#forward backward 1s
 
         return cov2d[:,:,0:2,0:2]
 
