@@ -10,7 +10,7 @@ import typing
 from tqdm import tqdm
 import numpy as np
 import math
-
+import random
 from matplotlib import pyplot as plt 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -153,19 +153,24 @@ class GaussianTrain:
             ndc_pos=self.model.world_to_ndc(self.model._xyz,view_project_matrix)
             translated_pos=self.model.world_to_view(self.model._xyz,view_matrix)
             visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
+            
             #cluster the views according to the visible_points_num
-            visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
-            visible_points_for_views=visible_points_for_views[view_indices]
-            view_matrix=view_matrix[view_indices]
-            view_project_matrix=view_project_matrix[view_indices]
-            camera_focal=camera_focal[view_indices]
-            camera_center=camera_center[view_indices]
-            ground_truth=ground_truth[view_indices]
+            # visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
+            # visible_points_for_views=visible_points_for_views[view_indices]
+            # view_matrix=view_matrix[view_indices]
+            # view_project_matrix=view_project_matrix[view_indices]
+            # camera_focal=camera_focal[view_indices]
+            # camera_center=camera_center[view_indices]
+            # ground_truth=ground_truth[view_indices]
+
+        
+        log_loss=0
+        iter_range=list(range(0,total_views_num,batch_size))
+        random.shuffle(iter_range)
 
         #iter batch
-        log_loss=0
         #with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],use_cuda=True) as prof:
-        for i in range(0,total_views_num,batch_size):
+        for i in iter_range:
             batch_tail=min(i+batch_size,total_views_num)
 
             #gather batch data
@@ -183,6 +188,7 @@ class GaussianTrain:
             scales,rotators,visible_positions,visible_opacities,visible_sh0=self.model.sample_by_visibility(visible_points_for_views_batch,visible_points_num_batch)
 
             #cov
+            #cov3d,transform_matrix=self.model.transform_to_cov3d_faster(scales,rotators)
             cov3d,transform_matrix=self.model.transform_to_cov3d_faster(scales,rotators)
             visible_cov2d=self.model.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix_batch,camera_focal_batch)
             
