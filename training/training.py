@@ -166,7 +166,7 @@ class GaussianTrain:
         
         log_loss=0
         iter_range=list(range(0,total_views_num,batch_size))
-        #random.shuffle(iter_range)
+        random.shuffle(iter_range)
 
         #iter batch
         #with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],use_cuda=True) as prof:

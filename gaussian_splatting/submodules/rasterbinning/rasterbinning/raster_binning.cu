@@ -597,7 +597,7 @@ __global__ void raster_backward_kernel(
                 collected_color_z[i] = color[batch_id][point_id][2];
             }
             
-            if (threadIdx.y * blockDim.x + threadIdx.x < valid_num*2)
+            if (threadIdx.y * blockDim.x + threadIdx.x < tilesize * tilesize)
             {
                 int i = threadIdx.y * blockDim.x + threadIdx.x;
                 grad_color_x[i]=0;
@@ -615,7 +615,7 @@ __global__ void raster_backward_kernel(
 
             //process
             
-            for (int i = 0; i < valid_num && Done == false; i++)
+            for (int i = 0; i < valid_num; i++)
             {
                 int index = offset - i;
                 bool bSkip = false;
@@ -640,7 +640,7 @@ __global__ void raster_backward_kernel(
                 if (alpha < 1.0f / 255.0f)
                     bSkip = true;
 
-                if (bSkip == false)
+                if (bSkip == false && Done == false)
                 {
                     transmittance /= (1 - alpha);
                     //color
@@ -677,13 +677,13 @@ __global__ void raster_backward_kernel(
                     float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
                     //d_x=d_deltax
                     //d_y=d_deltay
-                    grad_mean_x[threadidx] += d_deltax;
-                    grad_mean_y[threadidx] += d_deltay;
+                    grad_mean_x[threadidx] = d_deltax;
+                    grad_mean_y[threadidx] = d_deltay;
                 }
 
                 __syncthreads();
                 //reduction
-                for (int step_size = tilesize * tilesize / 4; step_size > 0; step_size /= 2)
+                for (int step_size = tilesize * tilesize / 2; step_size > 0; step_size /= 2)
                 {
                     if (threadidx < step_size)
                     {
@@ -779,7 +779,6 @@ std::vector<Tensor> rasterize_backward(
                 d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
                 tilesnum_x
                 );
-        //cudaDeviceSynchronize();
         CUDA_CHECK_ERRORS;
     }
     else if (tilesize == 32)
