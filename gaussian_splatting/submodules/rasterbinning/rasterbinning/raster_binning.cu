@@ -680,6 +680,22 @@ __global__ void raster_backward_kernel(
                     grad_mean_x[threadidx] = d_deltax;
                     grad_mean_y[threadidx] = d_deltay;
                 }
+                else
+                {
+                    grad_color_x[threadidx] = 0;
+                    grad_color_y[threadidx] = 0;
+                    grad_color_z[threadidx] = 0;
+
+                    grad_invcov_x[threadidx] = 0;
+                    grad_invcov_y[threadidx] = 0;
+                    grad_invcov_z[threadidx] = 0;
+
+                    grad_mean_x[threadidx] = 0;
+                    grad_mean_y[threadidx] = 0;
+
+                    grad_opacity[threadidx] = 0;
+
+                }
 
                 __syncthreads();
                 //reduction
