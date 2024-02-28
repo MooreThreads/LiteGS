@@ -71,9 +71,9 @@ class GaussianSplattingModel:
         rotation_matrix[...,2,1]=2 * (y * z - r * x)
         rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
 
-        M_matrix=torch.matmul(scale_matrix,rotation_matrix)
+        M_matrix=torch.matmul(scale_matrix,rotation_matrix.transpose(-1,-2))
         cov3d=torch.matmul(M_matrix.transpose(-1,-2),M_matrix)
-        return cov3d
+        return cov3d,M_matrix
     
     def transform_to_cov3d_faster(self,scaling_vec,rotator_vec):
         rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
@@ -105,18 +105,18 @@ class GaussianSplattingModel:
         with torch.no_grad():
             t=torch.matmul(point_positions,view_matrix)
             
-            J_transposed=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
+            J=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
             camera_focal=camera_focal.unsqueeze(1)
             tz_square=t[:,:,2]*t[:,:,2]
-            J_transposed[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-            J_transposed[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-            J_transposed[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            J_transposed[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            J[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
+            J[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
+            J[:,:,2,0]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
+            J[:,:,2,1]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
             #with autocast():
             view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-            T_trans=torch.matmul(J_transposed,view_matrix.transpose(2,3))
+            T=view_matrix@J
         #T' x cov3d' x T
-        cov2d=torch.matmul(torch.matmul(T_trans,cov3d.transpose(2,3)),T_trans.transpose(2,3))#forward backward 1s
+        cov2d=T.transpose(-1,-2)@cov3d.transpose(-1,-2)@T#forward backward 1s
 
         return cov2d[:,:,0:2,0:2]
 
@@ -160,7 +160,7 @@ class GaussianSplattingModel:
     def sample_by_visibility(self,visible_points_for_views,visible_points_num_for_views):
         #visible_cov3d=GaussianSplattingModel.__calc_cov3d(self._scaling[visible_points_for_views].exp(),torch.nn.functional.normalize(self._rotation[visible_points_for_views]))
         scales=self._scaling[visible_points_for_views].exp()
-        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views])
+        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views],dim=2)
 
         visible_positions=self._xyz[visible_points_for_views]
         visible_opacities=self._opacity[visible_points_for_views].sigmoid()
@@ -224,15 +224,14 @@ class GaussianSplattingModel:
     
     def pixel_raster_in_tile(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,b_gather=False):
         
-        #cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
+        # cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
         #faster but unstable
-        reci_det=1/(torch.det(cov2d)+1e-9)
-        cov2d_inv=cov2d*reci_det.unsqueeze(2).unsqueeze(2)
-        cov2d_inv[...,0,1]=-cov2d_inv[...,0,1]
-        cov2d_inv[...,1,0]=-cov2d_inv[...,1,0]
-        temp=cov2d_inv[...,0,0]
-        cov2d_inv[...,0,0]=cov2d_inv[...,1,1]
-        cov2d_inv[...,1,1]=temp
+        reci_det=1/(torch.det(cov2d)+1e-7)
+        cov2d_inv=torch.zeros_like(cov2d)
+        cov2d_inv[...,0,1]=-cov2d[...,0,1]*reci_det
+        cov2d_inv[...,1,0]=-cov2d[...,1,0]*reci_det
+        cov2d_inv[...,0,0]=cov2d[...,1,1]*reci_det
+        cov2d_inv[...,1,1]=cov2d[...,0,0]*reci_det
 
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
 
@@ -286,12 +285,16 @@ class GaussiansRaster(torch.autograd.Function):
         return img,transmitance
     
     @staticmethod
-    def backward(ctx, grad_out_color, grad_out_transmitance):
+    def backward(ctx, grad_out_color:torch.Tensor, grad_out_transmitance):
         sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities=ctx.saved_tensors
         (tiles_num_x,tiles_num_y)=ctx.tiles_num
         tile_size=ctx.arg_tile_size
 
+
+
         grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.RasterBinning.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,transmitance,lst_contributor,grad_out_color,tile_size,tiles_num_x,tiles_num_y)
+
+        #print(grad_cov2d_inv[0,68362])
 
         grads = (
             None,
