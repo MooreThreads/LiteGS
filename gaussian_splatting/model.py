@@ -21,7 +21,6 @@ class GaussianSplattingModel:
         self.cached_cov3d=None
 
         #exp scale
-        scene.scale[...,0]+=1
         self._scaling = torch.nn.Parameter(torch.Tensor(scene.scale).cuda())#.exp 
         #sigmoid(opacity)
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).cuda())#.sigmoid
