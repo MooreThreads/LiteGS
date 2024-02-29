@@ -1,0 +1,30 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label":"BuildSubmodel:simple-knn",
+            "type":"shell",
+            "command":"python",
+            "args":["setup.py","build_ext","--inplace","-j8"],
+            "options":{"cwd":"./gaussian_splatting/submodules/simple-knn"},
+            "group": "build"
+        },
+        {
+            "label":"InstallSubmodel:simple-knn",
+            "type":"shell",
+            "command":"python",
+            "args":["setup.py","develop"],
+            "options":{"cwd":"./gaussian_splatting/submodules/simple-knn"},
+            "group": "none",
+            "dependsOn":["BuildSubmodel:simple-knn"]
+        },
+        {
+            "label": "BuildAndInstall",
+            "dependsOn": [
+                "InstallSubmodel:simple-knn",
+            ]
+        }
+    ]
+}

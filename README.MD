@@ -9,7 +9,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 ## Features
 
-1. **Modular Design**: The refactored Gaussian splatting implementation separates the forward and backward into individual PyTorch operators, allowing for greater modularity and accessibility. Besides, by leveraging PyTorch Autograd, the refactored codebase eliminates the need for deriving the gradient formula manually.
+1. **Modular Design**: The refactored Gaussian splatting implementation separates the forward and backward into multiple PyTorch operators, allowing for greater modularity and accessibility. Besides, by leveraging PyTorch Autograd, the refactored codebase eliminates the need for deriving the gradient formula manually so that we can add loss term for intermediate variables easily.
 
 2. **Fewer Atomic Operation**: Instead of using a lot of AtomicAdd in backward, using reduction in shared memory is much more efficient.
 
