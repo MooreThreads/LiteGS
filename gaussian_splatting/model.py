@@ -7,7 +7,7 @@ import numpy as np
 import math
 from torch.cuda.amp import autocast
 
-torch.ops.load_library("gaussian_splatting/submodules/rasterbinning/rasterbinning/build/Release/RasterBinning.dll")
+torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
 
 class GaussianSplattingModel:
     @torch.no_grad

@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.9)
 
-project(pytorch_cmake_example LANGUAGES CXX CUDA)
+project(gaussian_splatting_pytorch_lib LANGUAGES CXX CUDA)
 
 set( CMAKE_CXX_STANDARD 17)
 set( CMAKE_CUDA_STANDARD 17 )
@@ -21,13 +21,13 @@ include_directories (${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 set( INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include" )
 
 
-add_library(RasterBinning SHARED
+add_library(GaussianRaster SHARED
   ext_cuda.cpp
   raster_binning.cu
 )
 
-target_include_directories(RasterBinning PRIVATE "${INCLUDE_DIR}")
+target_include_directories(GaussianRaster PRIVATE "${INCLUDE_DIR}")
 
-target_link_libraries(RasterBinning PRIVATE ${TORCH_LIBRARIES} Python::Python)
+target_link_libraries(GaussianRaster PRIVATE ${TORCH_LIBRARIES} Python::Python)
 
 #cmake -DCMAKE_PREFIX_PATH="C:\Users\admin\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\share\cmake" ..

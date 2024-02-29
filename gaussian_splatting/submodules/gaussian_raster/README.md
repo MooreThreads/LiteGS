@@ -6,11 +6,11 @@ It is used by our training code.
 ## Installation
 1. Build Dynamic Library
 
-    `mkdir ./rasterbinning/build`
+    `mkdir ./build`
 
-    `cd ./rasterbinning/build`
+    `cd ./build`
     
-    `cmake -DCMAKE_PREFIX_PATH=@1\share\cmake ../` replace @1 with the installation path of your PyTorch, which is like "\$PYTHONHOME\$/lib/site-packages/torch"
+    `cmake -DCMAKE_PREFIX_PATH=@1\share\cmake ../` replace @1 with the installation path of your PyTorch, which is like "\$PYTHONHOME\$/Lib/site-packages/torch"
 
     `cmake --build . --config Release`
 
