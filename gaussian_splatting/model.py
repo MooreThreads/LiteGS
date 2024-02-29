@@ -35,13 +35,13 @@ class GaussianSplattingModel:
 
     @torch.no_grad
     def save_to_scene(self,scene:GaussianScene):
-        scene.position=self._xyz.cpu().numpy()
+        scene.position=self._xyz[...,:3].cpu().numpy()
         scene.sh_coefficient_dc=self._features_dc.cpu().numpy()
         scene.sh_coefficient_rest=self._features_rest.cpu().numpy()
         scene.rotator=self._rotation.cpu().numpy()
         scene.scale=self._scaling.cpu().numpy()
         scene.opacity=self._opacity.cpu().numpy()
-
+        scene.sh_degree=0
         return
 
     def transform_to_cov3d(self,scaling_vec,rotator_vec):
@@ -169,7 +169,7 @@ class GaussianSplattingModel:
 
     
     @torch.no_grad
-    def tile_raster(self,ndc:torch.Tensor,cov2d:torch.Tensor,valid_points_num:torch.Tensor,b_gather=False):
+    def binning(self,ndc:torch.Tensor,cov2d:torch.Tensor,valid_points_num:torch.Tensor,b_gather=False):
         
         tilesX=self.cached_tiles_size[0]
         tilesY=self.cached_tiles_size[1]
@@ -191,7 +191,7 @@ class GaussianSplattingModel:
         R=((coordX+pixel_radius)/tile_size).ceil().int().clamp(0,tilesX)
         D=((coordY+pixel_radius)/tile_size).ceil().int().clamp(0,tilesY)
 
-        #calc allocate params
+        #calculate params of allocation
         tiles_touched=(R-L)*(D-U)
         prefix_sum=tiles_touched.cumsum(1)
         total_tiles_num_batch=prefix_sum.gather(1,valid_points_num.unsqueeze(1)-1)
@@ -214,7 +214,7 @@ class GaussianSplattingModel:
         #cmp_result=(sorted_tileId!=0).sum(dim=1)==total_tiles_num_batch[:,0]
         #print(cmp_result)
 
-        #calc range
+        # range
         tile_start_index=torch.ops.RasterBinning.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
 
         if b_gather:
@@ -222,7 +222,7 @@ class GaussianSplattingModel:
             
         return tile_start_index,sorted_pointId,sorted_tileId,tiles_touched
     
-    def pixel_raster_in_tile(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,b_gather=False):
+    def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,b_gather=False):
         
         # cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
         #faster but unstable
