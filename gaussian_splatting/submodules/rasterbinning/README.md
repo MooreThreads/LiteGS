@@ -4,14 +4,16 @@ This repository contains a RasterBinning implementation as a PyTorch CUDA extens
 It is used by our training code.
 
 ## Installation
-`pip install rasterbinning`
+1. Build Dynamic Library
 
-## Documentation
-Please see todo
+    `mkdir ./rasterbinning/build`
 
-## Troubleshooting
-If you get SIGSEGV upon importing,
-check that your CUDA runtime and PyTorch CUDA versions match.  That is,
-`nvcc --version`
-should match (Python)
-`torch.version.cuda`
+    `cd ./rasterbinning/build`
+    
+    `cmake -DCMAKE_PREFIX_PATH=@1\share\cmake ../` replace @1 with the installation path of your PyTorch, which is like "\$PYTHONHOME\$/lib/site-packages/torch"
+
+    `cmake --build . --config Release`
+
+2. Load Dynamic Library in Code
+
+    modify the path in REPO_ROOT/gaussian_splatting/model.py LINE 10.

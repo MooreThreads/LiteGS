@@ -229,7 +229,7 @@ class GaussianTrain:
             self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="NHWC")
         return
          
-    def start(self,iteration:int,load_checkpoint:str=None,checkpoint_iterations:typing.List=[],saving_iterations:typing.List=[]):
+    def start(self,epoch:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[]):
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
@@ -242,20 +242,20 @@ class GaussianTrain:
             ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
             total_views_num=view_matrix.shape[0]
 
-        progress_bar = tqdm(range(0, iteration*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
+        progress_bar = tqdm(range(0, epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
         progress_bar.update(0)
 
-        for epoch_i in range(self.iter_start,iteration):
+        for epoch_i in range(self.iter_start+1,epoch+1):
             
             batch_size=2
             self.__iter(epoch_i,batch_size,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
             progress_bar.update(total_views_num)
 
             
-            if epoch_i in checkpoint_iterations:
+            if epoch_i in checkpoint_epochs:
                 print("\n[ITER {}] Saving Checkpoint".format(epoch_i))
                 self.save(epoch_i)
-            if epoch_i in saving_iterations:
+            if epoch_i in saving_epochs:
                 print("\n[ITER {}] Saving Gaussians".format(epoch_i))
                 scene=GaussianScene()
                 self.model.save_to_scene(scene)
