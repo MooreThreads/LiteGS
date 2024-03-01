@@ -193,6 +193,7 @@ class GaussianTrain:
             ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
             cov3d,transform_matrix=self.model.transform_to_cov3d_faster(visible_scales,visible_rotators)
             visible_cov2d=self.model.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix_batch,camera_focal_batch)
+            visible_cov2d=visible_cov2d.float()
             
             ### color ###
             SH_C0 = 0.28209479177387814
@@ -235,7 +236,7 @@ class GaussianTrain:
             self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="NCHW")
         return
 
-    @torch.no_grad
+    @torch.no_grad()
     def interface(self):
         self.model.update_tiles_coord(self.image_size,self.tile_size)
         view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
@@ -286,7 +287,7 @@ class GaussianTrain:
  
         return img_list
 
-    @torch.no_grad
+    @torch.no_grad()
     def report_psnr(self,epoch_i):
         out_img_list=self.interface()
         img=torch.concat(out_img_list,dim=0)
@@ -300,7 +301,7 @@ class GaussianTrain:
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
-        self.report_psnr(0)
+        #self.report_psnr(0)
 
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size)

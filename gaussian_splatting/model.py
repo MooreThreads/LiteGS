@@ -10,7 +10,7 @@ from torch.cuda.amp import autocast
 torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
 
 class GaussianSplattingModel:
-    @torch.no_grad
+    @torch.no_grad()
     def __init__(self,scene:GaussianScene,spatial_lr_scale):
         
         self._xyz = torch.nn.Parameter(torch.Tensor(np.pad(scene.position,((0,0),(0,1)),'constant',constant_values=1)).cuda())
@@ -33,7 +33,7 @@ class GaussianSplattingModel:
         (self._xyz,self._features_dc,self._features_rest,self._rotation,self.spatial_lr_scale,self._scaling,self._opacity)=params_tuple
         return
 
-    @torch.no_grad
+    @torch.no_grad()
     def save_to_scene(self,scene:GaussianScene):
         scene.position=self._xyz[...,:3].cpu().numpy()
         scene.sh_coefficient_dc=self._features_dc.cpu().numpy()
@@ -168,7 +168,7 @@ class GaussianSplattingModel:
         return scales,rotators,visible_positions,visible_opacities,visible_sh0
 
     
-    @torch.no_grad
+    @torch.no_grad()
     def binning(self,ndc:torch.Tensor,cov2d:torch.Tensor,valid_points_num:torch.Tensor,b_gather=False):
         
         tilesX=self.cached_tiles_size[0]

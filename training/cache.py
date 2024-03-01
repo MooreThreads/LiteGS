@@ -1,6 +1,6 @@
 import torch
 class VisibleInfo:
-    @torch.no_grad
+    @torch.no_grad()
     def __init__(self,batchId:int,visible_points_for_views:torch.Tensor,visible_points_num:torch.Tensor,generation:int):
         self.batchId=batchId
         self.visible_points=visible_points_for_views
@@ -9,7 +9,7 @@ class VisibleInfo:
         return
     
 class BinningInfo:
-    @torch.no_grad
+    @torch.no_grad()
     def __init__(self,batchId:int,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,generation:int):
         self.batchId=batchId
         self.start_index=tile_start_index
