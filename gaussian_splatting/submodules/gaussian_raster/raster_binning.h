@@ -3,16 +3,6 @@ using namespace at;
 
 std::vector<Tensor> duplicateWithKeys(Tensor L,Tensor U,Tensor R,Tensor D,Tensor ValidPointNum,Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX);
 Tensor tileRange(Tensor table_tileId, int64_t table_length, int64_t max_tileId);
-std::vector<Tensor> rasterize_gathered_forward(
-    Tensor start_index,
-    Tensor gathered_mean2d,// 
-    Tensor gathered_cov2d_inv,
-    Tensor gathered_color,
-    Tensor gathered_opacity,
-    int64_t tilesize,
-    int64_t tilesnum
-	);
-std::vector<Tensor> rasterize_gathered_backward(Tensor arg);
 
 std::vector<Tensor> rasterize_forward(
     Tensor sorted_points,

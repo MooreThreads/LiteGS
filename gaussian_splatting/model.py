@@ -222,7 +222,7 @@ class GaussianSplattingModel:
             
         return tile_start_index,sorted_pointId,sorted_tileId,tiles_touched
     
-    def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,b_gather=False):
+    def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor):
         
         # cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
         #faster but unstable
@@ -235,19 +235,8 @@ class GaussianSplattingModel:
 
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
 
-        if b_gather:
-            gathered_mean2d=mean2d.gather(1,sorted_pointId.unsqueeze(2).repeat(1,1,2))#[batch,N,2]
-            #screen coords to tile local coords
-            gathered_mean2d[:,:,0]-=(sorted_tileId-1)%self.cached_tiles_size[0]*self.cached_tile_size
-            gathered_mean2d[:,:,1]-=((sorted_tileId-1)/self.cached_tiles_size[0]).int()*self.cached_tile_size
-            gathered_cov2d_inv=cov2d_inv.gather(1,sorted_pointId.unsqueeze(2).unsqueeze(2).repeat(1,1,2,2))
-            gathered_color=color.gather(1,sorted_pointId.unsqueeze(2).repeat(1,1,3))
-            gathered_opacities=opacities.gather(1,sorted_pointId.unsqueeze(2))
-            img,transmitance=gathered_mean2d,gathered_color
-            img,transmitance,lst_contributor=torch.ops.RasterBinning.rasterize_forward_gathered(tile_start_index,gathered_mean2d,gathered_cov2d_inv,gathered_color,gathered_opacities,self.cached_tile_size,self.cached_tiles_size[0]*self.cached_tiles_size[1])
 
-        else:
-            img,transmitance=GaussiansRaster.apply(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1])
+        img,transmitance=GaussiansRaster.apply(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1])
 
         return img,transmitance
     
