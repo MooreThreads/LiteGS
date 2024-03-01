@@ -301,7 +301,7 @@ class GaussianTrain:
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
-        #self.report_psnr(0)
+        self.report_psnr(0)
 
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size)
