@@ -173,6 +173,7 @@ class GaussianTrain:
         random.shuffle(iter_range)
 
         ### iter batch ###
+        torch.cuda.empty_cache()
         #with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],use_cuda=True) as prof:
         for i in iter_range:
             batch_tail=min(i+batch_size,total_views_num)
