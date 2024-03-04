@@ -190,6 +190,8 @@ class GaussianTrain:
                 ground_truth_batch=ground_truth[i:batch_tail]
 
             visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.model.sample_by_visibility(visible_points_for_views_batch,visible_points_num_batch)
+            regularization_loss=(1-visible_opacities).mean()*0.01+visible_scales.var(2).mean()*100
+            regularization_loss.backward(retain_graph=True)
 
             ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
             cov3d,transform_matrix=self.model.transform_to_cov3d_faster(visible_scales,visible_rotators)
@@ -212,9 +214,8 @@ class GaussianTrain:
             
             #### loss ###
             l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
-            regularization_loss=(1-visible_opacities).mean()*0.01+visible_scales.var(2).mean()*100
             ssim_loss=ssim_helper.loss(img,ground_truth_batch)
-            loss=(1.0-self.opt_params.lambda_dssim)*l1_loss+self.opt_params.lambda_dssim*(1-ssim_loss) +regularization_loss
+            loss=(1.0-self.opt_params.lambda_dssim)*l1_loss+self.opt_params.lambda_dssim*(1-ssim_loss)
             loss.backward()
             log_loss+=l1_loss.detach()
             counter+=1
