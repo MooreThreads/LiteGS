@@ -1,5 +1,7 @@
-from gaussian_splatting.gaussian_util import GaussianScene,View
+from gaussian_splatting.scene import GaussianScene
 from training.arguments import OptimizationParams
+from util import spherical_harmonics,cg_torch,tiles2img_torch,img2tiles_torch
+
 
 import torch
 import typing
@@ -44,7 +46,7 @@ class GaussianSplattingModel:
         scene.sh_degree=0
         return
 
-    def transform_to_cov3d(self,scaling_vec,rotator_vec):
+    def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
         #todo implement cuda: scale&rot -> matrix
         scale_matrix=torch.zeros((*(scaling_vec.shape[0:-1]),3,3),device='cuda')
         scale_matrix[...,0,0]=scaling_vec[...,0]
@@ -75,7 +77,7 @@ class GaussianSplattingModel:
         cov3d=torch.matmul(M_matrix.transpose(-1,-2),M_matrix)
         return cov3d,M_matrix
     
-    def transform_to_cov3d_faster(self,scaling_vec,rotator_vec):
+    def transform_to_cov3d_faster(self,scaling_vec,rotator_vec)->torch.Tensor:
         rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
 
         r=rotator_vec[...,0]
@@ -101,7 +103,7 @@ class GaussianSplattingModel:
         #cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
         return cov3d,transform_matrix
     
-    def proj_cov3d_to_cov2d(self,cov3d,point_positions,view_matrix,camera_focal):
+    def proj_cov3d_to_cov2d(self,cov3d,point_positions,view_matrix,camera_focal)->torch.Tensor:
         with torch.no_grad():
             t=torch.matmul(point_positions,view_matrix)
             
@@ -126,34 +128,29 @@ class GaussianSplattingModel:
         self.cached_image_size_tensor=torch.Tensor(image_size).cuda()
         self.cached_tile_size=tile_size
         self.cached_tiles_size=(math.ceil(image_size[0]/tile_size),math.ceil(image_size[1]/tile_size))
-
+        self.cached_tiles_map=torch.arange(0,self.cached_tiles_size[0]*self.cached_tiles_size[1]).reshape(self.cached_tiles_size[1],self.cached_tiles_size[0]).cuda()+1#tile_id 0 is invalid
         return
     
-    def world_to_ndc(self,position,view_project_matrix):
-        hom_pos=torch.matmul(position,view_project_matrix)
-        ndc_pos=hom_pos/(hom_pos[:,:,3:4]+1e-6)
-        return ndc_pos
-
-    def world_to_view(self,position,view_matrix):
-        return position@view_matrix
-
     @torch.no_grad()
-    def culling_and_sort(self,ndc_pos,translated_pos):
+    def culling_and_sort(self,ndc_pos,translated_pos,limit_LURD=None):
         '''
         todo implement in cuda
         input: ViewMatrix,ProjMatrix
         output: sorted_visible_points,num_of_points
         '''
-        culling_result=torch.any(ndc_pos[:,:,0:2]<-1.3,dim=2)|torch.any(ndc_pos[:,:,0:2]>1.3,dim=2)|(translated_pos[:,:,2]<=0)
+        if limit_LURD is None:
+            culling_result=torch.any(ndc_pos[...,0:2]<-1.3,dim=2)|torch.any(ndc_pos[...,0:2]>1.3,dim=2)|(translated_pos[...,2]<=0)
+        else:
+            culling_result=torch.any(ndc_pos[...,0:2]<limit_LURD.unsqueeze(1)[...,0:2]*1.3,dim=2)|torch.any(ndc_pos[...,0:2]>limit_LURD.unsqueeze(1)[...,2:4]*1.3,dim=2)|(translated_pos[...,2]<=0)
 
         max_visible_points_num=(~culling_result).sum(1).max()
-        threshhold=translated_pos[:,:,2].max()+1
+        threshhold=translated_pos[...,2].max()+1
 
-        masked_depth=translated_pos[:,:,2]*(~culling_result)+threshhold*culling_result
+        masked_depth=translated_pos[...,2]*(~culling_result)+threshhold*culling_result
         sorted_masked_depth,visible_point=torch.sort(masked_depth,1)
-        point_index_mask=(sorted_masked_depth<threshhold)[:,:max_visible_points_num]
+        point_index_mask=(sorted_masked_depth<threshhold)[...,:max_visible_points_num]
         points_num=point_index_mask.sum(1)
-        visible_point=visible_point[:,:max_visible_points_num]*point_index_mask
+        visible_point=visible_point[...,:max_visible_points_num]*point_index_mask
 
         return visible_point,points_num
     
@@ -240,6 +237,35 @@ class GaussianSplattingModel:
 
         return img,transmitance
     
+    def render(self,
+               visible_points_num:torch.Tensor,visible_points:torch.Tensor,
+               view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,
+               outputH,outputW,prebackward_func:typing.Callable=None):
+        
+        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.sample_by_visibility(visible_points,visible_points_num)
+        if prebackward_func is not None:
+            prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0)
+
+        ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
+        cov3d,transform_matrix=self.transform_to_cov3d_faster(visible_scales,visible_rotators)
+        visible_cov2d=self.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix,camera_focal)
+        visible_cov2d=visible_cov2d.float()
+        
+        ### color ###
+        visible_color=(visible_sh0*spherical_harmonics.C0+0.5).squeeze(2).clamp_min(0)
+        
+        ### mean of 2d-gaussian ###
+        ndc_pos_batch=cg_torch.world_to_ndc(visible_positions,view_project_matrix)
+        
+        #### binning ###
+        tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.binning(ndc_pos_batch,visible_cov2d,visible_points_num)
+
+        #### raster ###
+        tile_img,tile_transmitance=self.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId)
+        img=tiles2img_torch(tile_img,self.cached_tiles_size[0],self.cached_tiles_size[1])[...,0:outputH,0:outputW]
+        transmitance=tiles2img_torch(tile_transmitance.unsqueeze(2),self.cached_tiles_size[0],self.cached_tiles_size[1])[...,0:outputH,0:outputW]
+        
+        return img,transmitance
 
 class TransformCovarianceMatrix(torch.autograd.Function):
     @staticmethod

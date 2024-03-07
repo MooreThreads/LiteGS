@@ -4,7 +4,7 @@ from training.arguments import ModelParams,OptimizationParams,PipelineParams
 from loader import TrainingDataLoader
 import typing
 from loader.InfoLoader import CameraInfo,ImageInfo
-from gaussian_splatting.gaussian_util import GaussianScene
+from gaussian_splatting.scene import GaussianScene
 from gaussian_splatting.model import GaussianSplattingModel
 from training.training import GaussianTrain
 

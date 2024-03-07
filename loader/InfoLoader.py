@@ -6,7 +6,7 @@ import typing
 import numpy.typing as npt
 import math
 import PIL.Image
-from gaussian_splatting.gaussian_util import qvec2rotmat,getWorld2View
+from util import qvec2rotmat,getWorld2View
 
 
 class CameraInfo:

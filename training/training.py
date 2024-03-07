@@ -1,11 +1,12 @@
 from gaussian_splatting.model import GaussianSplattingModel
 from training.arguments import OptimizationParams,ModelParams
-from gaussian_splatting.gaussian_util import GaussianScene,get_expon_lr_func
+from gaussian_splatting.scene import GaussianScene
 from loader.InfoLoader import CameraInfo,ImageInfo,PinHoleCameraInfo
-from gaussian_splatting.gaussian_util import View
+from util.camera import View
 from training import cache
-from gaussian_splatting.gaussian_util import GaussianScene
-from training.utils import loss_utils,image_utils
+from training.utils import loss_utils
+from gaussian_splatting.division import GaussianSceneDivision
+from util import cg_torch,image_utils
 
 import torch
 import typing
@@ -103,6 +104,42 @@ class GaussianTrain:
         return
     
     def __training_setup(self,gaussian_model:GaussianSplattingModel,args:OptimizationParams):
+        def get_expon_lr_func(
+            lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+        ):
+            """
+            Copied from Plenoxels
+
+            Continuous learning rate decay function. Adapted from JaxNeRF
+            The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
+            is log-linearly interpolated elsewhere (equivalent to exponential decay).
+            If lr_delay_steps>0 then the learning rate will be scaled by some smooth
+            function of lr_delay_mult, such that the initial learning rate is
+            lr_init*lr_delay_mult at the beginning of optimization but will be eased back
+            to the normal learning rate when steps>lr_delay_steps.
+            :param conf: config subtree 'lr' or similar
+            :param max_steps: int, the number of steps during optimization.
+            :return HoF which takes step as input
+            """
+
+            def helper(step):
+                if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+                    # Disable this parameter
+                    return 0.0
+                if lr_delay_steps > 0:
+                    # A kind of reverse cosine decay.
+                    delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
+                        0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
+                    )
+                else:
+                    delay_rate = 1.0
+                t = np.clip(step / max_steps, 0, 1)
+                log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+                return delay_rate * log_lerp
+
+            return helper
+
+
         l = [
             {'params': [gaussian_model._xyz], 'lr': args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [gaussian_model._features_dc], 'lr': args.feature_lr, "name": "f_dc"},
@@ -129,31 +166,21 @@ class GaussianTrain:
                 param_group['lr'] = lr
                 return lr
 
-    
-    def __img_to_tiles(self,img):
-        N,H,W,C=img.shape
-        H_tile=math.ceil(H/self.tile_size)
-        W_tile=math.ceil(W/self.tile_size)
-        H_pad=H_tile*self.tile_size-H
-        W_pad=W_tile*self.tile_size-W
-        pad_img=torch.nn.functional.pad(img,(0,0,0,W_pad,0,H_pad,0,0),'constant',0)
-        out=pad_img.reshape(N,H_tile,self.tile_size,W_tile,self.tile_size,C).transpose(2,3).reshape(N,-1,self.tile_size,self.tile_size,C)
-        return out
-    
-    def __flatten_tiles(self,tile_img:torch.Tensor):
-        N=tile_img.shape[0]
-        C=tile_img.shape[2]
-        translated_tile_img=tile_img[:,1:].transpose(1,2).reshape(N,C,self.model.cached_tiles_size[1],self.model.cached_tiles_size[0],self.model.cached_tile_size,self.model.cached_tile_size).transpose(-2,-3)
-        img=translated_tile_img.reshape((N,C,self.model.cached_tiles_size[1]*self.model.cached_tile_size,self.model.cached_tiles_size[0]*self.model.cached_tile_size))
-        return img
+    @staticmethod
+    def __regularization_loss_backward(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0):
+        regularization_loss=(1-visible_opacities).mean()*0.01+visible_scales.var(2).mean()*100
+        regularization_loss.backward(retain_graph=True)
+        return    
     
     def __iter(self,epoch_i:int,batch_size:int,
                             view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_center:torch.Tensor,camera_focal:torch.Tensor,ground_truth:torch.Tensor):
         
+
+        
         with torch.no_grad():
             total_views_num=view_matrix.shape[0]
-            ndc_pos=self.model.world_to_ndc(self.model._xyz,view_project_matrix)
-            translated_pos=self.model.world_to_view(self.model._xyz,view_matrix)
+            ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
+            translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
             visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
 
             if batch_size > 1:            
@@ -189,28 +216,11 @@ class GaussianTrain:
                 camera_center_batch=camera_center[i:batch_tail]
                 ground_truth_batch=ground_truth[i:batch_tail]
 
-            visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.model.sample_by_visibility(visible_points_for_views_batch,visible_points_num_batch)
-            regularization_loss=(1-visible_opacities).mean()*0.01+visible_scales.var(2).mean()*100
-            regularization_loss.backward(retain_graph=True)
-
-            ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
-            cov3d,transform_matrix=self.model.transform_to_cov3d_faster(visible_scales,visible_rotators)
-            visible_cov2d=self.model.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix_batch,camera_focal_batch)
-            visible_cov2d=visible_cov2d.float()
+            ### render ###
+            img,transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,
+                              self.image_size[1],self.image_size[0],GaussianTrain.__regularization_loss_backward)
             
-            ### color ###
-            SH_C0 = 0.28209479177387814
-            visible_color=(visible_sh0*SH_C0+0.5).squeeze(2).clamp_min(0)
-            
-            ### mean of 2d-gaussian ###
-            ndc_pos_batch=self.model.world_to_ndc(visible_positions,view_project_matrix_batch)
-            
-            #### binning ###
-            tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.model.binning(ndc_pos_batch,visible_cov2d,visible_points_num_batch)
-
-            #### raster ###
-            tile_img,tile_transmitance=self.model.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId)
-            img=self.__flatten_tiles(tile_img)[:,:,0:self.image_size[1],0:self.image_size[0]]
             
             #### loss ###
             l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
@@ -222,7 +232,6 @@ class GaussianTrain:
 
             self.optimizer.step()
             self.optimizer.zero_grad(set_to_none = True)
-
         #print(prof.key_averages().table(sort_by="self_cuda_time_total"))
 
         ### log ###
@@ -231,7 +240,7 @@ class GaussianTrain:
         if epoch_i%10==0:
             with torch.no_grad():
                 log_img_batch=img.cpu().numpy()
-                log_transmitance=self.__flatten_tiles(tile_transmitance.unsqueeze(2))[:,0:self.image_size[1],0:self.image_size[0],:].cpu().numpy()
+                log_transmitance=transmitance.cpu().numpy()
                 log_groundtruth=ground_truth_batch.cpu().numpy()
             self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="NCHW")
             self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="NCHW")
@@ -248,11 +257,12 @@ class GaussianTrain:
         total_views_num=view_matrix.shape[0]
 
         total_views_num=view_matrix.shape[0]
-        ndc_pos=self.model.world_to_ndc(self.model._xyz,view_project_matrix)
-        translated_pos=self.model.world_to_view(self.model._xyz,view_matrix)
+        ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
+        translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
         visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
 
         img_list=[]
+        Visibility={}
 
         for i in range(total_views_num):
 
@@ -266,27 +276,12 @@ class GaussianTrain:
                 camera_focal_batch=camera_focal[i:i+1]
                 camera_center_batch=camera_center[i:i+1]
 
-            visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.model.sample_by_visibility(visible_points_for_views_batch,visible_points_num_batch)
-
-            ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
-            cov3d,transform_matrix=self.model.transform_to_cov3d_faster(visible_scales,visible_rotators)
-            visible_cov2d=self.model.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix_batch,camera_focal_batch)
+            ### render ###
+            img,_=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,
+                              self.image_size[1],self.image_size[0],None)
             
-            ### color ###
-            SH_C0 = 0.28209479177387814
-            visible_color=(visible_sh0*SH_C0+0.5).squeeze(2).clamp_min(0)
-            
-            ### mean of 2d-gaussian ###
-            ndc_pos_batch=self.model.world_to_ndc(visible_positions,view_project_matrix_batch)
-            
-            #### binning ###
-            tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.model.binning(ndc_pos_batch,visible_cov2d,visible_points_num_batch)
-
-            #### raster ###
-            tile_img,tile_transmitance=self.model.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId)
-            img=self.__flatten_tiles(tile_img)[:,:,0:self.image_size[1],0:self.image_size[0]]
             img_list.append(img)
- 
         return img_list
 
     @torch.no_grad()
@@ -303,8 +298,13 @@ class GaussianTrain:
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
-        self.report_psnr(0)
+        # scene division
+        #self.interface(True)
+        #scene_division=GaussianSceneDivision(np.load('visibility.npy',allow_pickle='TRUE').item())
+        #scene_division.division()
+        
 
+        self.report_psnr(0)
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size)
             view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
@@ -319,7 +319,7 @@ class GaussianTrain:
 
         for epoch_i in range(self.iter_start+1,epoch+1):
             
-            batch_size=2
+            batch_size=1
             self.__iter(epoch_i,batch_size,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
             progress_bar.update(total_views_num)
 

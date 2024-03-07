@@ -2,7 +2,8 @@ from loader import InfoLoader
 from loader import PointCloudLoader
 import os
 from PIL import Image
-from gaussian_splatting.gaussian_util import GaussianScene,RGB2SH
+from gaussian_splatting.scene import GaussianScene
+from util.spherical_harmonics import RGB2SH
 import torch
 import numpy as np
 from simple_knn._C import distCUDA2
