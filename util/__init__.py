@@ -64,8 +64,8 @@ def img2tiles_torch(img:torch.Tensor,tile_size)->torch.Tensor:
     W_tile=math.ceil(W/tile_size)
     H_pad=H_tile*tile_size-H
     W_pad=W_tile*tile_size-W
-    pad_img=torch.nn.functional.pad(img,(0,0,0,W_pad,0,H_pad,0,0),'constant',0)
-    out=pad_img.reshape(N,H_tile,tile_size,W_tile,tile_size,C).transpose(2,3).reshape(N,-1,tile_size,tile_size,C)
+    pad_img=torch.nn.functional.pad(img,(0,W_pad,0,H_pad),'constant',0)
+    out=pad_img.reshape(N,C,H_tile,tile_size,W_tile,tile_size).transpose(3,4).reshape(N,C,-1,tile_size,tile_size).transpose(1,2)
     return out
 
 def tiles2img_torch(tile_img:torch.Tensor,tilesNumX,tilesNumY)->torch.Tensor:
@@ -73,6 +73,6 @@ def tiles2img_torch(tile_img:torch.Tensor,tilesNumX,tilesNumY)->torch.Tensor:
     C=tile_img.shape[2]
     tile_H=tile_img.shape[3]
     tile_W=tile_img.shape[4]
-    translated_tile_img=tile_img[:,1:].transpose(1,2).reshape(N,C,tilesNumY,tilesNumX,tile_H,tile_W).transpose(-2,-3)
+    translated_tile_img=tile_img.transpose(1,2).reshape(N,C,tilesNumY,tilesNumX,tile_H,tile_W).transpose(-2,-3)
     img=translated_tile_img.reshape((N,C,tilesNumY*tile_H,tilesNumX*tile_W))
     return img

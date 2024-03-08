@@ -6,7 +6,7 @@ from util.camera import View
 from training import cache
 from training.utils import loss_utils
 from gaussian_splatting.division import GaussianSceneDivision
-from util import cg_torch,image_utils
+from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
 
 import torch
 import typing
@@ -17,6 +17,7 @@ import random
 from matplotlib import pyplot as plt 
 from torch.utils.tensorboard import SummaryWriter
 import os
+import torchvision
 
 class ViewManager:
     '''
@@ -182,7 +183,6 @@ class GaussianTrain:
             ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
             translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
             visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
-
             if batch_size > 1:            
                 # cluster the views according to the visible_points_num
                 visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
@@ -192,6 +192,10 @@ class GaussianTrain:
                 camera_focal=camera_focal[view_indices]
                 camera_center=camera_center[view_indices]
                 ground_truth=ground_truth[view_indices]
+            ground_truth=img2tiles_torch(ground_truth,self.tile_size)
+
+        iter_batch_num=1024
+        tiles=torch.randint(1,self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1],(iter_batch_num,)).int().cuda()
         
         log_loss=0
         counter=0
@@ -217,14 +221,14 @@ class GaussianTrain:
                 ground_truth_batch=ground_truth[i:batch_tail]
 
             ### render ###
-            img,transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,
-                              self.image_size[1],self.image_size[0],GaussianTrain.__regularization_loss_backward)
-            
-            
+            tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,tiles.unsqueeze(0).repeat((batch_tail-i,1)),
+                              GaussianTrain.__regularization_loss_backward)
+
             #### loss ###
-            l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
-            ssim_loss=ssim_helper.loss(img,ground_truth_batch)
+            ground_truth_batch=ground_truth_batch[:,tiles]
+            l1_loss=loss_utils.l1_loss(tile_img,ground_truth_batch)
+            ssim_loss=0#ssim_helper.loss(tile_img,ground_truth_batch)
             loss=(1.0-self.opt_params.lambda_dssim)*l1_loss+self.opt_params.lambda_dssim*(1-ssim_loss)
             loss.backward()
             log_loss+=l1_loss.detach()
@@ -237,14 +241,15 @@ class GaussianTrain:
         ### log ###
         log_loss/=counter
         self.tb_writer.add_scalar('loss',log_loss.cpu(),epoch_i)
-        if epoch_i%10==0:
+        if epoch_i%10==1:
             with torch.no_grad():
-                log_img_batch=img.cpu().numpy()
-                log_transmitance=transmitance.cpu().numpy()
-                log_groundtruth=ground_truth_batch.cpu().numpy()
-            self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="NCHW")
-            self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="NCHW")
-            self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="NCHW")
+                n,t,c,h,w=tile_img.shape
+                log_img_batch=torchvision.utils.make_grid(tile_img.reshape(n*t,c,h,w),64,1)
+                log_transmitance=torchvision.utils.make_grid(tile_transmitance.reshape(n*t,1,h,w),64,1)
+                log_groundtruth=torchvision.utils.make_grid(ground_truth_batch.reshape(n*t,c,h,w),64,1)
+            self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="CHW")
+            self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="CHW")
+            self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="CHW")
         return
 
     @torch.no_grad()
@@ -277,11 +282,12 @@ class GaussianTrain:
                 camera_center_batch=camera_center[i:i+1]
 
             ### render ###
-            img,_=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,
-                              self.image_size[1],self.image_size[0],None)
+            tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch)
+            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])
+            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])
             
-            img_list.append(img)
+            img_list.append(img[...,0:self.image_size[1],0:self.image_size[0]])
         return img_list
 
     @torch.no_grad()

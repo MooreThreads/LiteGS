@@ -151,6 +151,7 @@ __global__ void raster_forward_kernel(
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,point_num,2,2]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,point_num,3]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,          //[batch,point_num,1]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_img,    //[batch,tile,tilesize,tilesize,3]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> output_transmitance,    //[batch,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> output_last_contributor,    //[batch,tile,tilesize,tilesize]
@@ -165,15 +166,15 @@ __global__ void raster_forward_kernel(
     __shared__ float3 collected_color[tilesize * tilesize];
 
     const int batch_id = blockIdx.y;
-    const int tile_id = blockIdx.x + 1;
+    int tile_id = tiles[batch_id][blockIdx.x];
 
     const int x_in_tile = threadIdx.x;
     const int y_in_tile = threadIdx.y;
 
     int pixel_x = ((tile_id-1) % tiles_num_x) * tilesize + x_in_tile;
-    int pixel_y = ((tile_id) / tiles_num_x) * tilesize + y_in_tile;
+    int pixel_y = ((tile_id-1) / tiles_num_x) * tilesize + y_in_tile;
 
-    if (tile_id < start_index.size(1) - 1)
+    if (tile_id!=0 && tile_id < start_index.size(1) - 1)
     {
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
@@ -247,12 +248,12 @@ __global__ void raster_forward_kernel(
             __syncthreads();
         }
 
-        output_img[batch_id][tile_id][0][y_in_tile][x_in_tile] = final_color.x;
-        output_img[batch_id][tile_id][1][y_in_tile][x_in_tile] = final_color.y;
-        output_img[batch_id][tile_id][2][y_in_tile][x_in_tile] = final_color.z;
+        output_img[batch_id][blockIdx.x][0][y_in_tile][x_in_tile] = final_color.x;
+        output_img[batch_id][blockIdx.x][1][y_in_tile][x_in_tile] = final_color.y;
+        output_img[batch_id][blockIdx.x][2][y_in_tile][x_in_tile] = final_color.z;
 
-        output_last_contributor[batch_id][tile_id][y_in_tile][x_in_tile] = last_contributor;
-        output_transmitance[batch_id][tile_id][y_in_tile][x_in_tile] = transmittance;
+        output_last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile] = last_contributor;
+        output_transmitance[batch_id][blockIdx.x][y_in_tile][x_in_tile] = transmittance;
     }
 }
 
@@ -263,25 +264,28 @@ std::vector<Tensor> rasterize_forward(
     Tensor  cov2d_inv,
     Tensor  color,
     Tensor  opacity,
+    Tensor  tiles,
     int64_t tilesize,
     int64_t tilesnum_x,
-    int64_t tilesnum_y
+    int64_t tilesnum_y,
+    int64_t img_h,
+    int64_t img_w
 )
 {
     DeviceGuard guard( mean2d.device());
 
     int64_t viewsnum = start_index.sizes()[0];
-    int64_t tilesnum = tilesnum_x * tilesnum_y;
+    int64_t tilesnum = tiles.sizes()[1];
 
-    std::vector<int64_t> shape_img{ viewsnum, tilesnum + 1,3,tilesize,tilesize };
+    std::vector<int64_t> shape_img{ viewsnum, tilesnum,3,tilesize,tilesize };
     torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
     Tensor output_img = torch::zeros(shape_img, opt_img);
 
-    std::vector<int64_t> shape_t{ viewsnum, tilesnum + 1 , tilesize, tilesize };
+    std::vector<int64_t> shape_t{ viewsnum, tilesnum, tilesize, tilesize };
     torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
     Tensor output_transmitance = torch::zeros(shape_t, opt_t);
 
-    std::vector<int64_t> shape_c{ viewsnum, tilesnum + 1, tilesize, tilesize };
+    std::vector<int64_t> shape_c{ viewsnum, tilesnum, tilesize, tilesize };
     torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
     Tensor output_last_contributor = torch::zeros(shape_c, opt_c);
 
@@ -295,10 +299,11 @@ std::vector<Tensor> rasterize_forward(
             (
                 sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                 mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                 cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                 color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                 opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+                color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
                 output_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
                 output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
@@ -312,10 +317,11 @@ std::vector<Tensor> rasterize_forward(
             (
                 sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                 mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                 cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                 color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                 opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+                color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
                 output_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
                 output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
@@ -337,6 +343,7 @@ __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,point_num,2,2]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,point_num,3]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,          //[batch,point_num,1]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> final_transmitance,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,tile,tilesize,tilesize,3]
@@ -344,7 +351,7 @@ __global__ void raster_backward_kernel(
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,point_num,2,2]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,point_num,3]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_opacity,          //[batch,point_num,1]
-    int tiles_num_x
+    int tiles_num_x, int img_h, int img_w
 )
 {
 
@@ -378,25 +385,28 @@ __global__ void raster_backward_kernel(
 
 
     const int batch_id = blockIdx.y;
-    const int tile_id = blockIdx.x + 1;
+    int tile_id = tiles[batch_id][blockIdx.x];
 
     const int x_in_tile = threadIdx.x;
     const int y_in_tile = threadIdx.y;
 
     int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
-    int pixel_y = ((tile_id) / tiles_num_x) * tilesize + y_in_tile;
+    int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
 
-    if (tile_id < start_index.size(1) - 1)
+    if (tile_id!=0 && tile_id < start_index.size(1) - 1)
     {
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
 
-        float transmittance = final_transmitance[batch_id][tile_id][y_in_tile][x_in_tile];
-        int pixel_lst_index = last_contributor[batch_id][tile_id][y_in_tile][x_in_tile];
+        float transmittance = final_transmitance[batch_id][blockIdx.x][y_in_tile][x_in_tile];
+        int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile];
         float3 d_pixel{ 0,0,0 };
-        d_pixel.x = d_img[batch_id][tile_id][0][y_in_tile][x_in_tile];
-        d_pixel.y = d_img[batch_id][tile_id][1][y_in_tile][x_in_tile];
-        d_pixel.z = d_img[batch_id][tile_id][2][y_in_tile][x_in_tile];
+        if (pixel_x < img_w && pixel_y < img_h)
+        {
+            d_pixel.x = d_img[batch_id][blockIdx.x][0][y_in_tile][x_in_tile];
+            d_pixel.y = d_img[batch_id][blockIdx.x][1][y_in_tile][x_in_tile];
+            d_pixel.z = d_img[batch_id][blockIdx.x][2][y_in_tile][x_in_tile];
+        }
         bool Done = (d_pixel.x == 0 && d_pixel.y == 0 && d_pixel.z == 0);
 
         float3 accum_rec{ 0,0,0 };
@@ -573,6 +583,7 @@ __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,point_num,2,2]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,point_num,3]
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,          //[batch,point_num,1]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> final_transmitance,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,tile,tilesize,tilesize,3]
@@ -580,7 +591,7 @@ __global__ void raster_backward_kernel(
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,point_num,2,2]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,point_num,3]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_opacity,          //[batch,point_num,1]
-    int tiles_num_x
+    int tiles_num_x,int img_h,int img_w
 )
 {
 
@@ -592,25 +603,28 @@ __global__ void raster_backward_kernel(
     __shared__ int collected_point_id[tilesize * tilesize];
 
     const int batch_id = blockIdx.y;
-    const int tile_id = blockIdx.x + 1;
+    int tile_id = tiles[batch_id][blockIdx.x];
 
     const int x_in_tile = threadIdx.x;
     const int y_in_tile = threadIdx.y;
 
     int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
-    int pixel_y = ((tile_id) / tiles_num_x) * tilesize + y_in_tile;
+    int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
 
-    if (tile_id < start_index.size(1) - 1)
+    if (tile_id!=0 && tile_id < start_index.size(1) - 1)
     {
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
 
-        float transmittance = final_transmitance[batch_id][tile_id][y_in_tile][x_in_tile];
-        int pixel_lst_index = last_contributor[batch_id][tile_id][y_in_tile][x_in_tile];
+        float transmittance = final_transmitance[batch_id][blockIdx.x][y_in_tile][x_in_tile];
+        int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile];
         float3 d_pixel{ 0,0,0 };
-        d_pixel.x = d_img[batch_id][tile_id][y_in_tile][x_in_tile][0];
-        d_pixel.y = d_img[batch_id][tile_id][y_in_tile][x_in_tile][1];
-        d_pixel.z = d_img[batch_id][tile_id][y_in_tile][x_in_tile][2];
+        if (pixel_x < img_w && pixel_y < img_h)
+        {
+            d_pixel.x = d_img[batch_id][blockIdx.x][y_in_tile][x_in_tile][0];
+            d_pixel.y = d_img[batch_id][blockIdx.x][y_in_tile][x_in_tile][1];
+            d_pixel.z = d_img[batch_id][blockIdx.x][y_in_tile][x_in_tile][2];
+        }
         bool Done = (d_pixel.x == 0 && d_pixel.y == 0 && d_pixel.z == 0);
 
         float3 accum_rec{ 0,0,0 };
@@ -724,18 +738,21 @@ std::vector<Tensor> rasterize_backward(
     Tensor cov2d_inv,
     Tensor color,
     Tensor opacity,
+    Tensor tiles,
     Tensor final_transmitance,
     Tensor last_contributor,
     Tensor d_img,
     int64_t tilesize,
     int64_t tilesnum_x,
-    int64_t tilesnum_y
+    int64_t tilesnum_y,
+    int64_t img_h,
+    int64_t img_w
 )
 {
     DeviceGuard guard(mean2d.device());
 
     int64_t viewsnum = start_index.sizes()[0];
-    int64_t tilesnum = tilesnum_x * tilesnum_y;
+    int64_t tilesnum = tiles.sizes()[1];
 
     Tensor d_mean2d = torch::zeros_like(mean2d,mean2d.options());
     Tensor d_cov2d_inv = torch::zeros_like(cov2d_inv, mean2d.options());
@@ -755,6 +772,7 @@ std::vector<Tensor> rasterize_backward(
                 cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
                 color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
                 last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
                 d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
@@ -762,7 +780,7 @@ std::vector<Tensor> rasterize_backward(
                 d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
                 d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
                 d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                tilesnum_x
+                tilesnum_x, img_h,img_w
                 );
         CUDA_CHECK_ERRORS;
     }
@@ -776,6 +794,7 @@ std::vector<Tensor> rasterize_backward(
                 cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
                 color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
                 last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
                 d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
@@ -783,7 +802,7 @@ std::vector<Tensor> rasterize_backward(
                 d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
                 d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
                 d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                tilesnum_x
+                tilesnum_x, img_h, img_w
                 );
         CUDA_CHECK_ERRORS;
     }

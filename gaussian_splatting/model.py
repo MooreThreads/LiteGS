@@ -1,6 +1,6 @@
 from gaussian_splatting.scene import GaussianScene
 from training.arguments import OptimizationParams
-from util import spherical_harmonics,cg_torch,tiles2img_torch,img2tiles_torch
+from util import spherical_harmonics,cg_torch
 
 
 import torch
@@ -128,7 +128,7 @@ class GaussianSplattingModel:
         self.cached_image_size_tensor=torch.Tensor(image_size).cuda()
         self.cached_tile_size=tile_size
         self.cached_tiles_size=(math.ceil(image_size[0]/tile_size),math.ceil(image_size[1]/tile_size))
-        self.cached_tiles_map=torch.arange(0,self.cached_tiles_size[0]*self.cached_tiles_size[1]).reshape(self.cached_tiles_size[1],self.cached_tiles_size[0]).cuda()+1#tile_id 0 is invalid
+        self.cached_tiles_map=torch.arange(0,self.cached_tiles_size[0]*self.cached_tiles_size[1]).int().reshape(self.cached_tiles_size[1],self.cached_tiles_size[0]).cuda()+1#tile_id 0 is invalid
         return
     
     @torch.no_grad()
@@ -219,7 +219,7 @@ class GaussianSplattingModel:
             
         return tile_start_index,sorted_pointId,sorted_tileId,tiles_touched
     
-    def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor):
+    def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
         
         # cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
         #faster but unstable
@@ -233,14 +233,14 @@ class GaussianSplattingModel:
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
 
 
-        img,transmitance=GaussiansRaster.apply(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1])
+        img,transmitance=GaussiansRaster.apply(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+                                               self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
 
         return img,transmitance
     
-    def render(self,
-               visible_points_num:torch.Tensor,visible_points:torch.Tensor,
-               view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,
-               outputH,outputW,prebackward_func:typing.Callable=None):
+    def render(self,visible_points_num:torch.Tensor,visible_points:torch.Tensor,
+               view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,tiles:torch.Tensor=None,
+               prebackward_func:typing.Callable=None):
         
         visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.sample_by_visibility(visible_points,visible_points_num)
         if prebackward_func is not None:
@@ -261,11 +261,12 @@ class GaussianSplattingModel:
         tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.binning(ndc_pos_batch,visible_cov2d,visible_points_num)
 
         #### raster ###
-        tile_img,tile_transmitance=self.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId)
-        img=tiles2img_torch(tile_img,self.cached_tiles_size[0],self.cached_tiles_size[1])[...,0:outputH,0:outputW]
-        transmitance=tiles2img_torch(tile_transmitance.unsqueeze(2),self.cached_tiles_size[0],self.cached_tiles_size[1])[...,0:outputH,0:outputW]
+        if tiles is None:
+            batch_size=visible_points_num.shape[0]
+            tiles=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
+        tile_img,tile_transmitance=self.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
         
-        return img,transmitance
+        return tile_img,tile_transmitance.unsqueeze(2)
 
 class TransformCovarianceMatrix(torch.autograd.Function):
     @staticmethod
@@ -289,25 +290,31 @@ class GaussiansRaster(torch.autograd.Function):
         cov2d_inv:torch.Tensor,
         color:torch.Tensor,
         opacities:torch.Tensor,
+        tiles:torch.Tensor,
         tile_size:int,
         tiles_num_x:int,
-        tiles_num_y:int
+        tiles_num_y:int,
+        img_h:int,
+        img_w:int
     ):
-        img,transmitance,lst_contributor=torch.ops.RasterBinning.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tile_size,tiles_num_x,tiles_num_y)
-        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities)
+        img,transmitance,lst_contributor=torch.ops.RasterBinning.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+                                                                                   tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
+        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=tile_size
-        ctx.tiles_num=(tiles_num_x,tiles_num_y)
+        ctx.tiles_num=(tiles_num_x,tiles_num_y,img_h,img_w)
         return img,transmitance
     
     @staticmethod
     def backward(ctx, grad_out_color:torch.Tensor, grad_out_transmitance):
-        sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities=ctx.saved_tensors
-        (tiles_num_x,tiles_num_y)=ctx.tiles_num
+        sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
+        (tiles_num_x,tiles_num_y,img_h,img_w)=ctx.tiles_num
         tile_size=ctx.arg_tile_size
 
 
 
-        grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.RasterBinning.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,transmitance,lst_contributor,grad_out_color,tile_size,tiles_num_x,tiles_num_y)
+        grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.RasterBinning.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+                                                                                                        transmitance,lst_contributor,grad_out_color,
+                                                                                                        tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
 
         #print(grad_cov2d_inv[0,68362])
 
@@ -318,6 +325,9 @@ class GaussiansRaster(torch.autograd.Function):
             grad_cov2d_inv,
             grad_color,
             grad_opacities,
+            None,
+            None,
+            None,
             None,
             None,
             None
