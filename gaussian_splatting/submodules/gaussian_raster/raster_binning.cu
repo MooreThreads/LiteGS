@@ -116,6 +116,10 @@ __global__ void tile_range_kernel(
         int next_tile= table_tileId[view_id][index+1];
         if (cur_tile!=next_tile)
         {
+            if (cur_tile + 1 < next_tile)
+            {
+                tile_range[view_id][cur_tile + 1] = index + 1;
+            }
             tile_range[view_id][next_tile] = index + 1;
         }
     }
