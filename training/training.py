@@ -18,6 +18,7 @@ from matplotlib import pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 import os
 import torchvision
+import time
 
 class ViewManager:
     '''
@@ -192,10 +193,9 @@ class GaussianTrain:
                 camera_focal=camera_focal[view_indices]
                 camera_center=camera_center[view_indices]
                 ground_truth=ground_truth[view_indices]
-            ground_truth=img2tiles_torch(ground_truth,self.tile_size)
 
-        iter_batch_num=1024
-        tiles=torch.randint(1,self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1],(iter_batch_num,)).int().cuda()
+        #iter_batch_num=1024
+        #tiles=torch.randint(1,self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1],(iter_batch_num,)).int().cuda()
         
         log_loss=0
         counter=0
@@ -222,13 +222,14 @@ class GaussianTrain:
 
             ### render ###
             tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,tiles.unsqueeze(0).repeat((batch_tail-i,1)),
-                              GaussianTrain.__regularization_loss_backward)
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
+                              None)#GaussianTrain.__regularization_loss_backward)
+            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
 
             #### loss ###
-            ground_truth_batch=ground_truth_batch[:,tiles]
-            l1_loss=loss_utils.l1_loss(tile_img,ground_truth_batch)
-            ssim_loss=0#ssim_helper.loss(tile_img,ground_truth_batch)
+            l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
+            ssim_loss=ssim_helper.loss(img,ground_truth_batch)
             loss=(1.0-self.opt_params.lambda_dssim)*l1_loss+self.opt_params.lambda_dssim*(1-ssim_loss)
             loss.backward()
             log_loss+=l1_loss.detach()
@@ -243,17 +244,16 @@ class GaussianTrain:
         self.tb_writer.add_scalar('loss',log_loss.cpu(),epoch_i)
         if epoch_i%10==1:
             with torch.no_grad():
-                n,t,c,h,w=tile_img.shape
-                log_img_batch=torchvision.utils.make_grid(tile_img.reshape(n*t,c,h,w),64,1)
-                log_transmitance=torchvision.utils.make_grid(tile_transmitance.reshape(n*t,1,h,w),64,1)
-                log_groundtruth=torchvision.utils.make_grid(ground_truth_batch.reshape(n*t,c,h,w),64,1)
+                log_img_batch=img[0]
+                log_transmitance=transmitance[0]
+                log_groundtruth=ground_truth_batch[0]
             self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="CHW")
             self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="CHW")
             self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="CHW")
         return
 
     @torch.no_grad()
-    def interface(self):
+    def interface(self,bLog=False):
         self.model.update_tiles_coord(self.image_size,self.tile_size)
         view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
         view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
@@ -268,7 +268,7 @@ class GaussianTrain:
 
         img_list=[]
         Visibility={}
-
+        #T1=time.time()
         for i in range(total_views_num):
 
             ### gather batch data ###
@@ -284,11 +284,82 @@ class GaussianTrain:
             ### render ###
             tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch)
-            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])
-            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])
+            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             
             img_list.append(img[...,0:self.image_size[1],0:self.image_size[0]])
+            if bLog:
+                self.tb_writer.add_image('gt',self.view_manager.view_gt_tensor[i],i)
+                self.tb_writer.add_image('gs',img[0],i)
+        #T2=time.time()
         return img_list
+
+    @torch.no_grad()
+    def output_visibility_matrix(self):
+        self.model.update_tiles_coord(self.image_size,self.tile_size*8)
+        view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
+        view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
+        camera_center=torch.Tensor(self.view_manager.camera_center_tensor).cuda()
+        camera_focal=torch.Tensor(self.view_manager.camera_focal_tensor).cuda()
+        total_views_num=view_matrix.shape[0]
+        total_points_num=self.model._xyz.shape[0]
+        total_tiles_num=self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1]
+
+        ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
+        translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
+        visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
+
+        viewid_to_visiblepoints_map={}
+
+        for i in range(total_views_num):
+
+            ### gather batch data ###
+            with torch.no_grad():
+                visible_points_num_batch=visible_points_num_for_views[i:i+1]
+                max_points_in_batch=visible_points_num_batch.max()
+                visible_points_for_views_batch=visible_points_for_views[i:i+1,:max_points_in_batch]
+                view_matrix_batch=view_matrix[i:i+1]
+                view_project_matrix_batch=view_project_matrix[i:i+1]
+                camera_focal_batch=camera_focal[i:i+1]
+                camera_center_batch=camera_center[i:i+1]
+
+            visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.model.sample_by_visibility(visible_points_for_views_batch,visible_points_num_batch)
+
+            ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
+            cov3d,transform_matrix=self.model.transform_to_cov3d_faster(visible_scales,visible_rotators)
+            visible_cov2d=self.model.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix_batch,camera_focal_batch)
+            visible_cov2d=visible_cov2d.float()
+            
+            ### mean of 2d-gaussian ###
+            ndc_pos_batch=cg_torch.world_to_ndc(visible_positions,view_project_matrix_batch)
+            
+            #### binning ###
+            tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.model.binning(ndc_pos_batch,visible_cov2d,visible_points_num_batch)
+
+            for j in range(1,total_tiles_num+1):
+                view_id=(i<<16)+j
+                start=tile_start_index[0,j]
+                end=tile_start_index[0,j+1]
+                if start!=-1 and end!=-1:
+                    visible_points_localindex=sorted_pointId[0,start:end]
+                else:
+                    visible_points_localindex=np.zeros((0))
+                visible_points=visible_points_for_views_batch[0,visible_points_localindex]
+                viewid_to_visiblepoints_map[view_id]=visible_points.cpu().numpy()
+
+        #gen hyper graph
+        keys_list=list(viewid_to_visiblepoints_map.keys())
+        for key in keys_list:
+            #if viewid_to_visiblepoints_map[key].shape[0]>2000:
+            #    print(key)
+            if viewid_to_visiblepoints_map[key].shape[0]==0:
+                viewid_to_visiblepoints_map.pop(key)
+
+        np.save('visibility.npy',viewid_to_visiblepoints_map)
+        #np.save('position.npy',self.model._xyz.cpu().numpy())
+
+        return
+
 
     @torch.no_grad()
     def report_psnr(self,epoch_i):
@@ -305,10 +376,19 @@ class GaussianTrain:
             self.restore(load_checkpoint)
 
         # scene division
-        #self.interface(True)
-        #scene_division=GaussianSceneDivision(np.load('visibility.npy',allow_pickle='TRUE').item())
-        #scene_division.division()
-        
+        # self.output_visibility_matrix()
+            
+        # show the division result
+        # with torch.no_grad():
+        #     parition=np.load('metis_parition_1.npy')
+            
+        #     self.model._features_dc[parition[0].nonzero()[0],0,0]+=3
+        #     self.model._features_dc[parition[1].nonzero()[0],0,1]+=3
+        #     self.model._features_dc[parition[2].nonzero()[0],0,2]+=3
+        #     self.model._features_dc[parition[3].nonzero()[0],0,:]+=3
+
+        #     self.interface(True)
+
 
         self.report_psnr(0)
         with torch.no_grad():
