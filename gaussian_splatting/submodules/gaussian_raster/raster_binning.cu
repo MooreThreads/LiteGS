@@ -98,11 +98,13 @@ __global__ void tile_range_kernel(
     int view_id = blockIdx.y;
     int index = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // skip head because tileid 0 is invalid
-    /*if (index == 0)
+
+    // head
+    if (index == 0)
     {
-        tile_range[view_id][0] = index;
-    }*/
+        int tile_id=table_tileId[view_id][index];
+        tile_range[view_id][tile_id] = index;
+    }
     
     //tail
     if (index == table_length - 1)
@@ -133,7 +135,7 @@ Tensor tileRange(Tensor table_tileId, int64_t table_length, int64_t max_tileId)
     std::vector<int64_t> output_shape{ view_num,max_tileId + 1 + 1 };//+1 for tail
     //printf("\ntensor shape in tileRange:%ld,%ld\n", view_num, max_tileId+1-1);
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(table_tileId.device()).requires_grad(false);
-    auto out = torch::zeros(output_shape, opt);
+    auto out = torch::ones(output_shape, opt)*-1;
 
     dim3 Block3d(std::ceil(table_length / 1024.0f), view_num, 1);
 
@@ -182,6 +184,10 @@ __global__ void raster_forward_kernel(
     {
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
+        if (start_index_in_tile == -1)
+        {
+            return;
+        }
 
         float transmittance = 1.0f;
         bool done = false;
@@ -401,6 +407,10 @@ __global__ void raster_backward_kernel(
     {
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
+        if (start_index_in_tile == -1)
+        {
+            return;
+        }
 
         float transmittance = final_transmitance[batch_id][blockIdx.x][y_in_tile][x_in_tile];
         int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile];
