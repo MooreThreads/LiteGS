@@ -23,8 +23,9 @@ class GaussianSplattingModel:
         self.cached_cov3d=None
 
         #exp scale
-        self._scaling = torch.nn.Parameter(torch.Tensor(scene.scale).cuda())#.exp 
-        #sigmoid(opacity)
+        temp=torch.Tensor(scene.scale).cuda()
+        #temp=temp.clamp_max(temp.mean()+temp.std()*2)
+        self._scaling = torch.nn.Parameter(temp)#.exp 
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).cuda())#.sigmoid
         return
     
@@ -119,6 +120,8 @@ class GaussianSplattingModel:
             T=J_trans@view_matrix.transpose(-1,-2)
         #T' x cov3d' x T
         cov2d=T@cov3d.transpose(-1,-2)@T.transpose(-1,-2)#forward backward 1s
+
+        #todo cov3d -> DepthGaussianStd
 
         return cov2d[:,:,0:2,0:2]
 
@@ -249,7 +252,6 @@ class GaussianSplattingModel:
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
         cov3d,transform_matrix=self.transform_to_cov3d_faster(visible_scales,visible_rotators)
         visible_cov2d=self.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix,camera_focal)
-        visible_cov2d=visible_cov2d.float()
         
         ### color ###
         visible_color=(visible_sh0*spherical_harmonics.C0+0.5).squeeze(2).clamp_min(0)
