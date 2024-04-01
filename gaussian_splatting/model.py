@@ -119,11 +119,13 @@ class GaussianSplattingModel:
             view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
             T=J_trans@view_matrix.transpose(-1,-2)
         #T' x cov3d' x T
-        cov2d=T@cov3d.transpose(-1,-2)@T.transpose(-1,-2)#forward backward 1s
+        cov2d=(T@cov3d.transpose(-1,-2)@T.transpose(-1,-2))[:,:,0:2,0:2]#forward backward 1s
+        cov2d[:,:,0,0]+=0.3
+        cov2d[:,:,1,1]+=0.3
 
         #todo cov3d -> DepthGaussianStd
 
-        return cov2d[:,:,0:2,0:2]
+        return cov2d
 
     
     def update_tiles_coord(self,image_size,tile_size):

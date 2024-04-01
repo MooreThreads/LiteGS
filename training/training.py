@@ -240,16 +240,16 @@ class GaussianTrain:
         #print(prof.key_averages().table(sort_by="self_cuda_time_total"))
 
         ### log ###
-        log_loss/=counter
-        self.tb_writer.add_scalar('loss',log_loss.cpu(),epoch_i)
-        if epoch_i%10==1:
-            with torch.no_grad():
-                log_img_batch=img[0]
-                log_transmitance=transmitance[0]
-                log_groundtruth=ground_truth_batch[0]
-            self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="CHW")
-            self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="CHW")
-            self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="CHW")
+        # log_loss/=counter
+        # self.tb_writer.add_scalar('loss',log_loss.cpu(),epoch_i)
+        # if epoch_i%10==1:
+        #     with torch.no_grad():
+        #         log_img_batch=img[0]
+        #         log_transmitance=transmitance[0]
+        #         log_groundtruth=ground_truth_batch[0]
+        #     self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="CHW")
+        #     self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="CHW")
+        #     self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="CHW")
         return
 
     @torch.no_grad()
