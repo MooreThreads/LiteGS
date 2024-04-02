@@ -247,6 +247,13 @@ class GaussianSplattingModel:
                view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,tiles:torch.Tensor=None,
                prebackward_func:typing.Callable=None):
         
+        if visible_points_num is None or visible_points is None:
+            #compute visibility
+            with torch.no_grad():
+                ndc_pos=cg_torch.world_to_ndc(self._xyz,view_project_matrix)
+                translated_pos=cg_torch.world_to_view(self._xyz,view_matrix)
+                visible_points,visible_points_num=self.culling_and_sort(ndc_pos,translated_pos)
+        
         visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.sample_by_visibility(visible_points,visible_points_num)
         if prebackward_func is not None:
             prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0)
