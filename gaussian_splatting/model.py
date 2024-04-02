@@ -130,7 +130,7 @@ class GaussianSplattingModel:
     
     def update_tiles_coord(self,image_size,tile_size):
         self.cached_image_size=image_size
-        self.cached_image_size_tensor=torch.Tensor(image_size).cuda()
+        self.cached_image_size_tensor=torch.Tensor(image_size).cuda().int()
         self.cached_tile_size=tile_size
         self.cached_tiles_size=(math.ceil(image_size[0]/tile_size),math.ceil(image_size[1]/tile_size))
         self.cached_tiles_map=torch.arange(0,self.cached_tiles_size[0]*self.cached_tiles_size[1]).int().reshape(self.cached_tiles_size[1],self.cached_tiles_size[0]).cuda()+1#tile_id 0 is invalid
@@ -190,8 +190,8 @@ class GaussianSplattingModel:
         
         L=((coordX-pixel_radius)/tile_size).floor().int().clamp(0,tilesX)
         U=((coordY-pixel_radius)/tile_size).floor().int().clamp(0,tilesY)
-        R=((coordX+pixel_radius)/tile_size).ceil().int().clamp(0,tilesX)
-        D=((coordY+pixel_radius)/tile_size).ceil().int().clamp(0,tilesY)
+        R=((coordX+pixel_radius+tile_size-1)/tile_size).floor().int().clamp(0,tilesX)
+        D=((coordY+pixel_radius+tile_size-1)/tile_size).floor().int().clamp(0,tilesY)
 
         #calculate params of allocation
         tiles_touched=(R-L)*(D-U)
