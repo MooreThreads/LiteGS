@@ -47,38 +47,8 @@ class GaussianSplattingModel:
         scene.sh_degree=0
         return
 
-    def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
-        #todo implement cuda: scale&rot -> matrix
-        scale_matrix=torch.zeros((*(scaling_vec.shape[0:-1]),3,3),device='cuda')
-        scale_matrix[...,0,0]=scaling_vec[...,0]
-        scale_matrix[...,1,1]=scaling_vec[...,1]
-        scale_matrix[...,2,2]=scaling_vec[...,2]
-
-        rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
-
-        r=rotator_vec[...,0]
-        x=rotator_vec[...,1]
-        y=rotator_vec[...,2]
-        z=rotator_vec[...,3]
-
-
-        rotation_matrix[...,0,0]=1 - 2 * (y * y + z * z)
-        rotation_matrix[...,0,1]=2 * (x * y + r * z)
-        rotation_matrix[...,0,2]=2 * (x * z - r * y)
-
-        rotation_matrix[...,1,0]=2 * (x * y - r * z)
-        rotation_matrix[...,1,1]=1 - 2 * (x * x + z * z)
-        rotation_matrix[...,1,2]=2 * (y * z + r * x)
-
-        rotation_matrix[...,2,0]=2 * (x * z + r * y)
-        rotation_matrix[...,2,1]=2 * (y * z - r * x)
-        rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
-
-        M_matrix=torch.matmul(scale_matrix,rotation_matrix.transpose(-1,-2))
-        cov3d=torch.matmul(M_matrix.transpose(-1,-2),M_matrix)
-        return cov3d,M_matrix
-    
-    def transform_to_cov3d_faster(self,scaling_vec,rotator_vec)->torch.Tensor:
+    #@torch.compile
+    def gen_transform_matrix(scaling_vec,rotator_vec):
         rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
 
         r=rotator_vec[...,0]
@@ -100,10 +70,15 @@ class GaussianSplattingModel:
         rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
 
         transform_matrix=rotation_matrix*scaling_vec.unsqueeze(3)
+        return rotation_matrix
+    
+    def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
+        transform_matrix=self.gen_transform_matrix(scaling_vec,rotator_vec)
         cov3d=TransformCovarianceMatrix.apply(transform_matrix)
         #cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
         return cov3d,transform_matrix
     
+    #@torch.compile
     def proj_cov3d_to_cov2d(self,cov3d,point_positions,view_matrix,camera_focal)->torch.Tensor:
         with torch.no_grad():
             t=torch.matmul(point_positions,view_matrix)
@@ -259,7 +234,7 @@ class GaussianSplattingModel:
             prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0)
 
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
-        cov3d,transform_matrix=self.transform_to_cov3d_faster(visible_scales,visible_rotators)
+        cov3d,transform_matrix=self.transform_to_cov3d(visible_scales,visible_rotators)
         visible_cov2d=self.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix,camera_focal)
         
         ### color ###

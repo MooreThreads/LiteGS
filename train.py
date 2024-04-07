@@ -41,3 +41,4 @@ if __name__ == "__main__":
 
     #start
     training.start(op.epoch,args.start_checkpoint,args.checkpoint_epochs,args.save_epochs)
+    #training.torch_profiler(1)
