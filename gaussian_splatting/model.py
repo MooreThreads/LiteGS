@@ -70,10 +70,10 @@ class GaussianSplattingModel:
         rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
 
         transform_matrix=rotation_matrix*scaling_vec.unsqueeze(3)
-        return rotation_matrix
+        return transform_matrix
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
-        transform_matrix=self.gen_transform_matrix(scaling_vec,rotator_vec)
+        transform_matrix=GaussianSplattingModel.gen_transform_matrix(scaling_vec,rotator_vec)
         cov3d=TransformCovarianceMatrix.apply(transform_matrix)
         #cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
         return cov3d,transform_matrix
