@@ -8,8 +8,13 @@ import typing
 import numpy as np
 import math
 from torch.cuda.amp import autocast
+import platform
 
-torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
+plat = platform.system().lower()
+if plat == 'windows':
+    torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
+elif plat == 'linux':
+    torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/libGaussianRaster.so")
 
 class GaussianSplattingModel:
     @torch.no_grad()
@@ -119,9 +124,9 @@ class GaussianSplattingModel:
         output: sorted_visible_points,num_of_points
         '''
         if limit_LURD is None:
-            culling_result=torch.any(ndc_pos[...,0:2]<-1.3,dim=2)|torch.any(ndc_pos[...,0:2]>1.3,dim=2)|(translated_pos[...,2]<=0)
+            culling_result=torch.any(ndc_pos[...,0:2]<-1.3,dim=2)|torch.any(ndc_pos[...,0:2]>1.3,dim=2)|(translated_pos[...,2]<=0.01)#near plane 0.01
         else:
-            culling_result=torch.any(ndc_pos[...,0:2]<limit_LURD.unsqueeze(1)[...,0:2]*1.3,dim=2)|torch.any(ndc_pos[...,0:2]>limit_LURD.unsqueeze(1)[...,2:4]*1.3,dim=2)|(translated_pos[...,2]<=0)
+            culling_result=torch.any(ndc_pos[...,0:2]<limit_LURD.unsqueeze(1)[...,0:2]*1.3,dim=2)|torch.any(ndc_pos[...,0:2]>limit_LURD.unsqueeze(1)[...,2:4]*1.3,dim=2)|(translated_pos[...,2]<=0)|(translated_pos[...,2]<=0.01)
 
         max_visible_points_num=(~culling_result).sum(1).max()
         threshhold=translated_pos[...,2].max()+1
