@@ -368,68 +368,68 @@ class GaussianTrain:
             ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
             total_views_num=view_matrix.shape[0]
 
-        # with torch.profiler.profile(
-        #         schedule=torch.profiler.schedule(wait=1, warmup=4, active=3, repeat=1),
-        #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./torch_profiler_log'),
-        #         record_shapes=True,
-        #         profile_memory=True,
-        #         with_stack=True
-        # ) as prof:
-        with torch.no_grad():
-            total_views_num=view_matrix.shape[0]
-            ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
-            translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
-            visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
-            if batch_size > 1:            
-                # cluster the views according to the visible_points_num
-                visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
-                visible_points_for_views=visible_points_for_views[view_indices]
-                view_matrix=view_matrix[view_indices]
-                view_project_matrix=view_project_matrix[view_indices]
-                camera_focal=camera_focal[view_indices]
-                camera_center=camera_center[view_indices]
-                ground_truth=ground_truth[view_indices]
-        
-        log_loss=0
-        counter=0
-        iter_range=list(range(0,total_views_num,batch_size))
-        #ssim_helper=loss_utils.LossSSIM().cuda()
-        random.shuffle(iter_range)
-
-        ### iter batch ###
-        torch.cuda.empty_cache()
-        for i in iter_range:
-            batch_tail=min(i+batch_size,total_views_num)
-
-            ### gather batch data ###
+        with torch.profiler.profile(
+                schedule=torch.profiler.schedule(wait=1, warmup=4, active=3, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler('./torch_profiler_log'),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True
+        ) as prof:
             with torch.no_grad():
-                visible_points_num_batch=visible_points_num_for_views[i:batch_tail]
-                max_points_in_batch=visible_points_num_batch.max()
-                visible_points_for_views_batch=visible_points_for_views[i:batch_tail,:max_points_in_batch]
-                view_matrix_batch=view_matrix[i:batch_tail]
-                view_project_matrix_batch=view_project_matrix[i:batch_tail]
-                camera_focal_batch=camera_focal[i:batch_tail]
-                camera_center_batch=camera_center[i:batch_tail]
-                ground_truth_batch=ground_truth[i:batch_tail]
+                total_views_num=view_matrix.shape[0]
+                ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
+                translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
+                visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
+                if batch_size > 1:            
+                    # cluster the views according to the visible_points_num
+                    visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
+                    visible_points_for_views=visible_points_for_views[view_indices]
+                    view_matrix=view_matrix[view_indices]
+                    view_project_matrix=view_project_matrix[view_indices]
+                    camera_focal=camera_focal[view_indices]
+                    camera_center=camera_center[view_indices]
+                    ground_truth=ground_truth[view_indices]
+            
+            log_loss=0
+            counter=0
+            iter_range=list(range(0,total_views_num,batch_size))
+            #ssim_helper=loss_utils.LossSSIM().cuda()
+            random.shuffle(iter_range)
 
-            ### render ###
-            tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
-                            view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
-                            None)#GaussianTrain.__regularization_loss_backward)
-            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            ### iter batch ###
+            torch.cuda.empty_cache()
+            for i in iter_range:
+                batch_tail=min(i+batch_size,total_views_num)
 
-            #### loss ###
-            l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
-            #ssim_loss=ssim_helper.loss(img,ground_truth_batch)
-            loss=(1.0-self.opt_params.lambda_dssim)*l1_loss#+self.opt_params.lambda_dssim*(1-ssim_loss)
-            loss.backward()
-            log_loss+=l1_loss.detach()
-            counter+=1
+                ### gather batch data ###
+                with torch.no_grad():
+                    visible_points_num_batch=visible_points_num_for_views[i:batch_tail]
+                    max_points_in_batch=visible_points_num_batch.max()
+                    visible_points_for_views_batch=visible_points_for_views[i:batch_tail,:max_points_in_batch]
+                    view_matrix_batch=view_matrix[i:batch_tail]
+                    view_project_matrix_batch=view_project_matrix[i:batch_tail]
+                    camera_focal_batch=camera_focal[i:batch_tail]
+                    camera_center_batch=camera_center[i:batch_tail]
+                    ground_truth_batch=ground_truth[i:batch_tail]
 
-            self.optimizer.step()
-            self.optimizer.zero_grad(set_to_none = True)
-                #prof.step()
+                ### render ###
+                tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
+                                view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
+                                None)#GaussianTrain.__regularization_loss_backward)
+                img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+                transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+
+                #### loss ###
+                l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
+                #ssim_loss=ssim_helper.loss(img,ground_truth_batch)
+                loss=(1.0-self.opt_params.lambda_dssim)*l1_loss#+self.opt_params.lambda_dssim*(1-ssim_loss)
+                loss.backward()
+                log_loss+=l1_loss.detach()
+                counter+=1
+
+                self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none = True)
+                prof.step()
 
         return
 
