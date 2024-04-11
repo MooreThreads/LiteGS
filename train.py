@@ -18,8 +18,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_epochs", nargs="+", type=int, default=[ 50, 100, 200])
-    parser.add_argument("--save_epochs", nargs="+", type=int, default=[ 50, 100, 200])
+    parser.add_argument("--test_epochs", nargs="+", type=int, default=[ 10,50,100])
+    parser.add_argument("--save_epochs", nargs="+", type=int, default=[ 50,100])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -40,5 +40,5 @@ if __name__ == "__main__":
     training=GaussianTrain(gaussian_model,lp,op,NerfNormRadius,images_info,cameras_info)
 
     #start
-    training.start(op.epoch,args.start_checkpoint,args.checkpoint_epochs,args.save_epochs)
+    training.start(op.epoch,args.start_checkpoint,args.checkpoint_epochs,args.save_epochs,args.test_epochs)
     #training.torch_profiler(1)

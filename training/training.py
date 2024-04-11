@@ -443,7 +443,7 @@ class GaussianTrain:
         print("\n[EPOCH {}] Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
         return
 
-    def start(self,epoch:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[]):
+    def start(self,epoch:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[],test_epochs:typing.List=[]):
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
@@ -485,6 +485,10 @@ class GaussianTrain:
             if epoch_i in checkpoint_epochs:
                 print("\n[ITER {}] Saving Checkpoint".format(epoch_i))
                 self.save(epoch_i)
+
+            if epoch_i in test_epochs:
+                self.report_psnr(epoch_i)
+            
             if epoch_i in saving_epochs:
                 print("\n[ITER {}] Saving Gaussians".format(epoch_i))
                 self.report_psnr(epoch_i)

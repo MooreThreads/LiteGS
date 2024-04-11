@@ -53,7 +53,7 @@ class GaussianSplattingModel:
         return
 
     #@torch.compile
-    def gen_transform_matrix(scaling_vec,rotator_vec):
+    def create_transform_matrix(scaling_vec,rotator_vec):
         rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
 
         r=rotator_vec[...,0]
@@ -78,9 +78,13 @@ class GaussianSplattingModel:
         return transform_matrix
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
-        transform_matrix=GaussianSplattingModel.gen_transform_matrix(scaling_vec,rotator_vec)
-        cov3d=TransformCovarianceMatrix.apply(transform_matrix)
+        
+        #transform_matrix=GaussianSplattingModel.create_transform_matrix(scaling_vec,rotator_vec)
+        transform_matrix=CreateTransformMatrix.apply(rotator_vec,scaling_vec)
+        
         #cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
+        cov3d=TransformCovarianceMatrix.apply(transform_matrix)
+        
         return cov3d,transform_matrix
     
     #@torch.compile
@@ -88,16 +92,18 @@ class GaussianSplattingModel:
         with torch.no_grad():
             t=torch.matmul(point_positions,view_matrix)
             
-            J_trans=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
-            camera_focal=camera_focal.unsqueeze(1)
-            tz_square=t[:,:,2]*t[:,:,2]
-            J_trans[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-            J_trans[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-            J_trans[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            J_trans[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
-            #with autocast():
-            view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-            T=J_trans@view_matrix.transpose(-1,-2)
+            # Keep no_grad. Auto gradient will make bad influence of xyz
+            # J_trans=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
+            # camera_focal=camera_focal.unsqueeze(1)
+            # tz_square=t[:,:,2]*t[:,:,2]
+            # J_trans[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
+            # J_trans[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
+            # J_trans[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
+            # J_trans[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            J_trans=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal)
+
+        view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
+        T=J_trans@view_matrix.transpose(-1,-2)
         #T' x cov3d' x T
         cov2d=(T@cov3d.transpose(-1,-2)@T.transpose(-1,-2))[:,:,0:2,0:2]#forward backward 1s
         cov2d[:,:,0,0]+=0.3
@@ -246,7 +252,8 @@ class GaussianSplattingModel:
         visible_color=(visible_sh0*spherical_harmonics.C0+0.5).squeeze(2).clamp_min(0)
         
         ### mean of 2d-gaussian ###
-        ndc_pos_batch=cg_torch.world_to_ndc(visible_positions,view_project_matrix)
+        #ndc_pos_batch=cg_torch.world_to_ndc(visible_positions,view_project_matrix)
+        ndc_pos_batch=World2NDC.apply(visible_positions,view_project_matrix)
         
         #### binning ###
         tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.binning(ndc_pos_batch,visible_cov2d,visible_points_num)
@@ -258,6 +265,53 @@ class GaussianSplattingModel:
         tile_img,tile_transmitance=self.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
         
         return tile_img,tile_transmitance.unsqueeze(2)
+
+class World2NDC(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,position,view_project_matrix:torch.Tensor):
+        hom_pos=torch.matmul(position,view_project_matrix)
+        repc_hom_w=1/(hom_pos[...,3:4]+1e-7)
+        ndc_pos=hom_pos*repc_hom_w
+        ctx.save_for_backward(view_project_matrix,position,repc_hom_w)
+        return ndc_pos
+    
+    @staticmethod
+    def backward(ctx,grad_ndc_pos:torch.Tensor):
+        (view_project_matrix,position,repc_hom_w)=ctx.saved_tensors
+
+        #wtf?
+        # repc_hom_w=repc_hom_w[...,0]
+        # position_grad=torch.zeros_like(position)
+
+        # mul1=(view_project_matrix[...,0,0] * position[...,0] + view_project_matrix[...,1,0] * position[...,1] + view_project_matrix[...,2,0] * position[...,2] + view_project_matrix[...,3,0]) * repc_hom_w * repc_hom_w
+        # mul2=(view_project_matrix[...,0,1] * position[...,0] + view_project_matrix[...,1,1] * position[...,1] + view_project_matrix[...,2,1] * position[...,2] + view_project_matrix[...,3,1]) * repc_hom_w * repc_hom_w
+
+        # position_grad[...,0]=(view_project_matrix[...,0,0] * repc_hom_w - view_project_matrix[...,0,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,0,1] * repc_hom_w - view_project_matrix[...,0,3] * mul2) * grad_ndc_pos[...,1]
+
+        # position_grad[...,1]=(view_project_matrix[...,1,0] * repc_hom_w - view_project_matrix[...,1,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,1,1] * repc_hom_w - view_project_matrix[...,1,3] * mul2) * grad_ndc_pos[...,1]
+
+        # position_grad[...,2]=(view_project_matrix[...,2,0] * repc_hom_w - view_project_matrix[...,2,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,2,1] * repc_hom_w - view_project_matrix[...,2,3] * mul2) * grad_ndc_pos[...,1]
+
+        position_grad=torch.ops.RasterBinning.world2ndc_backword(view_project_matrix,position,repc_hom_w,grad_ndc_pos)
+
+        return (position_grad,None)
+    
+
+
+
+class CreateTransformMatrix(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
+        ctx.save_for_backward(quaternion,scale)
+        transform_matrix=torch.ops.RasterBinning.createTransformMatrix_forward(quaternion,scale)
+        return transform_matrix
+    
+    @staticmethod
+    def backward(ctx,grad_transform_matrix:torch.Tensor):
+        (quaternion,scale)=ctx.saved_tensors
+        grad_quaternion,grad_scale=torch.ops.RasterBinning.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
+        return grad_quaternion,grad_scale
+    
 
 class TransformCovarianceMatrix(torch.autograd.Function):
     @staticmethod

@@ -7,4 +7,8 @@ TORCH_LIBRARY(RasterBinning, m) {
   m.def("tileRange", tileRange);
   m.def("rasterize_forward", rasterize_forward);
   m.def("rasterize_backward", rasterize_backward);
+  m.def("jacobianRayspace", jacobianRayspace);
+  m.def("createTransformMatrix_forward", createTransformMatrix_forward);
+  m.def("createTransformMatrix_backward", createTransformMatrix_backward);
+  m.def("world2ndc_backword", world2ndc_backword);
 }

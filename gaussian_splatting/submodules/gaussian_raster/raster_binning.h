@@ -36,3 +36,10 @@ std::vector<Tensor> rasterize_backward(
     int64_t img_h,
     int64_t img_w
 );
+
+Tensor jacobianRayspace(Tensor translate_position,Tensor camera_focal);
+
+Tensor createTransformMatrix_forward(Tensor quaternion, Tensor scale);
+std::vector<Tensor> createTransformMatrix_backward(Tensor transform_matrix_grad, Tensor quaternion, Tensor scale);
+
+Tensor world2ndc_backword(Tensor view_project_matrix, Tensor position, Tensor repc_hom_w, Tensor grad_ndcpos);

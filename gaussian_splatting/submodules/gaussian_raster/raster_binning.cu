@@ -299,42 +299,41 @@ std::vector<Tensor> rasterize_forward(
 
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(tilesize, tilesize, 1);
-    if (tilesize == 16)
+    switch (tilesize)
     {
-        raster_forward_kernel<16> << <Block3d, Thread3d >> >
-            (
-                sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
-                tilesnum_x
-                );
-        CUDA_CHECK_ERRORS;
+    case 16:
+        raster_forward_kernel<16> << <Block3d, Thread3d >> >(
+            sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            output_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+            tilesnum_x);
+        break;
+    case 32:
+        raster_forward_kernel<32> << <Block3d, Thread3d >> >(
+            sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            output_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+            tilesnum_x);
+        break;
+    default:
+        ;
     }
-    else if (tilesize == 32)
-    {
-        raster_forward_kernel<32> << <Block3d, Thread3d >> >
-            (
-                sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
-                tilesnum_x
-                );
-        CUDA_CHECK_ERRORS;
-    }
+    CUDA_CHECK_ERRORS;
+    
 
 
     return { output_img ,output_transmitance ,output_last_contributor };
@@ -585,8 +584,6 @@ __global__ void raster_backward_kernel(
 }
 
 
-
-
 std::vector<Tensor> rasterize_backward(
     Tensor sorted_points,
     Tensor start_index,
@@ -617,52 +614,320 @@ std::vector<Tensor> rasterize_backward(
 
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(tilesize, tilesize, 1);
-    if (tilesize == 16)
+    switch (tilesize)
     {
-        //cudaDeviceSynchronize();
-        raster_backward_kernel<16> << <Block3d, Thread3d >> >
-            (
-                sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-                last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
-                d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                d_mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-                d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                tilesnum_x, img_h,img_w
-                );
-        CUDA_CHECK_ERRORS;
+    case 16:
+        raster_backward_kernel<16> << <Block3d, Thread3d >> >(
+            sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
+            last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+            d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            d_mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+            d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
+            d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+            d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+            tilesnum_x, img_h, img_w);
+        break;
+    case 32:
+        raster_backward_kernel<32> << <Block3d, Thread3d >> >(
+            sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
+            last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+            d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            d_mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+            d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
+            d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+            d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+            tilesnum_x, img_h, img_w);
+        break;
+    default:
+        ;
     }
-    else if (tilesize == 32)
-    {
-        raster_backward_kernel<32> << <Block3d, Thread3d >> >
-            (
-                sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-                color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-                last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
-                d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                d_mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-                d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                d_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-                tilesnum_x, img_h, img_w
-                );
-        CUDA_CHECK_ERRORS;
-    }
-
-
+    CUDA_CHECK_ERRORS;
+    
     return { d_mean2d ,d_cov2d_inv ,d_color,d_opacity };
+}
+
+
+
+__global__ void jacobian_rayspace_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> translated_position,    //[batch,point_num,4] 
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> camera_focal,    //[batch,2] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> jacobian         //[batch,point_num,3,3]
+    )
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+    if (batch_id < translated_position.size(0) && index < translated_position.size(1))
+    {
+        float focalx = camera_focal[batch_id][0];
+        float focaly = camera_focal[batch_id][1];
+
+        float reciprocal_tz = 1.0f/translated_position[batch_id][index][2];
+        float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
+
+        jacobian[batch_id][index][0][0] = focalx * reciprocal_tz;
+        jacobian[batch_id][index][1][1] = focaly * reciprocal_tz;
+        jacobian[batch_id][index][0][2] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
+        jacobian[batch_id][index][1][2] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+    }
+}
+
+Tensor jacobianRayspace(
+    Tensor translated_position, //N,P,4
+    Tensor camera_focal //N,2
+)
+{
+    int N = translated_position.size(0);
+    int P = translated_position.size(1);
+    torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(translated_position.device());
+    Tensor jacobian_matrix = torch::zeros({N,P,3,3}, opt);
+
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(P/(float)threadsnum), N, 1);
+
+    jacobian_rayspace_kernel << <Block3d, threadsnum >> >(
+        translated_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        camera_focal.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        jacobian_matrix.packed_accessor32<float, 4, torch::RestrictPtrTraits>());
+    CUDA_CHECK_ERRORS;
+    return jacobian_matrix;
+
+}
+
+__global__ void create_transform_matrix_forward_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> quaternion,    //[batch,point_num,3]  
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[batch,point_num,4] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> transform         //[batch,point_num,3,3]
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+    if (batch_id < quaternion.size(0) && index < quaternion.size(1))
+    {
+        float r = quaternion[batch_id][index][0];
+        float x = quaternion[batch_id][index][1];
+        float y = quaternion[batch_id][index][2];
+        float z = quaternion[batch_id][index][3];
+
+        float scale_x = scale[batch_id][index][0];
+        float scale_y = scale[batch_id][index][1];
+        float scale_z = scale[batch_id][index][2];
+
+        transform[batch_id][index][0][0] = (1 - 2 * (y * y + z * z))*scale_x;
+        transform[batch_id][index][0][1] = 2 * (x * y + r * z) * scale_x;
+        transform[batch_id][index][0][2] = 2 * (x * z - r * y) * scale_x;
+
+        transform[batch_id][index][1][0] = 2 * (x * y - r * z) * scale_y;
+        transform[batch_id][index][1][1] = (1 - 2 * (x * x + z * z)) * scale_y;
+        transform[batch_id][index][1][2] = 2 * (y * z + r * x) * scale_y;
+
+        transform[batch_id][index][2][0] = 2 * (x * z + r * y) * scale_z;
+        transform[batch_id][index][2][1] = 2 * (y * z - r * x) * scale_z;
+        transform[batch_id][index][2][2] = (1 - 2 * (x * x + y * y)) * scale_z;
+    }
+}
+
+Tensor createTransformMatrix_forward(Tensor quaternion, Tensor scale)
+{
+    int N = quaternion.size(0);
+    int P = quaternion.size(1);
+    torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(quaternion.device()).requires_grad(true);
+    Tensor transform_matrix = torch::zeros({ N,P,3,3 }, opt);
+
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+    create_transform_matrix_forward_kernel << <Block3d, threadsnum >> > (
+        quaternion.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        transform_matrix.packed_accessor32<float, 4, torch::RestrictPtrTraits>());
+    CUDA_CHECK_ERRORS;
+    return transform_matrix;
+}
+
+__global__ void create_transform_matrix_backward_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> quaternion,    //[batch,point_num,3]  
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[batch,point_num,4] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> grad_transform,         //[batch,point_num,3,3]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_quaternion,    //[batch,point_num,3]  
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_scale    //[batch,point_num,4] 
+
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+    if (batch_id < quaternion.size(0) && index < quaternion.size(1))
+    {
+        float r = quaternion[batch_id][index][0];
+        float x = quaternion[batch_id][index][1];
+        float y = quaternion[batch_id][index][2];
+        float z = quaternion[batch_id][index][3];
+
+        float dt[9];
+        dt[0 * 3 + 0] = grad_transform[batch_id][index][0][0];
+        dt[0 * 3 + 1] = grad_transform[batch_id][index][0][1];
+        dt[0 * 3 + 2] = grad_transform[batch_id][index][0][2];
+
+        dt[1 * 3 + 0] = grad_transform[batch_id][index][1][0];
+        dt[1 * 3 + 1] = grad_transform[batch_id][index][1][1];
+        dt[1 * 3 + 2] = grad_transform[batch_id][index][1][2];
+
+        dt[2 * 3 + 0] = grad_transform[batch_id][index][2][0];
+        dt[2 * 3 + 1] = grad_transform[batch_id][index][2][1];
+        dt[2 * 3 + 2] = grad_transform[batch_id][index][2][2];
+
+        {
+            float grad_scale_x = 0;
+            grad_scale_x += (1 - 2 * (y * y + z * z)) * dt[0 * 3 + 0];
+            grad_scale_x += 2 * (x * y + r * z) * dt[0 * 3 + 1];
+            grad_scale_x += 2 * (x * z - r * y) * dt[0 * 3 + 2];
+            grad_scale[batch_id][index][0] = grad_scale_x;
+        }
+
+        {
+            float grad_scale_y = 0;
+            grad_scale_y += 2 * (x * y - r * z) * dt[1 * 3 + 0];
+            grad_scale_y += (1 - 2 * (x * x + z * z)) * dt[1 * 3 + 1];
+            grad_scale_y += 2 * (y * z + r * x) * dt[1 * 3 + 2];
+            grad_scale[batch_id][index][1] = grad_scale_y;
+        }
+
+        {
+            float grad_scale_z = 0;
+            grad_scale_z += 2 * (x * z + r * y) * dt[2 * 3 + 0];
+            grad_scale_z += 2 * (y * z - r * x) * dt[2 * 3 + 1];
+            grad_scale_z += (1 - 2 * (x * x + y * y)) * dt[2 * 3 + 2];
+            grad_scale[batch_id][index][2] = grad_scale_z;
+        }
+
+        {
+            dt[0 * 3 + 0] *= scale[batch_id][index][0];
+            dt[0 * 3 + 1] *= scale[batch_id][index][0];
+            dt[0 * 3 + 2] *= scale[batch_id][index][0];
+
+            dt[1 * 3 + 0] *= scale[batch_id][index][1];
+            dt[1 * 3 + 1] *= scale[batch_id][index][1];
+            dt[1 * 3 + 2] *= scale[batch_id][index][1];
+
+            dt[2 * 3 + 0] *= scale[batch_id][index][2];
+            dt[2 * 3 + 1] *= scale[batch_id][index][2];
+            dt[2 * 3 + 2] *= scale[batch_id][index][2];
+
+            grad_quaternion[batch_id][index][0] = 2 * z * (dt[0*3+1] - dt[1*3+0]) + 2 * y * (dt[2*3+0] - dt[0*3+2]) + 2 * x * (dt[1*3+2] - dt[2*3+1]);
+            grad_quaternion[batch_id][index][1] = 2 * y * (dt[1*3+0] + dt[0*3+1]) + 2 * z * (dt[2*3+0] + dt[0*3+2]) + 2 * r * (dt[1*3+2] - dt[2*3+1]) - 4 * x * (dt[2*3+2] + dt[1*3+1]);
+            grad_quaternion[batch_id][index][2] = 2 * x * (dt[1*3+0] + dt[0*3+1]) + 2 * r * (dt[2*3+0] - dt[0*3+2]) + 2 * z * (dt[1*3+2] + dt[2*3+1]) - 4 * y * (dt[2*3+2] + dt[0*3+0]);
+            grad_quaternion[batch_id][index][3] = 2 * r * (dt[0*3+1] - dt[1*3+0]) + 2 * x * (dt[2*3+0] + dt[0*3+2]) + 2 * y * (dt[1*3+2] + dt[2*3+1]) - 4 * z * (dt[1*3+1] + dt[0*3+0]);
+        }
+
+
+
+
+    }
+}
+
+
+std::vector<Tensor> createTransformMatrix_backward(Tensor transform_matrix_grad,Tensor quaternion, Tensor scale)
+{
+    //todo
+    int N = quaternion.size(0);
+    int P = quaternion.size(1);
+    torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(quaternion.device());
+    Tensor grad_quaternion = torch::zeros({ N,P,4 }, opt);
+    Tensor grad_scale = torch::zeros({ N,P,3 }, opt);
+
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+    create_transform_matrix_backward_kernel << <Block3d, threadsnum >> > (
+        quaternion.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        transform_matrix_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        grad_quaternion.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        grad_scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+    CUDA_CHECK_ERRORS;
+
+
+    return { grad_quaternion,grad_scale };
+}
+
+
+__global__ void world2ndc_backword_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_project_matrix,    //[batch,4,4]  
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[batch,point_num,4] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> repc_hom_w_tensor,         //[batch,point_num,1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_ndc_pos,    //[batch,point_num,4]  
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_position    //[batch,point_num,4] 
+
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+    if (batch_id < position.size(0) && index < position.size(1))
+    {
+        float repc_hom_w = repc_hom_w_tensor[batch_id][index][0];
+
+        float mul1 = (view_project_matrix[batch_id][0][0] * position[batch_id][index][0] 
+            + view_project_matrix[batch_id][1][0] * position[batch_id][index][1] 
+            + view_project_matrix[batch_id][2][0] * position[batch_id][index][2] 
+            + view_project_matrix[batch_id][3][0]) 
+            * repc_hom_w * repc_hom_w;
+        float mul2 = (view_project_matrix[batch_id][0][1] * position[batch_id][index][0]
+            + view_project_matrix[batch_id][1][1] * position[batch_id][index][1]
+            + view_project_matrix[batch_id][2][1] * position[batch_id][index][2]
+            + view_project_matrix[batch_id][3][1])
+            * repc_hom_w * repc_hom_w;
+        float mul3 = (view_project_matrix[batch_id][0][2] * position[batch_id][index][0]
+            + view_project_matrix[batch_id][1][2] * position[batch_id][index][1]
+            + view_project_matrix[batch_id][2][2] * position[batch_id][index][2]
+            + view_project_matrix[batch_id][3][2])
+            * repc_hom_w * repc_hom_w;
+
+        float grad_x = (view_project_matrix[batch_id][0][0] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul1) * grad_ndc_pos[batch_id][index][0] 
+            + (view_project_matrix[batch_id][0][1] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul2) * grad_ndc_pos[batch_id][index][1]
+            + (view_project_matrix[batch_id][0][2] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul3) * grad_ndc_pos[batch_id][index][2];
+
+        float grad_y = (view_project_matrix[batch_id][1][0] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul1) * grad_ndc_pos[batch_id][index][0]
+            + (view_project_matrix[batch_id][1][1] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul2) * grad_ndc_pos[batch_id][index][1]
+            + (view_project_matrix[batch_id][1][2] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul3) * grad_ndc_pos[batch_id][index][2];
+
+        float grad_z = (view_project_matrix[batch_id][2][0] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul1) * grad_ndc_pos[batch_id][index][0]
+            + (view_project_matrix[batch_id][2][1] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul2) * grad_ndc_pos[batch_id][index][1]
+            + (view_project_matrix[batch_id][2][2] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul3) * grad_ndc_pos[batch_id][index][2];
+
+        grad_position[batch_id][index][0] = grad_x;
+        grad_position[batch_id][index][1] = grad_y;
+        grad_position[batch_id][index][2] = grad_z;
+    }
+}
+
+Tensor world2ndc_backword(Tensor view_project_matrix, Tensor position, Tensor repc_hom_w, Tensor grad_ndcpos)
+{
+    Tensor d_position = torch::zeros_like(position, position.options());
+
+
+    int N = position.size(0);
+    int P = position.size(1);
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+
+    world2ndc_backword_kernel << <Block3d, threadsnum >> > (
+        view_project_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        repc_hom_w.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        grad_ndcpos.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        d_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+
+
+    return d_position;
 }
