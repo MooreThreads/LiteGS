@@ -317,7 +317,7 @@ class TransformCovarianceMatrix(torch.autograd.Function):
     @staticmethod
     def forward(ctx,transforms:torch.Tensor):
         ctx.save_for_backward(transforms)
-        cov=transforms.transpose(-1,-2)@transforms
+        cov=transforms.transpose(-1,-2).contiguous()@transforms
         return cov
     
     @staticmethod
