@@ -19,12 +19,12 @@
             },
         },
         {
-            "name": "Python: Test",
+            "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
-            "program": "./profiler_test.py",
+            "program": "${file}",
             "cwd":"${workspaceFolder}",
-            "console": "integratedTerminal",
+            "console": "integratedTerminal"
         }
     ]
     
