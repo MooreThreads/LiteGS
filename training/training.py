@@ -204,7 +204,6 @@ class GaussianTrain:
         random.shuffle(iter_range)
 
         ### iter batch ###
-        torch.cuda.empty_cache()
         for i in iter_range:
             batch_tail=min(i+batch_size,total_views_num)
 
@@ -397,7 +396,6 @@ class GaussianTrain:
             random.shuffle(iter_range)
 
             ### iter batch ###
-            torch.cuda.empty_cache()
             for i in iter_range:
                 batch_tail=min(i+batch_size,total_views_num)
 
@@ -475,6 +473,7 @@ class GaussianTrain:
         progress_bar = tqdm(range(0, epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
         progress_bar.update(0)
 
+        torch.cuda.empty_cache()
         for epoch_i in range(self.iter_start+1,epoch+1):
             
             batch_size=1

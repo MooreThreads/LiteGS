@@ -83,7 +83,7 @@ class GaussianSplattingModel:
         transform_matrix=CreateTransformMatrix.apply(rotator_vec,scaling_vec)
         
         #cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
-        cov3d=TransformCovarianceMatrix.apply(transform_matrix)
+        cov3d=CreateCovarianceMatrix.apply(transform_matrix)
         
         return cov3d,transform_matrix
     
@@ -93,24 +93,24 @@ class GaussianSplattingModel:
             t=torch.matmul(point_positions,view_matrix)
             
             # Keep no_grad. Auto gradient will make bad influence of xyz
-            # J_trans=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
+            # J=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
             # camera_focal=camera_focal.unsqueeze(1)
             # tz_square=t[:,:,2]*t[:,:,2]
-            # J_trans[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-            # J_trans[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-            # J_trans[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            # J_trans[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
-            J_trans=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal)
+            # J[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
+            # J[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
+            # J[:,:,2,0]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
+            # J[:,:,2,1]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            J=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal)
 
         view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-        T=J_trans@view_matrix.transpose(-1,-2)
+        T=J@view_matrix
+
         #T' x cov3d' x T
-        cov2d=(T@cov3d.transpose(-1,-2)@T.transpose(-1,-2))[:,:,0:2,0:2]#forward backward 1s
+        #cov2d=(T@cov3d@T.transpose(-1,-2))[:,:,0:2,0:2]
+        cov2d=Transform3dCovAndProjTo2d.apply(cov3d,T)#backward improvement
+
         cov2d[:,:,0,0]+=0.3
         cov2d[:,:,1,1]+=0.3
-
-        #todo cov3d -> DepthGaussianStd
-
         return cov2d
 
     
@@ -312,8 +312,32 @@ class CreateTransformMatrix(torch.autograd.Function):
         grad_quaternion,grad_scale=torch.ops.RasterBinning.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
         return grad_quaternion,grad_scale
     
+class Transform3dCovAndProjTo2d(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,cov3d:torch.Tensor,transforms_matrix:torch.Tensor):
+        ctx.save_for_backward(transforms_matrix)
+        cov2d=(transforms_matrix@cov3d@transforms_matrix.transpose(-1,-2))[:,:,0:2,0:2].contiguous()
+        return cov2d
+    
+    @staticmethod
+    def backward(ctx,cov2d_gradient:torch.Tensor):
+        (transforms_matrix,)=ctx.saved_tensors
+        N,P=transforms_matrix.shape[0:2]
+        # cov3d_gradient=torch.zeros((N,P,3,3),device=transforms_matrix.device)
+        # for i in range(0,3):
+        #     for j in range(0,3):
+        #         cov3d_gradient[:,:,i,j]=\
+        #             (transforms_matrix[:,:,0,i]*transforms_matrix[:,:,0,j])*cov2d_gradient[:,:,0,0]\
+        #             + (transforms_matrix[:,:,0,i]*transforms_matrix[:,:,1,j])*cov2d_gradient[:,:,0,1]\
+        #             + (transforms_matrix[:,:,1,i]*transforms_matrix[:,:,0,j])*cov2d_gradient[:,:,1,0]\
+        #             + (transforms_matrix[:,:,1,i]*transforms_matrix[:,:,1,j])*cov2d_gradient[:,:,1,1]
+        temp_matrix_A=transforms_matrix[:,:,(0,0,1,1),:].transpose(-1,-2).contiguous()
+        temp_matrix_B=(transforms_matrix[:,:,(0,1,0,1),:]*cov2d_gradient.reshape(N,P,-1,1)).contiguous()
+        cov3d_gradient=temp_matrix_A@temp_matrix_B
 
-class TransformCovarianceMatrix(torch.autograd.Function):
+        return cov3d_gradient,None
+
+class CreateCovarianceMatrix(torch.autograd.Function):
     @staticmethod
     def forward(ctx,transforms:torch.Tensor):
         ctx.save_for_backward(transforms)
