@@ -680,8 +680,8 @@ __global__ void jacobian_rayspace_kernel(
 
         jacobian[batch_id][index][0][0] = focalx * reciprocal_tz;
         jacobian[batch_id][index][1][1] = focaly * reciprocal_tz;
-        jacobian[batch_id][index][2][0] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
-        jacobian[batch_id][index][2][1] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+        jacobian[batch_id][index][0][2] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
+        jacobian[batch_id][index][1][2] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
     }
 }
 

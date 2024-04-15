@@ -98,12 +98,12 @@ class GaussianSplattingModel:
             # tz_square=t[:,:,2]*t[:,:,2]
             # J[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
             # J[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
-            # J[:,:,2,0]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            # J[:,:,2,1]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            # J[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
+            # J[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
             J=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal)
 
-        view_matrix=view_matrix.unsqueeze(1)[:,:,0:3,0:3]
-        T=J@view_matrix
+        M=view_matrix.unsqueeze(1)[:,:,0:3,0:3].transpose(-1,-2).contiguous()
+        T=J@M
 
         #T' x cov3d' x T
         #cov2d=(T@cov3d@T.transpose(-1,-2))[:,:,0:2,0:2]
