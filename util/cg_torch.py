@@ -31,13 +31,30 @@ def viewproj_to_frustumplane(viewproj_matrix:torch.Tensor)->torch.Tensor:
     frustumplane[:,1,3]=viewproj_matrix[:,3,3]-viewproj_matrix[:,3,0]
 
     #bottom plane
+    frustumplane[:,2,0]=viewproj_matrix[:,0,3]+viewproj_matrix[:,0,1]
+    frustumplane[:,2,1]=viewproj_matrix[:,1,3]+viewproj_matrix[:,1,1]
+    frustumplane[:,2,2]=viewproj_matrix[:,2,3]+viewproj_matrix[:,2,1]
+    frustumplane[:,2,3]=viewproj_matrix[:,3,3]+viewproj_matrix[:,3,1]
 
     #top plane
+    frustumplane[:,3,0]=viewproj_matrix[:,0,3]-viewproj_matrix[:,0,1]
+    frustumplane[:,3,1]=viewproj_matrix[:,1,3]-viewproj_matrix[:,1,1]
+    frustumplane[:,3,2]=viewproj_matrix[:,2,3]-viewproj_matrix[:,2,1]
+    frustumplane[:,3,3]=viewproj_matrix[:,3,3]-viewproj_matrix[:,3,1]
 
     #near plane
+    frustumplane[:,4,0]=viewproj_matrix[:,0,2]
+    frustumplane[:,4,1]=viewproj_matrix[:,1,2]
+    frustumplane[:,4,2]=viewproj_matrix[:,2,2]
+    frustumplane[:,4,3]=viewproj_matrix[:,3,2]
 
     #far plane
-    return
+    frustumplane[:,5,0]=viewproj_matrix[:,0,3]-viewproj_matrix[:,0,2]
+    frustumplane[:,5,1]=viewproj_matrix[:,1,3]-viewproj_matrix[:,1,2]
+    frustumplane[:,5,2]=viewproj_matrix[:,2,3]-viewproj_matrix[:,2,2]
+    frustumplane[:,5,3]=viewproj_matrix[:,3,3]-viewproj_matrix[:,3,2]
+
+    return frustumplane
 
 @torch.no_grad
 def frustum_culling_aabb(frustumplane,aabb_origin,aabb_ext):
@@ -49,12 +66,19 @@ def frustum_culling_aabb(frustumplane,aabb_origin,aabb_ext):
     Returns:
         visibility - is visible. [N,M]
     '''
-    #project origin to plane normal
-
+    assert(aabb_origin.shape[0]==aabb_ext.shape[0])
+    N=frustumplane.shape[0]
+    M=aabb_origin.shape[0]
+    frustumplane=frustumplane.unsqueeze(1)
+    aabb_origin=aabb_origin.unsqueeze(1).unsqueeze(0)
+    aabb_ext=aabb_ext.unsqueeze(1).unsqueeze(0)
+    #project origin to plane normal [M,N,6,1]
+    dist_origin=(frustumplane[...,0:3]*aabb_origin).sum(-1)+frustumplane[...,3]
     #project extension to plane normal
-
+    dist_ext=(frustumplane[...,0:3]*aabb_ext).abs().sum(-1)
     #push out the origin
-
+    pushed_origin_dist=dist_origin+dist_ext #M,N,6,1
     #is completely outside
-
-    return
+    culling=(pushed_origin_dist<0).sum(-1)
+    visibility=(culling==0)
+    return visibility
