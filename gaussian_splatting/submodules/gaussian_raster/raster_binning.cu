@@ -1,11 +1,17 @@
 #ifndef __CUDACC__
     #define __CUDACC__
+    #define __NVCC__
 #endif
 #include "cuda_runtime.h"
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+#include <cuda/atomic>
+namespace cg = cooperative_groups;
+
 #include <c10/cuda/CUDAException.h>
 #include "raster_binning.h"
 #include <ATen/core/TensorAccessor.h>
-
+//using namespace at;
 
 #define CUDA_CHECK_ERRORS \
     cudaError_t err = cudaGetLastError(); \
@@ -55,9 +61,9 @@
 
 
 
-std::vector<Tensor> duplicateWithKeys(Tensor L,Tensor U,Tensor R,Tensor D,Tensor ValidPointNum,Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX)
+std::vector<at::Tensor> duplicateWithKeys(at::Tensor L, at::Tensor U, at::Tensor R, at::Tensor D, at::Tensor ValidPointNum, at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX)
 {
-    DeviceGuard guard(L.device());
+    at::DeviceGuard guard(L.device());
     int64_t view_num = L.sizes()[0];
     int64_t points_num = L.sizes()[1];
 
@@ -127,9 +133,9 @@ __global__ void tile_range_kernel(
     }
 }
 
-Tensor tileRange(Tensor table_tileId, int64_t table_length, int64_t max_tileId)
+at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_tileId)
 {
-    DeviceGuard guard(table_tileId.device());
+    at::DeviceGuard guard(table_tileId.device());
 
     int64_t view_num = table_tileId.sizes()[0];
     std::vector<int64_t> output_shape{ view_num,max_tileId + 1 + 1 };//+1 for tail
@@ -166,10 +172,10 @@ __global__ void raster_forward_kernel(
 {
 
 
-    __shared__ float2 collected_xy[tilesize * tilesize];
-    __shared__ float collected_opacity[tilesize * tilesize];
-    __shared__ float3 collected_cov2d_inv[tilesize * tilesize];
-    __shared__ float3 collected_color[tilesize * tilesize];
+    __shared__ float2 collected_xy[tilesize * tilesize / 4];
+    __shared__ float collected_opacity[tilesize * tilesize / 4];
+    __shared__ float3 collected_cov2d_inv[tilesize * tilesize / 4];
+    __shared__ float3 collected_color[tilesize * tilesize / 4];
 
     const int batch_id = blockIdx.y;
     int tile_id = tiles[batch_id][blockIdx.x];
@@ -193,13 +199,13 @@ __global__ void raster_forward_kernel(
         bool done = false;
         float3 final_color{ 0,0,0 };
         int last_contributor = 0;
-        for (int offset = start_index_in_tile; offset < end_index_in_tile; offset += tilesize * tilesize)
+        for (int offset = start_index_in_tile; offset < end_index_in_tile; offset += tilesize * tilesize / 4)
         {
             int num_done = __syncthreads_count(done);
             if (num_done == blockDim.x * blockDim.y)
                 break;
 
-            int valid_num = min(tilesize * tilesize, end_index_in_tile - offset);
+            int valid_num = min(tilesize * tilesize / 4, end_index_in_tile - offset);
             //load to shared memory
             if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
             {
@@ -263,14 +269,14 @@ __global__ void raster_forward_kernel(
     }
 }
 
-std::vector<Tensor> rasterize_forward(
-    Tensor sorted_points,
-    Tensor start_index,
-    Tensor  mean2d,// 
-    Tensor  cov2d_inv,
-    Tensor  color,
-    Tensor  opacity,
-    Tensor  tiles,
+std::vector<at::Tensor> rasterize_forward(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor  mean2d,// 
+    at::Tensor  cov2d_inv,
+    at::Tensor  color,
+    at::Tensor  opacity,
+    at::Tensor  tiles,
     int64_t tilesize,
     int64_t tilesnum_x,
     int64_t tilesnum_y,
@@ -278,22 +284,22 @@ std::vector<Tensor> rasterize_forward(
     int64_t img_w
 )
 {
-    DeviceGuard guard( mean2d.device());
+    at::DeviceGuard guard( mean2d.device());
 
     int64_t viewsnum = start_index.sizes()[0];
     int64_t tilesnum = tiles.sizes()[1];
 
     std::vector<int64_t> shape_img{ viewsnum, tilesnum,3,tilesize,tilesize };
     torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
-    Tensor output_img = torch::zeros(shape_img, opt_img);
+    at::Tensor output_img = torch::zeros(shape_img, opt_img);
 
     std::vector<int64_t> shape_t{ viewsnum, tilesnum, tilesize, tilesize };
     torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
-    Tensor output_transmitance = torch::zeros(shape_t, opt_t);
+    at::Tensor output_transmitance = torch::zeros(shape_t, opt_t);
 
     std::vector<int64_t> shape_c{ viewsnum, tilesnum, tilesize, tilesize };
     torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
-    Tensor output_last_contributor = torch::zeros(shape_c, opt_c);
+    at::Tensor output_last_contributor = torch::zeros(shape_c, opt_c);
 
 
 
@@ -358,13 +364,6 @@ __global__ void raster_backward_kernel(
     int tiles_num_x, int img_h, int img_w
 )
 {
-
-
-    /*__shared__ float2 collected_xy[tilesize * tilesize];
-    __shared__ float collected_opacity[tilesize * tilesize];
-    __shared__ float3 collected_cov2d_inv[tilesize * tilesize];
-    __shared__ float3 collected_color[tilesize * tilesize];
-    __shared__ int collected_point_id[tilesize * tilesize];*/
     __shared__ int collected_point_id[tilesize * tilesize / 4];
     __shared__ float collected_color_x[tilesize * tilesize / 4];
     __shared__ float collected_color_y[tilesize * tilesize / 4];
@@ -385,11 +384,13 @@ __global__ void raster_backward_kernel(
     __shared__ float grad_mean_x[tilesize * tilesize];
     __shared__ float grad_mean_y[tilesize * tilesize];
     __shared__ float grad_opacity[tilesize * tilesize];
-
+ 
 
 
     const int batch_id = blockIdx.y;
     int tile_id = tiles[batch_id][blockIdx.x];
+    auto block = cg::this_thread_block();
+    auto cuda_tile = cg::tiled_partition<32>(block);
 
     const int x_in_tile = threadIdx.x;
     const int y_in_tile = threadIdx.y;
@@ -506,13 +507,10 @@ __global__ void raster_backward_kernel(
                     grad_invcov_x[threadidx] = -0.5f * d.x * d.x * d_power;
                     grad_invcov_z[threadidx] = -0.5f * d.y * d.y * d_power;
                     grad_invcov_y[threadidx] = -0.5f * d.x * d.y * d_power;
-                    //atomicAdd(&(d_cov2d_inv[batch_id][collected_point_id[i]][1][0]), -0.5f * d.y * d.x * d_power);
 
                     //mean2d
                     float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
                     float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
-                    //d_x=d_deltax
-                    //d_y=d_deltay
                     grad_mean_x[threadidx] = d_deltax;
                     grad_mean_y[threadidx] = d_deltay;
                 }
@@ -535,42 +533,73 @@ __global__ void raster_backward_kernel(
 
                 __syncthreads();
                 //reduction
-                for (int step_size = tilesize * tilesize / 2; step_size > 0; step_size /= 2)
+                for (int offset = tilesize * tilesize / 2; offset > 32; offset /= 2)
                 {
-                    if (threadidx < step_size)
+                    if (threadidx < offset)
                     {
-                        grad_color_x[threadidx] += grad_color_x[threadidx + step_size];
-                        grad_color_y[threadidx] += grad_color_y[threadidx + step_size];
-                        grad_color_z[threadidx] += grad_color_z[threadidx + step_size];
+                        grad_color_x[threadidx] += grad_color_x[threadidx + offset];
+                        grad_color_y[threadidx] += grad_color_y[threadidx + offset];
+                        grad_color_z[threadidx] += grad_color_z[threadidx + offset];
 
-                        grad_invcov_x[threadidx] += grad_invcov_x[threadidx + step_size];
-                        grad_invcov_y[threadidx] += grad_invcov_y[threadidx + step_size];
-                        grad_invcov_z[threadidx] += grad_invcov_z[threadidx + step_size];
+                        grad_invcov_x[threadidx] += grad_invcov_x[threadidx + offset];
+                        grad_invcov_y[threadidx] += grad_invcov_y[threadidx + offset];
+                        grad_invcov_z[threadidx] += grad_invcov_z[threadidx + offset];
 
-                        grad_mean_x[threadidx] += grad_mean_x[threadidx + step_size];
-                        grad_mean_y[threadidx] += grad_mean_y[threadidx + step_size];
+                        grad_mean_x[threadidx] += grad_mean_x[threadidx + offset];
+                        grad_mean_y[threadidx] += grad_mean_y[threadidx + offset];
 
-                        grad_opacity[threadidx] += grad_opacity[threadidx + step_size];
+                        grad_opacity[threadidx] += grad_opacity[threadidx + offset];
                     }
                     __syncthreads();
                 }
-
-                if (threadidx == 0)
+                if (threadidx < 32)
                 {
-                    int point_id = collected_point_id[i];
-                    atomicAdd(&d_color[batch_id][point_id][0], grad_color_x[0]);
-                    atomicAdd(&d_color[batch_id][point_id][1], grad_color_y[0]);
-                    atomicAdd(&d_color[batch_id][point_id][2], grad_color_z[0]);
+                    float grad_color_x_warp = grad_color_x[threadidx] + grad_color_x[threadidx + 32];
+                    float grad_color_y_warp = grad_color_y[threadidx] + grad_color_y[threadidx + 32];
+                    float grad_color_z_warp = grad_color_z[threadidx] + grad_color_z[threadidx + 32];
 
-                    atomicAdd(&d_opacity[batch_id][point_id][0], grad_opacity[0]);
+                    float grad_invcov_x_warp = grad_invcov_x[threadidx] + grad_invcov_x[threadidx + 32];
+                    float grad_invcov_y_warp = grad_invcov_y[threadidx] + grad_invcov_y[threadidx + 32];
+                    float grad_invcov_z_warp = grad_invcov_z[threadidx] + grad_invcov_z[threadidx + 32];
 
-                    atomicAdd(&d_mean2d[batch_id][point_id][0], grad_mean_x[0]);
-                    atomicAdd(&d_mean2d[batch_id][point_id][1], grad_mean_y[0]);
+                    float grad_mean_x_warp = grad_mean_x[threadidx] + grad_mean_x[threadidx + 32];
+                    float grad_mean_y_warp = grad_mean_y[threadidx] + grad_mean_y[threadidx + 32];
 
-                    atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], grad_invcov_x[0]);
-                    atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], grad_invcov_y[0]);
-                    atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], grad_invcov_y[0]);
-                    atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], grad_invcov_z[0]);
+                    float grad_opacity_warp = grad_opacity[threadidx] + grad_opacity[threadidx + 32];
+
+                    for (int offset = 16; offset > 0; offset /= 2)
+                    {
+                        grad_color_x_warp += __shfl_down_sync(0xffffffff, grad_color_x_warp, offset);
+                        grad_color_y_warp += __shfl_down_sync(0xffffffff, grad_color_y_warp, offset);
+                        grad_color_z_warp += __shfl_down_sync(0xffffffff, grad_color_z_warp, offset);
+
+                        grad_invcov_x_warp += __shfl_down_sync(0xffffffff, grad_invcov_x_warp, offset);
+                        grad_invcov_y_warp += __shfl_down_sync(0xffffffff, grad_invcov_y_warp, offset);
+                        grad_invcov_z_warp += __shfl_down_sync(0xffffffff, grad_invcov_z_warp, offset);
+
+                        grad_mean_x_warp += __shfl_down_sync(0xffffffff, grad_mean_x_warp, offset);
+                        grad_mean_y_warp += __shfl_down_sync(0xffffffff, grad_mean_y_warp, offset);
+
+                        grad_opacity_warp += __shfl_down_sync(0xffffffff, grad_opacity_warp, offset);
+                    }
+                    if (threadidx == 0)
+                    {
+                        int point_id = collected_point_id[i];
+                        atomicAdd(&d_color[batch_id][point_id][0], grad_color_x_warp);
+                        atomicAdd(&d_color[batch_id][point_id][1], grad_color_y_warp);
+                        atomicAdd(&d_color[batch_id][point_id][2], grad_color_z_warp);
+
+                        atomicAdd(&d_opacity[batch_id][point_id][0], grad_opacity_warp);
+
+                        atomicAdd(&d_mean2d[batch_id][point_id][0], grad_mean_x_warp);
+                        atomicAdd(&d_mean2d[batch_id][point_id][1], grad_mean_y_warp);
+
+                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], grad_invcov_x_warp);
+                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], grad_invcov_y_warp);
+                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], grad_invcov_y_warp);
+                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], grad_invcov_z_warp);
+                    }
+
                 }
                 __syncthreads();
 
@@ -584,17 +613,17 @@ __global__ void raster_backward_kernel(
 }
 
 
-std::vector<Tensor> rasterize_backward(
-    Tensor sorted_points,
-    Tensor start_index,
-    Tensor mean2d,// 
-    Tensor cov2d_inv,
-    Tensor color,
-    Tensor opacity,
-    Tensor tiles,
-    Tensor final_transmitance,
-    Tensor last_contributor,
-    Tensor d_img,
+std::vector<at::Tensor> rasterize_backward(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor mean2d,// 
+    at::Tensor cov2d_inv,
+    at::Tensor color,
+    at::Tensor opacity,
+    at::Tensor tiles,
+    at::Tensor final_transmitance,
+    at::Tensor last_contributor,
+    at::Tensor d_img,
     int64_t tilesize,
     int64_t tilesnum_x,
     int64_t tilesnum_y,
@@ -602,15 +631,15 @@ std::vector<Tensor> rasterize_backward(
     int64_t img_w
 )
 {
-    DeviceGuard guard(mean2d.device());
+    at::DeviceGuard guard(mean2d.device());
 
     int64_t viewsnum = start_index.sizes()[0];
     int64_t tilesnum = tiles.sizes()[1];
 
-    Tensor d_mean2d = torch::zeros_like(mean2d,mean2d.options());
-    Tensor d_cov2d_inv = torch::zeros_like(cov2d_inv, mean2d.options());
-    Tensor d_color = torch::zeros_like(color, mean2d.options());
-    Tensor d_opacity = torch::zeros_like(opacity, mean2d.options());
+    at::Tensor d_mean2d = torch::zeros_like(mean2d,mean2d.options());
+    at::Tensor d_cov2d_inv = torch::zeros_like(cov2d_inv, mean2d.options());
+    at::Tensor d_color = torch::zeros_like(color, mean2d.options());
+    at::Tensor d_opacity = torch::zeros_like(opacity, mean2d.options());
 
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(tilesize, tilesize, 1);
@@ -685,15 +714,15 @@ __global__ void jacobian_rayspace_kernel(
     }
 }
 
-Tensor jacobianRayspace(
-    Tensor translated_position, //N,P,4
-    Tensor camera_focal //N,2
+at::Tensor jacobianRayspace(
+    at::Tensor translated_position, //N,P,4
+    at::Tensor camera_focal //N,2
 )
 {
     int N = translated_position.size(0);
     int P = translated_position.size(1);
     torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(translated_position.device());
-    Tensor jacobian_matrix = torch::zeros({N,P,3,3}, opt);
+    at::Tensor jacobian_matrix = torch::zeros({N,P,3,3}, opt);
 
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P/(float)threadsnum), N, 1);
@@ -740,12 +769,12 @@ __global__ void create_transform_matrix_forward_kernel(
     }
 }
 
-Tensor createTransformMatrix_forward(Tensor quaternion, Tensor scale)
+at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale)
 {
     int N = quaternion.size(0);
     int P = quaternion.size(1);
     torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(quaternion.device()).requires_grad(true);
-    Tensor transform_matrix = torch::zeros({ N,P,3,3 }, opt);
+    at::Tensor transform_matrix = torch::zeros({ N,P,3,3 }, opt);
 
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -838,14 +867,14 @@ __global__ void create_transform_matrix_backward_kernel(
 }
 
 
-std::vector<Tensor> createTransformMatrix_backward(Tensor transform_matrix_grad,Tensor quaternion, Tensor scale)
+std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale)
 {
     //todo
     int N = quaternion.size(0);
     int P = quaternion.size(1);
     torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(quaternion.device());
-    Tensor grad_quaternion = torch::zeros({ N,P,4 }, opt);
-    Tensor grad_scale = torch::zeros({ N,P,3 }, opt);
+    at::Tensor grad_quaternion = torch::zeros({ N,P,4 }, opt);
+    at::Tensor grad_scale = torch::zeros({ N,P,3 }, opt);
 
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -911,9 +940,9 @@ __global__ void world2ndc_backword_kernel(
     }
 }
 
-Tensor world2ndc_backword(Tensor view_project_matrix, Tensor position, Tensor repc_hom_w, Tensor grad_ndcpos)
+at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos)
 {
-    Tensor d_position = torch::zeros_like(position, position.options());
+    at::Tensor d_position = torch::zeros_like(position, position.options());
 
 
     int N = position.size(0);

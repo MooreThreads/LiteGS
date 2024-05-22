@@ -296,9 +296,6 @@ class World2NDC(torch.autograd.Function):
 
         return (position_grad,None)
     
-
-
-
 class CreateTransformMatrix(torch.autograd.Function):
     @staticmethod
     def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):

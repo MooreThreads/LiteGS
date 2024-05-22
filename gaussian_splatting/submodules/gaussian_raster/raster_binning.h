@@ -1,17 +1,17 @@
 #include <torch/extension.h>
-using namespace at;
 
-std::vector<Tensor> duplicateWithKeys(Tensor L,Tensor U,Tensor R,Tensor D,Tensor ValidPointNum,Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX);
-Tensor tileRange(Tensor table_tileId, int64_t table_length, int64_t max_tileId);
 
-std::vector<Tensor> rasterize_forward(
-    Tensor sorted_points,
-    Tensor start_index,
-    Tensor mean2d,// 
-    Tensor cov2d_inv,
-    Tensor color,
-    Tensor opacity,
-    Tensor tiles,
+std::vector<at::Tensor> duplicateWithKeys(at::Tensor L,at::Tensor U,at::Tensor R,at::Tensor D,at::Tensor ValidPointNum,at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX);
+at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_tileId);
+
+std::vector<at::Tensor> rasterize_forward(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor mean2d,// 
+    at::Tensor cov2d_inv,
+    at::Tensor color,
+    at::Tensor opacity,
+    at::Tensor tiles,
     int64_t tilesize,
     int64_t tilesnum_x,
     int64_t tilesnum_y,
@@ -19,17 +19,17 @@ std::vector<Tensor> rasterize_forward(
     int64_t img_w
 );
 
-std::vector<Tensor> rasterize_backward(
-    Tensor sorted_points,
-    Tensor start_index,
-    Tensor mean2d,
-    Tensor cov2d_inv,
-    Tensor color,
-    Tensor opacity,
-    Tensor tiles,
-    Tensor final_transmitance,
-    Tensor last_contributor,
-    Tensor d_img,
+std::vector<at::Tensor> rasterize_backward(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor mean2d,
+    at::Tensor cov2d_inv,
+    at::Tensor color,
+    at::Tensor opacity,
+    at::Tensor tiles,
+    at::Tensor final_transmitance,
+    at::Tensor last_contributor,
+    at::Tensor d_img,
     int64_t tilesize,
     int64_t tilesnum_x,
     int64_t tilesnum_y,
@@ -37,9 +37,9 @@ std::vector<Tensor> rasterize_backward(
     int64_t img_w
 );
 
-Tensor jacobianRayspace(Tensor translate_position,Tensor camera_focal);
+at::Tensor jacobianRayspace(at::Tensor translate_position,at::Tensor camera_focal);
 
-Tensor createTransformMatrix_forward(Tensor quaternion, Tensor scale);
-std::vector<Tensor> createTransformMatrix_backward(Tensor transform_matrix_grad, Tensor quaternion, Tensor scale);
+at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale);
+std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale);
 
-Tensor world2ndc_backword(Tensor view_project_matrix, Tensor position, Tensor repc_hom_w, Tensor grad_ndcpos);
+at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos);
