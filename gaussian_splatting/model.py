@@ -157,7 +157,7 @@ class GaussianSplattingModel:
 
     
     @torch.no_grad()
-    def binning(self,ndc:torch.Tensor,cov2d:torch.Tensor,valid_points_num:torch.Tensor,b_gather=False):
+    def binning(self,ndc:torch.Tensor,cov2d:torch.Tensor,opacity:torch.Tensor,valid_points_num:torch.Tensor,b_gather=False):
         
         tilesX=self.cached_tiles_size[0]
         tilesY=self.cached_tiles_size[1]
@@ -172,7 +172,8 @@ class GaussianSplattingModel:
         det=cov2d[:,:,0,0]*cov2d[:,:,1,1]-cov2d[:,:,0,1]*cov2d[:,:,0,1]
         mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
         temp=(mid*mid-det).clamp_min(0.1).sqrt()
-        pixel_radius=(3*(torch.max(mid+temp,mid-temp).sqrt())).ceil()
+        coefficient=(-2*(1/(255*opacity.squeeze(-1))).log()).sqrt()
+        pixel_radius=(coefficient*(torch.max(mid+temp,mid-temp).sqrt())).ceil()
         
         L=((coordX-pixel_radius)/tile_size).floor().int().clamp(0,tilesX)
         U=((coordY-pixel_radius)/tile_size).floor().int().clamp(0,tilesY)
@@ -256,7 +257,7 @@ class GaussianSplattingModel:
         ndc_pos_batch=World2NDC.apply(visible_positions,view_project_matrix)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.binning(ndc_pos_batch,visible_cov2d,visible_points_num)
+        tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.binning(ndc_pos_batch,visible_cov2d,visible_opacities,visible_points_num)
 
         #### raster ###
         if tiles is None:
