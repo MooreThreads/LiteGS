@@ -21,7 +21,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_epochs", nargs="+", type=int, default=[ 10,50,100])
     parser.add_argument("--save_epochs", nargs="+", type=int, default=[ 50,100])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[])
+    parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[50,100])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_epochs.append(args.epoch)

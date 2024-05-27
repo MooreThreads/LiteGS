@@ -6,6 +6,7 @@ from util.camera import View
 from training import cache
 from training.utils import loss_utils
 from gaussian_splatting.division import GaussianSceneDivision
+from training.densitycontroller import StatisticsHelper,DensityController
 from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
 
 import torch
@@ -84,6 +85,7 @@ class GaussianTrain:
         self.camera_dict=camera_dict
         self.view_manager=ViewManager(self.image_list,self.camera_dict)
         self.model=gaussian_model
+        self.static_helper=StatisticsHelper(self.model)
         self.output_path=lp.model_path
         self.__training_setup(gaussian_model,op)
         self.opt_params=op
@@ -170,7 +172,7 @@ class GaussianTrain:
 
     @staticmethod
     def __regularization_loss_backward(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0):
-        regularization_loss=(1-visible_opacities).mean()*0.01+visible_scales.var(2).mean()*100
+        regularization_loss=(1-visible_opacities).mean()*0.001+visible_scales.var(2).mean()*0.1
         regularization_loss.backward(retain_graph=True)
         return    
     
@@ -200,8 +202,10 @@ class GaussianTrain:
         log_loss=0
         counter=0
         iter_range=list(range(0,total_views_num,batch_size))
-        ssim_helper=loss_utils.LossSSIM().cuda()
         random.shuffle(iter_range)
+        self.__update_learning_rate((epoch_i-1)*total_views_num)
+        ssim_helper=loss_utils.LossSSIM().cuda()
+        self.static_helper.reset()
 
         ### iter batch ###
         for i in iter_range:
@@ -221,7 +225,7 @@ class GaussianTrain:
             ### render ###
             tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
-                              None)#GaussianTrain.__regularization_loss_backward)
+                              GaussianTrain.__regularization_loss_backward)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
 
@@ -233,8 +237,14 @@ class GaussianTrain:
             log_loss+=l1_loss.detach()
             counter+=1
 
+            #self.static_helper.update(visible_points_for_views_batch)
             self.optimizer.step()
             self.optimizer.zero_grad(set_to_none = True)
+        
+        #density controll
+        if epoch_i%50==1 and epoch_i!=1:
+            density_controller=DensityController()
+            abnormal_indices=density_controller.get_abnormal(self.static_helper)
 
         ### log ###
         # log_loss/=counter
@@ -445,22 +455,7 @@ class GaussianTrain:
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
-        # scene division
-        # self.output_visibility_matrix()
-            
-        # show the division result
-        # with torch.no_grad():
-        #     parition=np.load('metis_parition_1.npy')
-            
-        #     self.model._features_dc[parition[0].nonzero()[0],0,0]+=3
-        #     self.model._features_dc[parition[1].nonzero()[0],0,1]+=3
-        #     self.model._features_dc[parition[2].nonzero()[0],0,2]+=3
-        #     self.model._features_dc[parition[3].nonzero()[0],0,:]+=3
-
-        #     self.interface(True)
-
-
-        self.report_psnr(0)
+        self.report_psnr(self.iter_start)
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size)
             view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
@@ -470,7 +465,7 @@ class GaussianTrain:
             ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
             total_views_num=view_matrix.shape[0]
 
-        progress_bar = tqdm(range(0, epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
+        progress_bar = tqdm(range(self.iter_start*self.view_manager.view_matrix_tensor.shape[0], epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
         progress_bar.update(0)
 
         torch.cuda.empty_cache()
