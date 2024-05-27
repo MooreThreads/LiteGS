@@ -172,8 +172,12 @@ class GaussianSplattingModel:
         det=cov2d[:,:,0,0]*cov2d[:,:,1,1]-cov2d[:,:,0,1]*cov2d[:,:,0,1]
         mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
         temp=(mid*mid-det).clamp_min(0.1).sqrt()
-        coefficient=(-2*(1/(255*opacity.squeeze(-1))).log()).sqrt()
-        pixel_radius=(coefficient*(torch.max(mid+temp,mid-temp).sqrt())).ceil()
+        major_eigen_val=torch.max(mid+temp,mid-temp)
+        # todo: rectangle formed by the major and minor axes
+        # eigen_val,eigen_vec=torch.linalg.eigh(cov2d)
+        # major_eigen_val=eigen_val.max(dim=-1)[0]
+        coefficient=-2*(1/(255*opacity.squeeze(-1))).log()
+        pixel_radius=(coefficient*major_eigen_val).sqrt().ceil()
         
         L=((coordX-pixel_radius)/tile_size).floor().int().clamp(0,tilesX)
         U=((coordY-pixel_radius)/tile_size).floor().int().clamp(0,tilesY)
