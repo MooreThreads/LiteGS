@@ -19,6 +19,19 @@
             },
         },
         {
+            "name": "Python: DensityControlTest",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "./train.py",
+            "args":["--random_background","--sh_degree","0","-s","dataset/garden","-i","images_4","-m","output/garden","--start_checkpoint","output/garden/chkpnt50.pth"],
+            "cwd":"${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "LD_LIBRARY_PATH": "${env:LD_LIBRARY_PATH};./diff_gaussian_rasterization;./simple_knn" 
+            },
+        },
+        {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",

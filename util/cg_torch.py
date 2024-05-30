@@ -9,6 +9,28 @@ def world_to_ndc(position,view_project_matrix):
 def world_to_view(position,view_matrix):
     return position@view_matrix
 
+def quaternion_to_rotation_matrix(rotator_vec:torch.Tensor)->torch.Tensor:
+    rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
+
+    r=rotator_vec[...,0]
+    x=rotator_vec[...,1]
+    y=rotator_vec[...,2]
+    z=rotator_vec[...,3]
+
+
+    rotation_matrix[...,0,0]=1 - 2 * (y * y + z * z)
+    rotation_matrix[...,0,1]=2 * (x * y + r * z)
+    rotation_matrix[...,0,2]=2 * (x * z - r * y)
+
+    rotation_matrix[...,1,0]=2 * (x * y - r * z)
+    rotation_matrix[...,1,1]=1 - 2 * (x * x + z * z)
+    rotation_matrix[...,1,2]=2 * (y * z + r * x)
+
+    rotation_matrix[...,2,0]=2 * (x * z + r * y)
+    rotation_matrix[...,2,1]=2 * (y * z - r * x)
+    rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
+    return rotation_matrix
+
 @torch.no_grad
 def viewproj_to_frustumplane(viewproj_matrix:torch.Tensor)->torch.Tensor:
     '''
@@ -173,6 +195,7 @@ def make_aabb_mesh(aabb_origin:torch.Tensor,aabb_ext:torch.Tensor):
     triangles[:,11,2]=V_111
 
     return triangles
+
 
 @torch.no_grad
 def raster_large_triangle(vertices_ndc_pos:torch.Tensor,vertices_property:torch.Tensor,H:int,W:int,device='cuda'):

@@ -9,12 +9,14 @@ import numpy as np
 import math
 from torch.cuda.amp import autocast
 import platform
+from util.statistic_helper import StatisticsHelperInst,StatisticsHelper
 
 plat = platform.system().lower()
 if plat == 'windows':
     torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
 elif plat == 'linux':
     torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/libGaussianRaster.so")
+
 
 class GaussianSplattingModel:
     @torch.no_grad()
@@ -32,6 +34,7 @@ class GaussianSplattingModel:
         #temp=temp.clamp_max(temp.mean()+temp.std()*2)
         self._scaling = torch.nn.Parameter(temp)#.exp 
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).cuda())#.sigmoid
+
         return
     
     def get_params(self):
@@ -39,6 +42,10 @@ class GaussianSplattingModel:
     
     def load_params(self,params_tuple):
         (self._xyz,self._features_dc,self._features_rest,self._rotation,self.spatial_lr_scale,self._scaling,self._opacity)=params_tuple
+        return
+    
+    def reset_statistics_helper(self):
+        self.statistics_helper.reset(self._xyz.shape[0])
         return
 
     @torch.no_grad()
@@ -74,7 +81,7 @@ class GaussianSplattingModel:
         rotation_matrix[...,2,1]=2 * (y * z - r * x)
         rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
 
-        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(3)
+        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(-1)
         return transform_matrix
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
@@ -148,7 +155,7 @@ class GaussianSplattingModel:
     def sample_by_visibility(self,visible_points_for_views,visible_points_num_for_views):
         #visible_cov3d=GaussianSplattingModel.__calc_cov3d(self._scaling[visible_points_for_views].exp(),torch.nn.functional.normalize(self._rotation[visible_points_for_views]))
         scales=self._scaling[visible_points_for_views].exp()
-        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views],dim=2)
+        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views],dim=-1)
 
         visible_positions=self._xyz[visible_points_for_views]
         visible_opacities=self._opacity[visible_points_for_views].sigmoid()
@@ -176,7 +183,8 @@ class GaussianSplattingModel:
         # todo: rectangle formed by the major and minor axes
         # eigen_val,eigen_vec=torch.linalg.eigh(cov2d)
         # major_eigen_val=eigen_val.max(dim=-1)[0]
-        coefficient=-2*(1/(255*opacity.squeeze(-1))).log()
+        opacity_clamped=opacity.squeeze(-1).clamp_min(0.005)
+        coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
         pixel_radius=(coefficient*major_eigen_val).sqrt().ceil()
         
         L=((coordX-pixel_radius)/tile_size).floor().int().clamp(0,tilesX)
@@ -213,7 +221,7 @@ class GaussianSplattingModel:
         if b_gather:
             sorted_pointId=sorted_pointId.long()
             
-        return tile_start_index,sorted_pointId,sorted_tileId,tiles_touched
+        return tile_start_index,sorted_pointId,sorted_tileId,pixel_radius.unsqueeze(-1)
     
     def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
         
@@ -227,7 +235,11 @@ class GaussianSplattingModel:
         cov2d_inv[...,1,1]=cov2d[...,0,0]*reci_det
 
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
-
+        if StatisticsHelperInst.bStart and ndc_pos.requires_grad:
+            def wrapper(tensor:torch.Tensor) -> torch.Tensor:
+                return tensor[...,:2].norm(dim=-1,keepdim=True)
+            StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,wrapper)
+            #StatisticsHelperInst.update_mean_std_compact('mean2d_grad',grad_mean2d[...,:2].norm(dim=-1,keepdim=True))
 
         img,transmitance=GaussiansRaster.apply(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
@@ -244,6 +256,8 @@ class GaussianSplattingModel:
                 ndc_pos=cg_torch.world_to_ndc(self._xyz,view_project_matrix)
                 translated_pos=cg_torch.world_to_view(self._xyz,view_matrix)
                 visible_points,visible_points_num=self.culling_and_sort(ndc_pos,translated_pos)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.set_cur_batch_visibility(visible_points,visible_points_num)
         
         visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.sample_by_visibility(visible_points,visible_points_num)
         if prebackward_func is not None:
@@ -261,13 +275,16 @@ class GaussianSplattingModel:
         ndc_pos_batch=World2NDC.apply(visible_positions,view_project_matrix)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.binning(ndc_pos_batch,visible_cov2d,visible_opacities,visible_points_num)
+        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,visible_cov2d,visible_opacities,visible_points_num)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.update_max_min_compact('radii',radii)
 
         #### raster ###
         if tiles is None:
             batch_size=visible_points_num.shape[0]
             tiles=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
         tile_img,tile_transmitance=self.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
+
         
         return tile_img,tile_transmitance.unsqueeze(2)
 
@@ -387,7 +404,6 @@ class GaussiansRaster(torch.autograd.Function):
                                                                                                         transmitance,lst_contributor,grad_out_color,
                                                                                                         tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
 
-        #print(grad_cov2d_inv[0,68362])
 
         grads = (
             None,
