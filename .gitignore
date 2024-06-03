@@ -2,4 +2,6 @@
 output
 build
 trace_*.json
+*.trace.json
 debug_gradient*
+profiler_input_data
