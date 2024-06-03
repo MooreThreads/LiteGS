@@ -109,7 +109,7 @@ class GaussianSplattingModel:
             # J[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
             J=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal)
 
-        M=view_matrix.unsqueeze(1)[:,:,0:3,0:3].transpose(-1,-2).contiguous()
+        M=(view_matrix.unsqueeze(1)[:,:,0:3,0:3].transpose(-1,-2)).contiguous()
         T=J@M
 
         #T' x cov3d' x T
@@ -154,12 +154,12 @@ class GaussianSplattingModel:
     
     def sample_by_visibility(self,visible_points_for_views,visible_points_num_for_views):
         #visible_cov3d=GaussianSplattingModel.__calc_cov3d(self._scaling[visible_points_for_views].exp(),torch.nn.functional.normalize(self._rotation[visible_points_for_views]))
-        scales=self._scaling[visible_points_for_views].exp()
-        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views],dim=-1)
+        scales=self._scaling[visible_points_for_views].contiguous().exp()
+        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views].contiguous(),dim=-1)
 
-        visible_positions=self._xyz[visible_points_for_views]
-        visible_opacities=self._opacity[visible_points_for_views].sigmoid()
-        visible_sh0=self._features_dc[visible_points_for_views]
+        visible_positions=self._xyz[visible_points_for_views].contiguous()
+        visible_opacities=self._opacity[visible_points_for_views].contiguous().sigmoid()
+        visible_sh0=self._features_dc[visible_points_for_views].contiguous()
         return scales,rotators,visible_positions,visible_opacities,visible_sh0
 
     
@@ -239,7 +239,6 @@ class GaussianSplattingModel:
             def wrapper(tensor:torch.Tensor) -> torch.Tensor:
                 return tensor[...,:2].norm(dim=-1,keepdim=True)
             StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,wrapper)
-            #StatisticsHelperInst.update_mean_std_compact('mean2d_grad',grad_mean2d[...,:2].norm(dim=-1,keepdim=True))
 
         img,transmitance=GaussiansRaster.apply(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
@@ -250,6 +249,7 @@ class GaussianSplattingModel:
                view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,tiles:torch.Tensor=None,
                prebackward_func:typing.Callable=None):
         
+        ###process visibility
         if visible_points_num is None or visible_points is None:
             #compute visibility
             with torch.no_grad():
@@ -258,7 +258,6 @@ class GaussianSplattingModel:
                 visible_points,visible_points_num=self.culling_and_sort(ndc_pos,translated_pos)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_cur_batch_visibility(visible_points,visible_points_num)
-        
         visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.sample_by_visibility(visible_points,visible_points_num)
         if prebackward_func is not None:
             prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0)
