@@ -3,10 +3,15 @@ import torch
 import numpy as np
 from util.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from util.cg_torch import quaternion_to_rotation_matrix
+from training.arguments import OptimizationParams
 
 class DensityControllerBase:
     def __init__(self) -> None:
         return
+    
+    def IsDensify(self,epoch_i:int,iter_i:int)->bool:
+        return False
+
     def _cat_tensors_to_optimizer(self, tensors_dict:dict,optimizer:torch.optim.Optimizer):
         optimizable_tensors = {}
         for group in optimizer.param_groups:
@@ -73,11 +78,12 @@ class DensityControllerBase:
 
 class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad
-    def __init__(self,grad_threshold, min_opacity, max_screen_size,percent_dense,view_matrix:torch.Tensor)->None:
+    def __init__(self,grad_threshold, min_opacity, max_screen_size,percent_dense,view_matrix:torch.Tensor,opt_params:OptimizationParams)->None:
         self.grad_threshold=grad_threshold
         self.min_opacity=min_opacity
         self.max_screen_size=max_screen_size
         self.percent_dense=percent_dense
+        self.opt_params=opt_params
 
         #getNerfppNorm
         camera_pos=view_matrix.inverse()[:,3,:3]
@@ -157,7 +163,7 @@ class DensityControllerOfficial(DensityControllerBase):
         
         valid_points_mask=(~prune_mask)&(~split_mask)
         self.update_optimizer_and_model(gaussian_model,optimizer,valid_points_mask,dict_clone,dict_split)
-        print("\nclone_num:{0} split_num:{1} prune_num:{2} cur_points_num:{3}".format(clone_mask.sum().cpu(),split_mask.sum().cpu(),prune_mask.sum().cpu(),gaussian_model._xyz.shape[0]))
+        #print("\nclone_num:{0} split_num:{1} prune_num:{2} cur_points_num:{3}".format(clone_mask.sum().cpu(),split_mask.sum().cpu(),prune_mask.sum().cpu(),gaussian_model._xyz.shape[0]))
         torch.cuda.empty_cache()
         return
     
@@ -172,3 +178,21 @@ class DensityControllerOfficial(DensityControllerBase):
         torch.cuda.empty_cache()
         return
 
+    @torch.no_grad
+    def step(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,epoch_i:int,iter_i:int):
+
+        if self.IsDensify(epoch_i,iter_i)==True:
+            #self.max_screen_size = 20 if iter_i > self.opt_params.opacity_reset_interval else None
+            self.densify_and_prune(gaussian_model,optimizer)
+            StatisticsHelperInst.reset(gaussian_model._xyz.shape[0])
+        
+        if iter_i%self.opt_params.opacity_reset_interval==0 and iter_i<self.opt_params.densify_until_iter:
+            self.reset_opacity(gaussian_model,optimizer)
+
+        if StatisticsHelperInst.bStart==False and iter_i+1>=self.opt_params.densify_from_iter and iter_i+1<self.opt_params.densify_until_iter:
+            StatisticsHelperInst.start()
+        return
+    
+    def IsDensify(self,epoch_i:int,iter_i:int)->bool:
+        bDensify=iter_i+1 >= self.opt_params.densify_from_iter+self.opt_params.densification_interval and iter_i+1<self.opt_params.densify_until_iter and (iter_i+1) % self.opt_params.densification_interval == 0
+        return bDensify

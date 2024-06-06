@@ -84,7 +84,15 @@ class GaussianTrain:
         self.spatial_lr_scale=NerfNormRadius
         self.image_list=image_list
         self.camera_dict=camera_dict
-        self.view_manager=ViewManager(self.image_list,self.camera_dict)
+        if lp.eval:
+            trainingset=[c for idx, c in enumerate(self.image_list) if idx % 8 != 0]
+            testset=[c for idx, c in enumerate(self.image_list) if idx % 8 == 0]
+            self.view_manager=ViewManager(trainingset,self.camera_dict)
+            self.view_manager_testset=ViewManager(testset,self.camera_dict)
+
+        else:
+            self.view_manager=ViewManager(self.image_list,self.camera_dict)
+            self.view_manager_testset=None
         self.model=gaussian_model
         self.output_path=lp.model_path
         self.__training_setup(gaussian_model,op)
@@ -96,7 +104,7 @@ class GaussianTrain:
 
         screen_size_threshold=None#20
         opacity_threshold=0.005
-        self.density_controller=DensityControllerOfficial(op.densify_grad_threshold,opacity_threshold,screen_size_threshold,op.percent_dense,torch.Tensor(self.view_manager.view_matrix_tensor).cuda())
+        self.density_controller=DensityControllerOfficial(op.densify_grad_threshold,opacity_threshold,screen_size_threshold,op.percent_dense,torch.Tensor(self.view_manager.view_matrix_tensor).cuda(),self.opt_params)
 
         return
     
@@ -110,7 +118,7 @@ class GaussianTrain:
         self.model.load_params(model_params)
         self.__training_setup(self.model,self.opt_params)
         self.optimizer.load_state_dict(op_state_dict)
-        self.iter_start=first_iter
+        self.iter_start=first_iter+1
         return
     
     def __training_setup(self,gaussian_model:GaussianSplattingModel,args:OptimizationParams):
@@ -209,12 +217,12 @@ class GaussianTrain:
         counter=0
         iter_range=list(range(0,total_views_num,batch_size))
         random.shuffle(iter_range)
-        self.__update_learning_rate((epoch_i-1)*total_views_num)
         ssim_helper=loss_utils.LossSSIM().cuda()
 
         ### iter batch ###
-        for i in iter_range:
+        for iter_i,i in enumerate(iter_range):
             batch_tail=min(i+batch_size,total_views_num)
+            self.__update_learning_rate(epoch_i*total_views_num+iter_i+1)
 
             ### gather batch data ###
             with torch.no_grad():
@@ -230,7 +238,7 @@ class GaussianTrain:
             ### render ###
             tile_img,tile_transmitance=self.model.render(None,None,
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
-                              GaussianTrain.__regularization_loss_backward)
+                              None)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
 
@@ -246,6 +254,7 @@ class GaussianTrain:
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.backward_callback()
             self.optimizer.zero_grad(set_to_none = True)
+            self.density_controller.step(self.model,self.optimizer,epoch_i,epoch_i*total_views_num+iter_i+1)
 
         ### log ###
         # log_loss/=counter
@@ -261,17 +270,15 @@ class GaussianTrain:
         return
 
     @torch.no_grad()
-    def interface(self,bLog=False):
+    def interface(self,view_manager:ViewManager=None,bLog:bool=False):
+        if view_manager is None:
+            view_manager=self.view_manager
         self.model.update_tiles_coord(self.image_size,self.tile_size)
-        view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
-        view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
-        camera_center=torch.Tensor(self.view_manager.camera_center_tensor).cuda()
-        camera_focal=torch.Tensor(self.view_manager.camera_focal_tensor).cuda()
+        view_matrix=torch.Tensor(view_manager.view_matrix_tensor).cuda()
+        view_project_matrix=view_matrix@(torch.Tensor(view_manager.proj_matrix_tensor).cuda())
+        camera_center=torch.Tensor(view_manager.camera_center_tensor).cuda()
+        camera_focal=torch.Tensor(view_manager.camera_focal_tensor).cuda()
         total_views_num=view_matrix.shape[0]
-
-        # ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
-        # translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
-        # visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
 
         img_list=[]
         Visibility={}
@@ -280,9 +287,6 @@ class GaussianTrain:
 
             ### gather batch data ###
             with torch.no_grad():
-                # visible_points_num_batch=visible_points_num_for_views[i:i+1]
-                # max_points_in_batch=visible_points_num_batch.max()
-                # visible_points_for_views_batch=visible_points_for_views[i:i+1,:max_points_in_batch]
                 view_matrix_batch=view_matrix[i:i+1]
                 view_project_matrix_batch=view_project_matrix[i:i+1]
                 camera_focal_batch=camera_focal[i:i+1]
@@ -296,7 +300,7 @@ class GaussianTrain:
             
             img_list.append(img[...,0:self.image_size[1],0:self.image_size[0]])
             if bLog:
-                self.tb_writer.add_image('gt',self.view_manager.view_gt_tensor[i],i)
+                self.tb_writer.add_image('gt',view_manager.view_gt_tensor[i],i)
                 self.tb_writer.add_image('gs',img[0],i)
         #T2=time.time()
         return img_list
@@ -367,88 +371,21 @@ class GaussianTrain:
 
         return
 
-    def torch_profiler(self,batch_size:int):
-        with torch.no_grad():
-            self.model.update_tiles_coord(self.image_size,self.tile_size)
-            view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
-            view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
-            camera_center=torch.Tensor(self.view_manager.camera_center_tensor).cuda()
-            camera_focal=torch.Tensor(self.view_manager.camera_focal_tensor).cuda()
-            ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
-            total_views_num=view_matrix.shape[0]
-
-        with torch.profiler.profile(
-                schedule=torch.profiler.schedule(wait=1, warmup=4, active=3, repeat=1),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler('./torch_profiler_log'),
-                record_shapes=True,
-                profile_memory=True,
-                with_stack=True
-        ) as prof:
-            with torch.no_grad():
-                total_views_num=view_matrix.shape[0]
-                ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
-                translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
-                visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
-                if batch_size > 1:            
-                    # cluster the views according to the visible_points_num
-                    visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
-                    visible_points_for_views=visible_points_for_views[view_indices]
-                    view_matrix=view_matrix[view_indices]
-                    view_project_matrix=view_project_matrix[view_indices]
-                    camera_focal=camera_focal[view_indices]
-                    camera_center=camera_center[view_indices]
-                    ground_truth=ground_truth[view_indices]
-            
-            log_loss=0
-            counter=0
-            iter_range=list(range(0,total_views_num,batch_size))
-            #ssim_helper=loss_utils.LossSSIM().cuda()
-            random.shuffle(iter_range)
-
-            ### iter batch ###
-            for i in iter_range:
-                batch_tail=min(i+batch_size,total_views_num)
-
-                ### gather batch data ###
-                with torch.no_grad():
-                    visible_points_num_batch=visible_points_num_for_views[i:batch_tail]
-                    max_points_in_batch=visible_points_num_batch.max()
-                    visible_points_for_views_batch=visible_points_for_views[i:batch_tail,:max_points_in_batch]
-                    view_matrix_batch=view_matrix[i:batch_tail]
-                    view_project_matrix_batch=view_project_matrix[i:batch_tail]
-                    camera_focal_batch=camera_focal[i:batch_tail]
-                    camera_center_batch=camera_center[i:batch_tail]
-                    ground_truth_batch=ground_truth[i:batch_tail]
-
-                ### render ###
-                tile_img,tile_transmitance=self.model.render(visible_points_num_batch,visible_points_for_views_batch,
-                                view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
-                                None)#GaussianTrain.__regularization_loss_backward)
-                img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-                transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-
-                #### loss ###
-                l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
-                #ssim_loss=ssim_helper.loss(img,ground_truth_batch)
-                loss=(1.0-self.opt_params.lambda_dssim)*l1_loss#+self.opt_params.lambda_dssim*(1-ssim_loss)
-                loss.backward()
-                log_loss+=l1_loss.detach()
-                counter+=1
-
-                self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none = True)
-                prof.step()
-
-        return
-
     @torch.no_grad()
     def report_psnr(self,epoch_i):
-        out_img_list=self.interface()
+        out_img_list=self.interface(self.view_manager)
         img=torch.concat(out_img_list,dim=0)
         ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
         psnr=image_utils.psnr(img,ground_truth)
+        print("\n[EPOCH {}] Trainingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
 
-        print("\n[EPOCH {}] Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+        if self.view_manager_testset is not None:
+            out_img_list=self.interface(self.view_manager_testset)
+            img=torch.concat(out_img_list,dim=0)
+            ground_truth=torch.Tensor(self.view_manager_testset.view_gt_tensor).cuda()
+            psnr=image_utils.psnr(img,ground_truth)
+            print("\n[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+        torch.cuda.empty_cache()
         return
 
     def start(self,epoch:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[],test_epochs:typing.List=[]):
@@ -470,11 +407,9 @@ class GaussianTrain:
         batch_size=1
         StatisticsHelperInst.reset(self.model._xyz.shape[0])
         torch.cuda.empty_cache()
-        for epoch_i in range(self.iter_start+1,epoch+1):
-            
-            bDensify=epoch_i<self.opt_params.densify_until_iter and epoch_i>=self.opt_params.densify_from_iter and epoch_i%self.opt_params.densification_interval==0 
-            if bDensify:
-                StatisticsHelperInst.start()
+        
+        epoch_i=self.iter_start
+        for epoch_i in range(self.iter_start,epoch+1):
             
             self.__iter(epoch_i,batch_size,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
             progress_bar.update(total_views_num)
@@ -494,11 +429,11 @@ class GaussianTrain:
                 dir=os.path.join(self.output_path,"point_cloud/iteration_{}".format(epoch_i))
                 scene.save_ply(os.path.join(dir,"point_cloud.ply"))
 
-            if bDensify:#density controll
-                self.density_controller.densify_and_prune(self.model,self.optimizer)
-                StatisticsHelperInst.reset(self.model._xyz.shape[0])
-            if epoch_i%self.opt_params.opacity_reset_interval==0 and epoch_i<self.opt_params.densify_until_iter:
-                self.density_controller.reset_opacity(self.model,self.optimizer)
+            # if bDensify:#density controll
+            #     self.density_controller.densify_and_prune(self.model,self.optimizer)
+            #     StatisticsHelperInst.reset(self.model._xyz.shape[0])
+            # if epoch_i%self.opt_params.opacity_reset_interval==0 and epoch_i<self.opt_params.densify_until_iter:
+            #     self.density_controller.reset_opacity(self.model,self.optimizer)
             
         return
     

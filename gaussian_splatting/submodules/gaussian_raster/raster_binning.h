@@ -37,9 +37,13 @@ std::vector<at::Tensor> rasterize_backward(
     int64_t img_w
 );
 
-at::Tensor jacobianRayspace(at::Tensor translate_position,at::Tensor camera_focal);
+at::Tensor jacobianRayspace(at::Tensor translate_position,at::Tensor camera_focal,bool bTranspose);
 
 at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale);
 std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale);
 
 at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos);
+
+at::Tensor createCov2dDirectly_forward(at::Tensor J, at::Tensor view_matrix,at::Tensor transform_matrix);
+
+at::Tensor createCov2dDirectly_backward(at::Tensor cov2d_grad, at::Tensor J, at::Tensor view_matrix, at::Tensor transform_matrix);

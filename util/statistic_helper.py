@@ -165,6 +165,17 @@ class StatisticsHelper:
             points_index=self.cur_batch_visible_pts[i,:points_num]
             self._update_max_min_compact_internel(key,compact_tensor[i],points_index)
         return 
+    
+    @torch.no_grad
+    def update_invisible_compact(self,compacted_invisible_mask:torch.Tensor):
+        assert(self.cur_batch_visible_pts is not None)
+        assert(self.cur_batch_visible_num is not None)
+        assert(compacted_invisible_mask.shape[0]==self.batch_n)
+        for i in range(self.batch_n):
+            points_num=self.cur_batch_visible_num[i]
+            points_index=self.cur_batch_visible_pts[i,:points_num]
+            self.visible_count[points_index]-=1*compacted_invisible_mask[0]
+        return
 
     @torch.no_grad
     def get_max(self,key:str):

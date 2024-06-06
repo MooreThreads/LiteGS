@@ -1,7 +1,11 @@
 import torch
 import math
 
+@torch.no_grad
 def world_to_ndc(position,view_project_matrix):
+    '''
+    no grad!!! AutoGrad for world2ndc may lead to floating-point precision issues.
+    '''
     hom_pos=torch.matmul(position,view_project_matrix)
     ndc_pos=hom_pos/(hom_pos[...,3:4]+1e-7)
     return ndc_pos

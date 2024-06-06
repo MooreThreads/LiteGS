@@ -690,11 +690,11 @@ std::vector<at::Tensor> rasterize_backward(
 }
 
 
-
+template <typename scalar_t,bool TRNASPOSE=true>
 __global__ void jacobian_rayspace_kernel(
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> translated_position,    //[batch,point_num,4] 
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> camera_focal,    //[batch,2] 
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> jacobian         //[batch,point_num,3,3]
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> translated_position,    //[batch,point_num,4] 
+    const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> camera_focal,    //[batch,2] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian         //[batch,point_num,3,3]
     )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -709,28 +709,46 @@ __global__ void jacobian_rayspace_kernel(
 
         jacobian[batch_id][index][0][0] = focalx * reciprocal_tz;
         jacobian[batch_id][index][1][1] = focaly * reciprocal_tz;
-        jacobian[batch_id][index][0][2] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
-        jacobian[batch_id][index][1][2] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+        if (TRNASPOSE)
+        {
+            jacobian[batch_id][index][0][2] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
+            jacobian[batch_id][index][1][2] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+        }
+        else
+        {
+            jacobian[batch_id][index][2][0] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
+            jacobian[batch_id][index][2][1] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+        }
     }
 }
 
 at::Tensor jacobianRayspace(
     at::Tensor translated_position, //N,P,4
-    at::Tensor camera_focal //N,2
+    at::Tensor camera_focal, //N,2
+    bool bTranspose
 )
 {
     int N = translated_position.size(0);
     int P = translated_position.size(1);
-    torch::TensorOptions opt = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(translated_position.device());
-    at::Tensor jacobian_matrix = torch::zeros({N,P,3,3}, opt);
+    at::Tensor jacobian_matrix = torch::zeros({N,P,3,3}, translated_position.options());
 
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P/(float)threadsnum), N, 1);
+    if (bTranspose)
+    {
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.type(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t,true > << <Block3d, threadsnum >> > (
+            translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            camera_focal.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
+            jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+    }
+    else
+    {
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.type(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t, false > << <Block3d, threadsnum >> > (
+            translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            camera_focal.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
+            jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+    }
 
-    jacobian_rayspace_kernel << <Block3d, threadsnum >> >(
-        translated_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        camera_focal.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        jacobian_matrix.packed_accessor32<float, 4, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
     return jacobian_matrix;
 
@@ -959,4 +977,219 @@ at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor positio
 
 
     return d_position;
+}
+template <typename scalar_t,int ROW,int COL>
+__device__ void load_matrix(scalar_t(* __restrict__ dest)[ROW][COL], const torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> source)
+{
+    
+    for (int i = 0; i < ROW; i++)
+    {
+        for (int j = 0; j < COL; j++)
+        {
+            (*dest)[i][j] = source[i][j];
+        }
+    }
+}
+
+template <typename scalar_t, int ROW, int COL>
+__device__ void save_matrix(const scalar_t(*__restrict__ source)[ROW][COL], torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> dest)
+{
+
+    for (int i = 0; i < ROW; i++)
+    {
+        for (int j = 0; j < COL; j++)
+        {
+            dest[i][j]=(*source)[i][j];
+        }
+    }
+}
+
+template <typename scalar_t, int M, int N,int K, bool A_trans =false,bool B_trans =false>
+__device__ void matmul(scalar_t(* __restrict__ A)[A_trans?M:K], scalar_t(* __restrict__ B)[B_trans?K:N], scalar_t(* __restrict__ output)[N])
+{
+    for (int i = 0; i < M; i++)
+    {
+        for (int j = 0; j < N; j++)
+        {
+            scalar_t temp = 0.0;
+            for (int k = 0; k < K; k++)
+            {
+                if(A_trans==false && B_trans==false)
+                    temp+=A[i][k] * B[k][j];
+                else if (A_trans == true && B_trans == false)
+                    temp += A[k][i] * B[k][j];
+                else if (A_trans == false && B_trans == true)
+                    temp += A[i][k] * B[j][k];
+                else if (A_trans == true && B_trans == true)
+                    temp += A[k][i] * B[j][k];
+            }
+            output[i][j] = temp;
+        }
+    }
+}
+
+template <typename scalar_t, int M, int N>
+__device__ void matmul_AtA(scalar_t(*__restrict__ A)[N], scalar_t(*__restrict__ output)[N])
+{
+    for (int i = 0; i < N; i++)
+    {
+        for (int j = 0; j < N; j++)
+        {
+            scalar_t temp = 0.0;
+            for (int k = 0; k < M; k++)
+            {
+                temp += A[k][i] * A[k][j];
+            }
+            output[i][j] = temp;
+        }
+    }
+}
+
+template <typename scalar_t>
+__global__ void create_cov2d_forward(
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,point_num,3,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> view_matrix,    //[batch,4,4] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> world_transform_matrix,    //[batch,point_num,3,3] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d         //[batch,point_num,2,2]
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+
+    __shared__ scalar_t view[3][3];
+    if (threadIdx.x < 9 && batch_id < view_matrix.size(0))
+    {
+        int row = threadIdx.x / 3;
+        int col = threadIdx.x % 3;
+        view[row][col] = view_matrix[batch_id][row][col];
+    }
+    __syncthreads();
+
+    if (batch_id < world_transform_matrix.size(0) && index < world_transform_matrix.size(1))
+    {
+        // world_transform_matrix @ view_matrix
+        scalar_t T[3][3];
+        scalar_t temp0[3][3];
+        load_matrix<scalar_t, 3, 3>(&T, world_transform_matrix[batch_id][index]);
+        matmul<scalar_t, 3, 3, 3>(T, view, temp0);//world_transform_matrix@view_matrix
+
+        scalar_t J[3][2];
+        scalar_t temp1[3][2];
+        load_matrix<scalar_t, 3, 2>(&J, jacobian_matrix[batch_id][index]);
+        matmul<scalar_t, 3, 2, 3>(temp0, J, temp1);//(world_transform_matrix@view_matrix)@jacobian_matrix
+
+        scalar_t result[2][2];
+        matmul_AtA<scalar_t, 3, 2>(temp1, result);//A.trans@A
+
+        save_matrix<scalar_t, 2, 2>(&result, cov2d[batch_id][index]);
+    }
+}
+
+
+at::Tensor createCov2dDirectly_forward(
+    at::Tensor J, //N,P,3,3
+    at::Tensor view_matrix, //N,1,4,4
+    at::Tensor transform_matrix //N,P,3,3
+)
+{
+    int N = transform_matrix.size(0);
+    int P = transform_matrix.size(1);
+    at::Tensor cov2d = torch::zeros({ N,P,2,2 }, transform_matrix.options());
+
+    int threadsnum = 1024;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(transform_matrix.type(), __FUNCTION__, [&] {
+        create_cov2d_forward<scalar_t> << <Block3d, threadsnum >> > (
+            J.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            transform_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            cov2d.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+
+    /*create_cov2d_forward<float> << <Block3d, threadsnum >> > (
+        J.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        transform_matrix.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>());*/
+
+    CUDA_CHECK_ERRORS;
+    return cov2d;
+
+}
+
+template <typename scalar_t>
+__global__ void create_cov2d_backward(
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d_grad,    //[batch,point_num,2,2] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,point_num,3,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> view_matrix,    //[batch,4,4] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> world_transform_matrix,    //[batch,point_num,3,3] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> transform_matrix_grad         //[batch,point_num,3,3]
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+
+    __shared__ scalar_t view[3][3];
+    if (threadIdx.x < 9 && batch_id < view_matrix.size(0))
+    {
+        int row = threadIdx.x / 3;
+        int col = threadIdx.x % 3;
+        view[row][col] = view_matrix[batch_id][row][col];
+    }
+    __syncthreads();
+
+    if (batch_id < cov2d_grad.size(0) && index < cov2d_grad.size(1))
+    {
+        scalar_t view_rayspace_transform[3][2];
+        scalar_t rayspace_transform[3][2];
+        load_matrix<scalar_t, 3, 2>(&rayspace_transform, jacobian_matrix[batch_id][index]);
+        matmul<scalar_t, 3, 2, 3>(view, rayspace_transform, view_rayspace_transform);
+        scalar_t world_transform[3][3];
+        load_matrix<scalar_t, 3, 3>(&world_transform, world_transform_matrix[batch_id][index]);
+
+        scalar_t T[3][2];
+        matmul<scalar_t, 3, 2, 3>(world_transform, view_rayspace_transform, T);
+
+        // cov2d_grad is symmetric.Gradient calculation can be simplified.
+        // dL/dT=2 * T@cov2d_grad
+        scalar_t dL_dCov2d[2][2];
+        scalar_t dL_dT[3][2];
+        load_matrix<scalar_t, 2, 2>(&dL_dCov2d, cov2d_grad[batch_id][index]);
+        matmul<scalar_t, 3, 2, 2>(T, dL_dCov2d, dL_dT);
+        dL_dT[0][0] *= 2; dL_dT[0][1] *= 2;
+        dL_dT[1][0] *= 2; dL_dT[1][1] *= 2;
+        dL_dT[2][0] *= 2; dL_dT[2][1] *= 2;
+
+        //dL/dtransform = dL_dT@view_rayspace_transform.transpose()
+        scalar_t dL_dTrans[3][3];
+        matmul<scalar_t, 3, 3, 2,false,true>(dL_dT,view_rayspace_transform, dL_dTrans);
+        save_matrix<scalar_t, 3, 3>(&dL_dTrans, transform_matrix_grad[batch_id][index]);
+    }
+}
+
+at::Tensor createCov2dDirectly_backward(
+    at::Tensor cov2d_grad, //N,P,2,2
+    at::Tensor J, //N,P,3,3
+    at::Tensor view_matrix, //N,1,4,4
+    at::Tensor transform_matrix //N,P,3,3
+)
+{
+    int N = transform_matrix.size(0);
+    int P = transform_matrix.size(1);
+    at::Tensor transform_matrix_grad = torch::zeros({ N,P,3,3 }, cov2d_grad.options());
+
+    int threadsnum = 1024;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+
+
+    create_cov2d_backward<float> << <Block3d, threadsnum >> > (
+        cov2d_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        J.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        transform_matrix.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        transform_matrix_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>());
+
+    CUDA_CHECK_ERRORS;
+    return transform_matrix_grad;
+
 }
