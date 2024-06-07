@@ -408,7 +408,6 @@ class GaussianTrain:
         StatisticsHelperInst.reset(self.model._xyz.shape[0])
         torch.cuda.empty_cache()
         
-        epoch_i=self.iter_start
         for epoch_i in range(self.iter_start,epoch+1):
             
             self.__iter(epoch_i,batch_size,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
@@ -428,12 +427,6 @@ class GaussianTrain:
                 self.model.save_to_scene(scene)
                 dir=os.path.join(self.output_path,"point_cloud/iteration_{}".format(epoch_i))
                 scene.save_ply(os.path.join(dir,"point_cloud.ply"))
-
-            # if bDensify:#density controll
-            #     self.density_controller.densify_and_prune(self.model,self.optimizer)
-            #     StatisticsHelperInst.reset(self.model._xyz.shape[0])
-            # if epoch_i%self.opt_params.opacity_reset_interval==0 and epoch_i<self.opt_params.densify_until_iter:
-            #     self.density_controller.reset_opacity(self.model,self.optimizer)
             
         return
     
