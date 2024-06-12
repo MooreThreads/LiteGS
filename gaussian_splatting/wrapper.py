@@ -2,6 +2,7 @@ import torch
 import typing
 import numpy as np
 import platform
+from util import spherical_harmonics
 
 plat = platform.system().lower()
 if plat == 'windows':
@@ -327,3 +328,36 @@ def rasterize_2d_gaussian(
         tiles_num_y,
         img_h,
         img_w)
+
+
+
+
+###
+### the rasterization of 2d guassian.
+###
+class SphericalHarmonic(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,deg:int, sh:torch.Tensor, dirs:torch.Tensor):
+        ctx.save_for_backward(sh,dirs)
+        ctx.degree=deg
+        rgb=torch.ops.RasterBinning.sh2rgb_forward(deg,sh,dirs)
+        return rgb
+    
+    @staticmethod
+    def backward(ctx, grad_rgb):
+        sh,dirs=ctx.saved_tensors
+        degree=ctx.degree
+        sh_grad=torch.ops.RasterBinning.sh2rgb_backward(degree,grad_rgb,sh,dirs)
+
+
+        return None,sh_grad,None
+
+def sh2rgb(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
+
+    def sh2rgb_internel_v1(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
+        return spherical_harmonics.eval_sh(deg,sh,dirs).clamp_min(0)
+    
+    def sh2rgb_internel_v2(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
+        return SphericalHarmonic.apply(deg,sh,dirs).clamp_min(0)
+    
+    return sh2rgb_internel_v2(deg,sh,dirs)

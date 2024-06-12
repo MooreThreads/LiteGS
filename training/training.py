@@ -110,15 +110,16 @@ class GaussianTrain:
     
     def save(self,iteration):
         model_params=self.model.get_params()
-        torch.save((model_params,self.optimizer.state_dict(), iteration), self.output_path + "/chkpnt" + str(iteration) + ".pth")
+        torch.save((model_params,self.optimizer.state_dict(), iteration,self.model.actived_sh_degree), self.output_path + "/chkpnt" + str(iteration) + ".pth")
         return
     
     def restore(self,checkpoint):
-        (model_params,op_state_dict, first_iter) = torch.load(checkpoint)
+        (model_params,op_state_dict, first_iter,actived_sh_degree) = torch.load(checkpoint)
         self.model.load_params(model_params)
         self.__training_setup(self.model,self.opt_params)
         self.optimizer.load_state_dict(op_state_dict)
         self.iter_start=first_iter+1
+        self.model.actived_sh_degree=actived_sh_degree
         return
     
     def __training_setup(self,gaussian_model:GaussianSplattingModel,args:OptimizationParams):
@@ -306,86 +307,22 @@ class GaussianTrain:
         return img_list
 
     @torch.no_grad()
-    def output_visibility_matrix(self):
-        self.model.update_tiles_coord(self.image_size,self.tile_size*8)
-        view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
-        view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
-        camera_center=torch.Tensor(self.view_manager.camera_center_tensor).cuda()
-        camera_focal=torch.Tensor(self.view_manager.camera_focal_tensor).cuda()
-        total_views_num=view_matrix.shape[0]
-        total_points_num=self.model._xyz.shape[0]
-        total_tiles_num=self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1]
-
-        ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
-        translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
-        visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
-
-        viewid_to_visiblepoints_map={}
-
-        for i in range(total_views_num):
-
-            ### gather batch data ###
-            with torch.no_grad():
-                visible_points_num_batch=visible_points_num_for_views[i:i+1]
-                max_points_in_batch=visible_points_num_batch.max()
-                visible_points_for_views_batch=visible_points_for_views[i:i+1,:max_points_in_batch]
-                view_matrix_batch=view_matrix[i:i+1]
-                view_project_matrix_batch=view_project_matrix[i:i+1]
-                camera_focal_batch=camera_focal[i:i+1]
-                camera_center_batch=camera_center[i:i+1]
-
-            visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.model.sample_by_visibility(visible_points_for_views_batch,visible_points_num_batch)
-
-            ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
-            cov3d,transform_matrix=self.model.transform_to_cov3d(visible_scales,visible_rotators)
-            visible_cov2d=self.model.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix_batch,camera_focal_batch)
-            visible_cov2d=visible_cov2d.float()
-            
-            ### mean of 2d-gaussian ###
-            ndc_pos_batch=cg_torch.world_to_ndc(visible_positions,view_project_matrix_batch)
-            
-            #### binning ###
-            tile_start_index,sorted_pointId,sorted_tileId,tiles_touched=self.model.binning(ndc_pos_batch,visible_cov2d,visible_points_num_batch)
-
-            for j in range(1,total_tiles_num+1):
-                view_id=(i<<16)+j
-                start=tile_start_index[0,j]
-                end=tile_start_index[0,j+1]
-                if start!=-1 and end!=-1:
-                    visible_points_localindex=sorted_pointId[0,start:end]
-                else:
-                    visible_points_localindex=np.zeros((0))
-                visible_points=visible_points_for_views_batch[0,visible_points_localindex]
-                viewid_to_visiblepoints_map[view_id]=visible_points.cpu().numpy()
-
-        #gen hyper graph
-        keys_list=list(viewid_to_visiblepoints_map.keys())
-        for key in keys_list:
-            #if viewid_to_visiblepoints_map[key].shape[0]>2000:
-            #    print(key)
-            if viewid_to_visiblepoints_map[key].shape[0]==0:
-                viewid_to_visiblepoints_map.pop(key)
-
-        np.save('visibility.npy',viewid_to_visiblepoints_map)
-        #np.save('position.npy',self.model._xyz.cpu().numpy())
-
-        return
-
-    @torch.no_grad()
     def report_psnr(self,epoch_i):
+        torch.cuda.empty_cache()
         out_img_list=self.interface(self.view_manager)
         img=torch.concat(out_img_list,dim=0)
         ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
         psnr=image_utils.psnr(img,ground_truth)
         print("\n[EPOCH {}] Trainingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+        torch.cuda.empty_cache()
 
         if self.view_manager_testset is not None:
             out_img_list=self.interface(self.view_manager_testset)
             img=torch.concat(out_img_list,dim=0)
             ground_truth=torch.Tensor(self.view_manager_testset.view_gt_tensor).cuda()
             psnr=image_utils.psnr(img,ground_truth)
-            print("\n[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
-        torch.cuda.empty_cache()
+            print("[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+            torch.cuda.empty_cache()
         return
 
     def start(self,epoch:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[],test_epochs:typing.List=[]):
@@ -409,6 +346,8 @@ class GaussianTrain:
         torch.cuda.empty_cache()
         
         for epoch_i in range(self.iter_start,epoch+1):
+            if (epoch_i+1)%6==0:
+                self.model.oneupSHdegree()
             
             self.__iter(epoch_i,batch_size,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
             progress_bar.update(total_views_num)

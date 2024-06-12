@@ -47,3 +47,7 @@ at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor positio
 at::Tensor createCov2dDirectly_forward(at::Tensor J, at::Tensor view_matrix,at::Tensor transform_matrix);
 
 at::Tensor createCov2dDirectly_backward(at::Tensor cov2d_grad, at::Tensor J, at::Tensor view_matrix, at::Tensor transform_matrix);
+
+at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh, at::Tensor dir);
+
+at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, at::Tensor sh, at::Tensor dir);

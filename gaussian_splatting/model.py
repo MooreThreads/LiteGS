@@ -21,12 +21,11 @@ class GaussianSplattingModel:
         self._features_rest = torch.nn.Parameter(torch.Tensor(scene.sh_coefficient_rest).transpose(1, 2).contiguous().cuda())
         self._rotation = torch.nn.Parameter(torch.Tensor(scene.rotator).cuda())#torch.nn.functional.normalize
         self.spatial_lr_scale=spatial_lr_scale
-        self.cached_cov3d=None
+        self.actived_sh_degree=0
+        self.max_sh_degree=scene.sh_degree
 
         #exp scale
-        temp=torch.Tensor(scene.scale).cuda()
-        #temp=temp.clamp_max(temp.mean()+temp.std()*2)
-        self._scaling = torch.nn.Parameter(temp)#.exp 
+        self._scaling = torch.nn.Parameter(torch.Tensor(scene.scale).cuda())#.exp 
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).cuda())#.sigmoid
 
         return
@@ -51,6 +50,11 @@ class GaussianSplattingModel:
         scene.scale=self._scaling.cpu().numpy()
         scene.opacity=self._opacity.cpu().numpy()
         scene.sh_degree=0
+        return
+    
+    def oneupSHdegree(self):
+        if self.actived_sh_degree < self.max_sh_degree:
+            self.actived_sh_degree += 1
         return
 
     def create_cov2d_optimized(self,scaling_vec,rotator_vec,point_positions,view_matrix,camera_focal):
@@ -119,14 +123,13 @@ class GaussianSplattingModel:
         return visible_point,points_num
     
     def sample_by_visibility(self,visible_points_for_views,visible_points_num_for_views):
-        #visible_cov3d=GaussianSplattingModel.__calc_cov3d(self._scaling[visible_points_for_views].exp(),torch.nn.functional.normalize(self._rotation[visible_points_for_views]))
         scales=self._scaling[visible_points_for_views].contiguous().exp()
         rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views].contiguous(),dim=-1)
 
         visible_positions=self._xyz[visible_points_for_views].contiguous()
         visible_opacities=self._opacity[visible_points_for_views].contiguous().sigmoid()
-        visible_sh0=self._features_dc[visible_points_for_views].contiguous()
-        return scales,rotators,visible_positions,visible_opacities,visible_sh0
+        visible_sh=torch.concat((self._features_dc,self._features_rest),dim=1)[visible_points_for_views].contiguous()
+        return scales,rotators,visible_positions,visible_opacities,visible_sh
 
     
     @torch.no_grad()
@@ -224,9 +227,9 @@ class GaussianSplattingModel:
                 visible_points,visible_points_num=self.culling_and_sort(ndc_pos,translated_pos)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_cur_batch_visibility(visible_points,visible_points_num)
-        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0=self.sample_by_visibility(visible_points,visible_points_num)
+        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh=self.sample_by_visibility(visible_points,visible_points_num)
         if prebackward_func is not None:
-            prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0)
+            prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh)
 
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
         #cov3d,transform_matrix=self.transform_to_cov3d(visible_scales,visible_rotators)
@@ -234,7 +237,9 @@ class GaussianSplattingModel:
         visible_cov2d=self.create_cov2d_optimized(visible_scales,visible_rotators,visible_positions,view_matrix,camera_focal)
         
         ### color ###
-        visible_color=(visible_sh0*spherical_harmonics.C0+0.5).squeeze(2).clamp_min(0)
+        dirs=(visible_positions-view_matrix[:,3])[...,:3]
+        dirs=torch.nn.functional.normalize(dirs,dim=-1)
+        visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh,dirs)
         
         ### mean of 2d-gaussian ###
         ndc_pos_batch=wrapper.wrold2ndc(visible_positions,view_project_matrix)
