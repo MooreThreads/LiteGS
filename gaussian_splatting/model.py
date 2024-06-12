@@ -204,11 +204,6 @@ class GaussianSplattingModel:
         cov2d_inv[...,1,1]=cov2d[...,0,0]*reci_det
 
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
-        if StatisticsHelperInst.bStart and ndc_pos.requires_grad:
-            def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
-                return tensor[...,:2].norm(dim=-1,keepdim=True)
-            StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,gradient_wrapper)
-
         img,transmitance=wrapper.rasterize_2d_gaussian(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
 
@@ -226,9 +221,10 @@ class GaussianSplattingModel:
                 ndc_pos=cg_torch.world_to_ndc(self._xyz,view_project_matrix)
                 translated_pos=cg_torch.world_to_view(self._xyz,view_matrix)
                 visible_points,visible_points_num=self.culling_and_sort(ndc_pos,translated_pos)
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.set_cur_batch_visibility(visible_points,visible_points_num)
+
         visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh=self.sample_by_visibility(visible_points,visible_points_num)
+        if StatisticsHelperInst.bStart and visible_positions.requires_grad:
+            StatisticsHelperInst.set_cur_batch_visibility(visible_points,visible_points_num)
         if prebackward_func is not None:
             prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh)
 
@@ -247,8 +243,7 @@ class GaussianSplattingModel:
         
         #### binning ###
         tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,visible_cov2d,visible_opacities,visible_points_num)
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_max_min_compact('radii',radii)
+        if StatisticsHelperInst.bStart and visible_positions.requires_grad:
             StatisticsHelperInst.update_invisible_compact(radii.squeeze(-1)==0)
 
         #### raster ###

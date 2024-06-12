@@ -67,20 +67,15 @@ class StatisticsHelper:
         assert(tensor.shape[0]==self.batch_n)
         assert(tensor.shape[1]==self.gaussian_num)
 
-        #filter invisible
-        for i in range(self.batch_n):
-            pts_num=self.cur_batch_visible_num[i]
-            tensor[self.cur_batch_visible_pts[i,:pts_num]]=0
-
         #update dict
-        sum=tensor.sum(0)
+        tensor_sum=tensor.sum(0)
         square_sum=(tensor**2).sum(0)
         data=self.mean_and_std.get(key,None)
         if data is not None:
-            data[0]+=sum
+            data[0]+=tensor_sum
             data[1]+=square_sum
         else:
-            data=(sum,square_sum)
+            data=[tensor_sum,square_sum]
             self.mean_and_std[key]=data
         return
     
@@ -95,7 +90,7 @@ class StatisticsHelper:
             shape[0]=self.gaussian_num
             data0=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
             data1=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
-            data=(data0,data1)
+            data=[data0,data1]
             data[0][pts]+=compact_tensor
             data[1][pts]+=compact_tensor**2
             self.mean_and_std[key]=data
@@ -148,7 +143,7 @@ class StatisticsHelper:
             shape[0]=self.gaussian_num
             data0=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
             data1=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
-            data=(data0,data1)
+            data=[data0,data1]
             data[0][pts]=torch.max(compact_tensor,data[0][pts])
             data[1][pts]=torch.min(compact_tensor,data[1][pts])
             self.max_and_min[key]=data

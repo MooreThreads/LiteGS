@@ -76,6 +76,15 @@ class DensityControllerBase:
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
+    def update_optimizer_and_model(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,valid_points_mask:torch.Tensor,dict_clone:dict=None,dict_split:dict=None):
+        optimizable_tensors=self._prune_optimizer(valid_points_mask,optimizer)
+        if dict_clone is not None:
+            optimizable_tensors=self._cat_tensors_to_optimizer(dict_clone,optimizer)
+        if dict_split is not None:
+            optimizable_tensors=self._cat_tensors_to_optimizer(dict_split,optimizer)
+        self._fix_model_parameters(gaussian_model,optimizable_tensors)
+        return
+    
 class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad
     def __init__(self,grad_threshold, min_opacity, max_screen_size,percent_dense,view_matrix:torch.Tensor,opt_params:OptimizationParams)->None:
@@ -121,12 +130,6 @@ class DensityControllerOfficial(DensityControllerBase):
         selected_pts_mask=abnormal_mask&large_pts_mask
         return selected_pts_mask
 
-    def update_optimizer_and_model(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,valid_points_mask:torch.Tensor,dict_clone:dict=None,dict_split:dict=None):
-        optimizable_tensors=self._prune_optimizer(valid_points_mask,optimizer)
-        optimizable_tensors=self._cat_tensors_to_optimizer(dict_clone,optimizer)
-        optimizable_tensors=self._cat_tensors_to_optimizer(dict_split,optimizer)
-        self._fix_model_parameters(gaussian_model,optimizable_tensors)
-        return
     
     def densify_and_prune(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
         
@@ -196,3 +199,115 @@ class DensityControllerOfficial(DensityControllerBase):
     def IsDensify(self,epoch_i:int,iter_i:int)->bool:
         bDensify=iter_i+1 >= self.opt_params.densify_from_iter+self.opt_params.densification_interval and iter_i+1<self.opt_params.densify_until_iter and (iter_i+1) % self.opt_params.densification_interval == 0
         return bDensify
+    
+
+class DensityControllerOurs(DensityControllerBase):
+
+    def __init__(self,opt_params:OptimizationParams)->None:
+        self.opt_params=opt_params
+        self.min_opacity=0.001
+        return
+    
+    @torch.no_grad
+    def prune(self,gaussian_model:GaussianSplattingModel):
+        prune_mask = (gaussian_model._opacity.sigmoid() < self.min_opacity).squeeze()
+        invisible_mask = (StatisticsHelperInst.visible_count==0)
+        return prune_mask|invisible_mask
+    
+    @torch.no_grad
+    def densify_and_clone(self,gaussian_model:GaussianSplattingModel,N=2):
+        xyz_grad_std=StatisticsHelperInst.get_std('xyz_grad').nan_to_num(0)
+        color_grad_std=StatisticsHelperInst.get_std('color_grad').nan_to_num(0)
+        
+        xyz_normed_std=torch.nn.functional.normalize(xyz_grad_std[:,:3].max(dim=1).values,dim=0)
+        color_normed_std=torch.nn.functional.normalize(color_grad_std[:,0,:].max(dim=1).values,dim=0)
+
+        N=xyz_normed_std.shape[0]
+        value,index=(xyz_normed_std+color_normed_std).sort(descending=True)
+        clone_mask=torch.zeros_like(xyz_normed_std).bool()
+        clone_mask[index[:int(N/8)]]=True
+
+        return clone_mask
+    
+    @torch.no_grad
+    def densify_and_split(self,gaussian_model:GaussianSplattingModel,N=2):
+        xyz_grad_std=StatisticsHelperInst.get_std('xyz_grad').nan_to_num(0)
+        color_grad_std=StatisticsHelperInst.get_std('color_grad').nan_to_num(0)
+        
+        position_split_mask=xyz_grad_std>xyz_grad_std.mean()
+        color_split_mask=color_grad_std>color_grad_std.mean()
+        return position_split_mask.any(dim=-1)|color_split_mask.any(dim=-1).any(dim=-1)
+    
+    def densify_and_prune(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
+        def inverse_sigmoid(x):
+            return torch.log(x/(1-x))
+        
+        prune_mask=self.prune(gaussian_model)
+
+        clone_mask=self.densify_and_clone(gaussian_model)
+        actived_opacities=gaussian_model._opacity[clone_mask].sigmoid()
+        actived_new_opacities=actived_opacities/(1+(1-actived_opacities).sqrt())
+        opacities_new = inverse_sigmoid(actived_new_opacities)
+        # opacities_new=gaussian_model._opacity[clone_mask]
+        dict_clone = {"xyz": gaussian_model._xyz[clone_mask],
+        "opacity": opacities_new,
+        "scaling" : gaussian_model._scaling[clone_mask],
+        "f_dc": gaussian_model._features_dc[clone_mask],
+        "f_rest": gaussian_model._features_rest[clone_mask],
+        "rotation" : gaussian_model._rotation[clone_mask]}
+
+        # split_mask=self.densify_and_split(gaussian_model)
+        # N=2
+        # stds=gaussian_model._scaling[split_mask].exp().repeat(N,1)
+        # means =torch.zeros((stds.size(0), 3),device="cuda")
+        # samples = torch.normal(mean=means, std=stds)
+        # rotation_matrix=quaternion_to_rotation_matrix(torch.nn.functional.normalize(gaussian_model._rotation[split_mask],dim=-1)).repeat(N,1,1)
+        # new_xyz = gaussian_model._xyz[split_mask].repeat(N, 1)
+        # new_xyz[...,:3]+=(rotation_matrix@samples.unsqueeze(-1)).squeeze(-1)
+        # new_scaling = (gaussian_model._scaling[split_mask].exp() / (0.8*N)).log().repeat(N,1)
+        # new_rotation = gaussian_model._rotation[split_mask].repeat(N,1)
+        # new_features_dc = gaussian_model._features_dc[split_mask].repeat(N,1,1)
+        # new_features_rest = gaussian_model._features_rest[split_mask].repeat(N,1,1)
+        # new_opacity = gaussian_model._opacity[split_mask].repeat(N,1)
+        # dict_split = {"xyz": new_xyz,
+        # "opacity": new_opacity,
+        # "scaling" : new_scaling,
+        # "f_dc": new_features_dc,
+        # "f_rest": new_features_rest,
+        # "rotation" :new_rotation}
+        
+        valid_points_mask=(~prune_mask)#&(~split_mask)
+        self.update_optimizer_and_model(gaussian_model,optimizer,valid_points_mask,dict_clone,None)
+        print("\nclone_num:{0} prune_num:{1} cur_points_num:{2}".format(clone_mask.sum().cpu(),prune_mask.sum().cpu(),gaussian_model._xyz.shape[0]))
+        torch.cuda.empty_cache()
+        return
+    
+    def IsDensify(self,epoch_i:int)->bool:
+        bDensify=epoch_i >= self.opt_params.densify_from_iter and epoch_i<self.opt_params.densify_until_iter and epoch_i % self.opt_params.densification_interval == 0
+        return bDensify
+    
+    @torch.no_grad
+    def reset_opacity(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
+        def inverse_sigmoid(x):
+            return torch.log(x/(1-x))
+        decay_opacities=gaussian_model._opacity.sigmoid()*0.5
+        opacities_new = inverse_sigmoid(decay_opacities)
+        optimizable_tensors = self._replace_tensor_to_optimizer(opacities_new, "opacity",optimizer)
+        self._opacity = optimizable_tensors["opacity"]
+        torch.cuda.empty_cache()
+        return
+    
+    @torch.no_grad
+    def step(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,epoch_i:int):
+
+        if self.IsDensify(epoch_i)==True:
+            #self.max_screen_size = 20 if iter_i > self.opt_params.opacity_reset_interval else None
+            self.densify_and_prune(gaussian_model,optimizer)
+            StatisticsHelperInst.reset(gaussian_model._xyz.shape[0])
+        
+        if epoch_i%self.opt_params.opacity_reset_interval==0 and epoch_i<self.opt_params.densify_until_iter:
+            self.reset_opacity(gaussian_model,optimizer)
+
+        if StatisticsHelperInst.bStart==False and self.IsDensify(epoch_i+1)==True:
+            StatisticsHelperInst.start()
+        return

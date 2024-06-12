@@ -6,7 +6,7 @@ from util.camera import View
 from training import cache
 from training.utils import loss_utils
 from gaussian_splatting.division import GaussianSceneDivision
-from training.densitycontroller import DensityControllerOfficial
+from training.densitycontroller import DensityControllerOurs
 from util.statistic_helper import StatisticsHelperInst
 from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
 
@@ -104,7 +104,7 @@ class GaussianTrain:
 
         screen_size_threshold=None#20
         opacity_threshold=0.005
-        self.density_controller=DensityControllerOfficial(op.densify_grad_threshold,opacity_threshold,screen_size_threshold,op.percent_dense,torch.Tensor(self.view_manager.view_matrix_tensor).cuda(),self.opt_params)
+        self.density_controller=DensityControllerOurs(self.opt_params)
 
         return
     
@@ -187,7 +187,8 @@ class GaussianTrain:
 
     @staticmethod
     def __regularization_loss_backward(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0):
-        regularization_loss=(1-visible_opacities).mean()*0.001+visible_scales.var(2).mean()*0.1
+        #regularization_loss=(1-visible_opacities).mean()*0.001+visible_scales.var(2).mean()*0.1
+        regularization_loss=visible_scales.var(2).mean()*0.1
         regularization_loss.backward(retain_graph=True)
         return    
     
@@ -239,7 +240,7 @@ class GaussianTrain:
             ### render ###
             tile_img,tile_transmitance=self.model.render(None,None,
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,
-                              None)
+                              self.__regularization_loss_backward)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
 
@@ -254,8 +255,9 @@ class GaussianTrain:
             self.optimizer.step()
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.backward_callback()
+                StatisticsHelperInst.update_mean_std('xyz_grad',self.model._xyz.grad.unsqueeze(0))
+                StatisticsHelperInst.update_mean_std('color_grad',self.model._features_dc.grad.unsqueeze(0))
             self.optimizer.zero_grad(set_to_none = True)
-            self.density_controller.step(self.model,self.optimizer,epoch_i,epoch_i*total_views_num+iter_i+1)
 
         ### log ###
         # log_loss/=counter
@@ -348,6 +350,9 @@ class GaussianTrain:
         for epoch_i in range(self.iter_start,epoch+1):
             if (epoch_i+1)%6==0:
                 self.model.oneupSHdegree()
+
+            if StatisticsHelperInst.bStart==False and self.density_controller.IsDensify(epoch_i):
+                StatisticsHelperInst.start()
             
             self.__iter(epoch_i,batch_size,view_matrix,view_project_matrix,camera_center,camera_focal,ground_truth)
             progress_bar.update(total_views_num)
@@ -366,6 +371,8 @@ class GaussianTrain:
                 self.model.save_to_scene(scene)
                 dir=os.path.join(self.output_path,"point_cloud/iteration_{}".format(epoch_i))
                 scene.save_ply(os.path.join(dir,"point_cloud.ply"))
+
+            self.density_controller.step(self.model,self.optimizer,epoch_i)
             
         return
     
