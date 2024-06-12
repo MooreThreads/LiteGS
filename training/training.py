@@ -348,7 +348,7 @@ class GaussianTrain:
         torch.cuda.empty_cache()
         
         for epoch_i in range(self.iter_start,epoch+1):
-            if (epoch_i+1)%6==0:
+            if (epoch_i+1)%20==0:
                 self.model.oneupSHdegree()
 
             if StatisticsHelperInst.bStart==False and self.density_controller.IsDensify(epoch_i):
