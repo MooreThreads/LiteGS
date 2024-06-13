@@ -237,7 +237,7 @@ class GaussianSplattingModel:
         visible_cov2d=self.create_cov2d_optimized(visible_scales,visible_rotators,visible_positions,view_matrix,camera_focal)
         
         ### color ###
-        dirs=(visible_positions-view_matrix[:,3])[...,:3]
+        dirs=(visible_positions+view_matrix[:,3])[...,:3]
         dirs=torch.nn.functional.normalize(dirs,dim=-1)
         visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh,dirs)
         
