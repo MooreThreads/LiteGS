@@ -4,8 +4,6 @@ from util import getWorld2View,getProjectionMatrix
 
 class Camera:
     def __init__(self,viewtrans_position,viewtrans_rotation,fovX,fovY,z_near=0.01,z_far=100.0):
-        self.rotation_matrix=viewtrans_rotation.transpose()
-        self.position=-viewtrans_position
         self.fovX=fovX
         self.fovY=fovY
         

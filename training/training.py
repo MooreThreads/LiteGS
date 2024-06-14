@@ -80,7 +80,7 @@ class ViewManager:
 
 class GaussianTrain:
 
-    def __init__(self,gaussian_model:GaussianSplattingModel,lp:ModelParams,op:OptimizationParams,NerfNormRadius:int,image_list:typing.List[ImageInfo],camera_dict:typing.Dict[int,PinHoleCameraInfo]):
+    def __init__(self,gaussian_model:GaussianSplattingModel,lp:ModelParams,op:OptimizationParams,NerfNormRadius:int,image_list:list[ImageInfo],camera_dict:dict[int,PinHoleCameraInfo]):
         self.spatial_lr_scale=NerfNormRadius
         self.image_list=image_list
         self.camera_dict=camera_dict
@@ -238,7 +238,7 @@ class GaussianTrain:
 
             ### render ###
             tile_img,tile_transmitance=self.model.render(None,None,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,None,
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,
                               None)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
@@ -295,7 +295,7 @@ class GaussianTrain:
 
             ### render ###
             tile_img,tile_transmitance=self.model.render(None,None,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch)
+                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             

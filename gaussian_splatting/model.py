@@ -215,7 +215,8 @@ class GaussianSplattingModel:
         return img,transmitance
     
     def render(self,visible_points_num:torch.Tensor,visible_points:torch.Tensor,
-               view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,tiles:torch.Tensor=None,
+               view_matrix:torch.Tensor,view_project_matrix:torch.Tensor,camera_focal:torch.Tensor,camera_center_batch:torch.Tensor,
+               tiles:torch.Tensor=None,
                prebackward_func:typing.Callable=None):
         
         ###process visibility
@@ -237,7 +238,7 @@ class GaussianSplattingModel:
         visible_cov2d=self.create_cov2d_optimized(visible_scales,visible_rotators,visible_positions,view_matrix,camera_focal)
         
         ### color ###
-        dirs=(visible_positions+view_matrix[:,3])[...,:3]
+        dirs=visible_positions[...,:3]-camera_center_batch
         dirs=torch.nn.functional.normalize(dirs,dim=-1)
         visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh,dirs)
         

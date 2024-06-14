@@ -163,7 +163,7 @@ class DensityControllerOfficial(DensityControllerBase):
         
         valid_points_mask=(~prune_mask)&(~split_mask)
         self.update_optimizer_and_model(gaussian_model,optimizer,valid_points_mask,dict_clone,dict_split)
-        #print("\nclone_num:{0} split_num:{1} prune_num:{2} cur_points_num:{3}".format(clone_mask.sum().cpu(),split_mask.sum().cpu(),prune_mask.sum().cpu(),gaussian_model._xyz.shape[0]))
+        print("\nclone_num:{0} split_num:{1} prune_num:{2} cur_points_num:{3}".format(clone_mask.sum().cpu(),split_mask.sum().cpu(),prune_mask.sum().cpu(),gaussian_model._xyz.shape[0]))
         torch.cuda.empty_cache()
         return
     
