@@ -33,7 +33,7 @@ if __name__ == "__main__":
     cameras_info:typing.Dict[int,CameraInfo]=None
     images_info:typing.List[ImageInfo]=None
     scene:GaussianScene=None
-    cameras_info,images_info,scene,_,NerfNormRadius=TrainingDataLoader.load(lp.source_path,lp.images,lp.sh_degree)
+    cameras_info,images_info,scene,_,NerfNormRadius=TrainingDataLoader.load(lp.source_path,lp.images,lp.sh_degree,lp.resolution)
 
     #params & optimizer
     gaussian_model=GaussianSplattingModel(scene,NerfNormRadius)

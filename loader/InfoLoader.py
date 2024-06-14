@@ -6,6 +6,7 @@ import typing
 import numpy.typing as npt
 import math
 import PIL.Image
+from training.arguments import ModelParams
 from util import qvec2rotmat,getWorld2View
 
 
@@ -39,6 +40,7 @@ class PinHoleCameraInfo(CameraInfo):
         self.fovY=__focal2fov(focal_length_y, height)
         return
     
+WARNED = False
 
 class ImageInfo:
     def __init__(self):
@@ -60,9 +62,30 @@ class ImageInfo:
         self.image=None
         return
     
-    def load_image(self,data_path:str,img_dir:str):
+    def load_image(self,data_path:str,img_dir:str,arg_resolution:int):
         img_path=os.path.join(data_path,img_dir,self.name)
         self.image=PIL.Image.open(img_path)
+
+        orig_w, orig_h = self.image.size
+        if arg_resolution in [1, 2, 4, 8]:
+            resolution = round(orig_w/ arg_resolution), round(orig_h/ arg_resolution)
+        else:  # should be a type that converts to float
+            if arg_resolution == -1:
+                if orig_w > 1600:
+                    global WARNED
+                    if not WARNED:
+                        print("[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.\n "
+                            "If this is not desired, please explicitly specify '--resolution/-r' as 1")
+                        WARNED = True
+                    global_down = orig_w / 1600
+                else:
+                    global_down = 1
+            else:
+                global_down = orig_w / arg_resolution
+
+            scale = float(global_down)
+            resolution = (int(orig_w / scale), int(orig_h / scale))  
+        self.image=self.image.resize(resolution)
         return
     
 Camera = collections.namedtuple(
@@ -244,7 +267,7 @@ def getNerfppNorm(image_info_list:typing.List[ImageInfo]):
     return translate,radius
 
 
-def load(path:str,image_dir:str)->typing.Tuple[typing.Dict[int,PinHoleCameraInfo],typing.List[ImageInfo]]:
+def load(path:str,image_dir:str,resolution:int)->tuple[dict[int,PinHoleCameraInfo],list[ImageInfo]]:
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -268,7 +291,7 @@ def load(path:str,image_dir:str)->typing.Tuple[typing.Dict[int,PinHoleCameraInfo
     for ImgArg in cam_extrinsics.values():
         if ImgArg.camera_id in CameraInfoDict.keys():
             imgInfo=ImageInfo(ImgArg.id,ImgArg.viewtransform_rotation,ImgArg.tvec,ImgArg.camera_id,ImgArg.name,ImgArg.xys)
-            imgInfo.load_image(path,image_dir)
+            imgInfo.load_image(path,image_dir,resolution)
             if H is None and W is None:
                 H,W=imgInfo.image.size
             else:

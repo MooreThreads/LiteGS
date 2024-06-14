@@ -26,8 +26,8 @@ def BasicScene2GaussianScene(basic_scene:PointCloudLoader.BasicPointCloud,sh_deg
     scene=GaussianScene(sh_degree,fused_point_cloud.numpy(),scales.numpy(),rots.numpy(),features.numpy(),opacities.numpy())
     return scene
 
-def load(data_path:str,img_dir:str,sh_degree:int):
-    cameras_info,images_info,NerfNormTrans,NerfNormRadius=InfoLoader.load(data_path,img_dir)
+def load(data_path:str,img_dir:str,sh_degree:int,resolution:int):
+    cameras_info,images_info,NerfNormTrans,NerfNormRadius=InfoLoader.load(data_path,img_dir,resolution)
     basic_scene=PointCloudLoader.load_pointcloud(data_path)
     print("Number of points at initialisation : ", basic_scene.positions.shape[0])
 
