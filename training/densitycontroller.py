@@ -246,7 +246,7 @@ class DensityControllerOurs(DensityControllerBase):
         color_split_mask=color_grad_std>color_grad_std.mean()
         return position_split_mask.any(dim=-1)|color_split_mask.any(dim=-1).any(dim=-1)
     
-    def densify_and_prune(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,bPrune:bool):
+    def densify_and_prune(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,bPrune:bool,gen_num=1):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         if bPrune:
@@ -256,14 +256,15 @@ class DensityControllerOurs(DensityControllerBase):
 
         clone_mask=self.densify_and_clone(gaussian_model)
         actived_opacities=gaussian_model._opacity[clone_mask].sigmoid()
-        actived_new_opacities=actived_opacities/(1+(1-actived_opacities).sqrt())
+        actived_new_opacities=1-(1-actived_opacities).pow(1/(gen_num+1))
         opacities_new = inverse_sigmoid(actived_new_opacities)# opacities_new=gaussian_model._opacity[clone_mask]
-        dict_clone = {"xyz": gaussian_model._xyz[clone_mask],
-        "opacity": opacities_new,
-        "scaling" : gaussian_model._scaling[clone_mask],
-        "f_dc": gaussian_model._features_dc[clone_mask],
-        "f_rest": gaussian_model._features_rest[clone_mask],
-        "rotation" : gaussian_model._rotation[clone_mask]}
+        dict_clone = {"xyz": gaussian_model._xyz[clone_mask].repeat(gen_num,1),
+        "opacity": opacities_new.repeat(gen_num,1),
+        "scaling" : gaussian_model._scaling[clone_mask].repeat(gen_num,1),
+        "f_dc": gaussian_model._features_dc[clone_mask].repeat(gen_num,1,1),
+        "f_rest": gaussian_model._features_rest[clone_mask].repeat(gen_num,1,1),
+        "rotation" : gaussian_model._rotation[clone_mask].repeat(gen_num,1)}
+        gaussian_model._opacity[clone_mask]=actived_opacities#set the ord one
         
         self.update_optimizer_and_model(gaussian_model,optimizer,valid_points_mask,dict_clone,None)
         print("\nclone_num:{0} cur_points_num:{1}".format(clone_mask.sum().cpu(),gaussian_model._xyz.shape[0]))
