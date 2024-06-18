@@ -199,21 +199,8 @@ class GaussianTrain:
         
         with torch.no_grad():
             total_views_num=view_matrix.shape[0]
-            # ndc_pos=cg_torch.world_to_ndc(self.model._xyz,view_project_matrix)
-            # translated_pos=cg_torch.world_to_view(self.model._xyz,view_matrix)
-            # visible_points_for_views,visible_points_num_for_views=self.model.culling_and_sort(ndc_pos,translated_pos)
-            # if batch_size > 1:            
-            #     # cluster the views according to the visible_points_num
-            #     visible_points_num_for_views,view_indices=torch.sort(visible_points_num_for_views)
-            #     visible_points_for_views=visible_points_for_views[view_indices]
-            #     view_matrix=view_matrix[view_indices]
-            #     view_project_matrix=view_project_matrix[view_indices]
-            #     camera_focal=camera_focal[view_indices]
-            #     camera_center=camera_center[view_indices]
-            #     ground_truth=ground_truth[view_indices]
-
-        #iter_batch_num=1024
-        #tiles=torch.randint(1,self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1],(iter_batch_num,)).int().cuda()
+            #iter_batch_num=1024
+            #tiles=torch.randint(1,self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1],(iter_batch_num,)).int().cuda()
         
         log_loss=0
         counter=0
@@ -228,9 +215,6 @@ class GaussianTrain:
 
             ### gather batch data ###
             with torch.no_grad():
-                # visible_points_num_batch=visible_points_num_for_views[i:batch_tail]
-                # max_points_in_batch=visible_points_num_batch.max()
-                # visible_points_for_views_batch=visible_points_for_views[i:batch_tail,:max_points_in_batch]
                 view_matrix_batch=view_matrix[i:batch_tail]
                 view_project_matrix_batch=view_project_matrix[i:batch_tail]
                 camera_focal_batch=camera_focal[i:batch_tail]
@@ -256,7 +240,6 @@ class GaussianTrain:
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.backward_callback()
                 StatisticsHelperInst.update_mean_std('xyz_grad',self.model._xyz.grad.unsqueeze(0))
-                StatisticsHelperInst.update_mean_std('color_grad',self.model._features_dc.grad.unsqueeze(0))
             self.optimizer.zero_grad(set_to_none = True)
 
         ### log ###
