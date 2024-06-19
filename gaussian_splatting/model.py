@@ -145,37 +145,37 @@ class GaussianSplattingModel:
         coordX=(ndc[:,:,0]+1.0)*0.5*image_size[0]-0.5
         coordY=(ndc[:,:,1]+1.0)*0.5*image_size[1]-0.5
 
+        #_eigen_val,_eigen_vec=torch.linalg.eigh(cov2d)
         det=cov2d[:,:,0,0]*cov2d[:,:,1,1]-cov2d[:,:,0,1]*cov2d[:,:,0,1]
         mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
         temp=(mid*mid-det).clamp_min(0.1).sqrt()
-        major_eigen_val=torch.max(mid+temp,mid-temp)
-        # todo: rectangle formed by the major and minor axes
-        # eigen_val,eigen_vec=torch.linalg.eigh(cov2d)
-        # major_eigen_val=eigen_val.max(dim=-1)[0]
+        eigen_val=torch.cat(((mid-temp).unsqueeze(-1),(mid+temp).unsqueeze(-1)),dim=-1)
+        eigen_vec_y=((eigen_val-cov2d[...,0,0].unsqueeze(-1))/cov2d[...,0,1].unsqueeze(-1))
+        eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-1),eigen_vec_y.unsqueeze(-1)),dim=-1)
+        eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-1)
+
+        # Major and minor axes -> AABB extensions
         opacity_clamped=opacity.squeeze(-1).clamp_min(0.005)
         coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
-        pixel_radius=(coefficient*major_eigen_val).sqrt().ceil()
-        #pixel_radius=3.0*((major_eigen_val).sqrt()).ceil()
+        axis_length=(coefficient.unsqueeze(-1)*eigen_val).sqrt().ceil()
+        extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().max(dim=-2).values
         
-        L=((coordX-pixel_radius)/tile_size).floor().int().clamp(0,tilesX)
-        U=((coordY-pixel_radius)/tile_size).floor().int().clamp(0,tilesY)
-        R=((coordX+pixel_radius+tile_size-1)/tile_size).floor().int().clamp(0,tilesX)
-        D=((coordY+pixel_radius+tile_size-1)/tile_size).floor().int().clamp(0,tilesY)
+        L=((coordX-extension[...,0])/tile_size).floor().int().clamp(0,tilesX)
+        U=((coordY-extension[...,1])/tile_size).floor().int().clamp(0,tilesY)
+        R=((coordX+extension[...,0]+tile_size-1)/tile_size).floor().int().clamp(0,tilesX)
+        D=((coordY+extension[...,1]+tile_size-1)/tile_size).floor().int().clamp(0,tilesY)
 
         #calculate params of allocation
         tiles_touched=(R-L)*(D-U)
         prefix_sum=tiles_touched.cumsum(1)
         total_tiles_num_batch=prefix_sum.gather(1,valid_points_num.unsqueeze(1)-1)
-        pixel_radius=(pixel_radius*(tiles_touched!=0))
+        pixel_radius=(axis_length.max(-1).values*(tiles_touched!=0))
         allocate_size=total_tiles_num_batch.max().cpu()
-        
-
         
         # allocate table and fill tile_id in it(uint 16)
         my_table=torch.ops.RasterBinning.duplicateWithKeys(L,U,R,D,valid_points_num,prefix_sum,int(allocate_size),int(tilesX))
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
-
 
         # sort tile_id with torch.sort
         sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
