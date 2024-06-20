@@ -365,24 +365,13 @@ __global__ void raster_backward_kernel(
 )
 {
     __shared__ int collected_point_id[tilesize * tilesize / 4];
-    __shared__ float collected_color_x[tilesize * tilesize / 4];
-    __shared__ float collected_color_y[tilesize * tilesize / 4];
-    __shared__ float collected_color_z[tilesize * tilesize / 4];
-    __shared__ float collected_invcov_x[tilesize * tilesize / 4];
-    __shared__ float collected_invcov_y[tilesize * tilesize / 4];
-    __shared__ float collected_invcov_z[tilesize * tilesize / 4];
-    __shared__ float collected_mean_x[tilesize * tilesize / 4];
-    __shared__ float collected_mean_y[tilesize * tilesize / 4];
-    __shared__ float collected_opacity[tilesize * tilesize / 4];
+    __shared__ float4 collected_color[tilesize * tilesize / 4];
+    __shared__ float3 collected_invcov[tilesize * tilesize / 4];
+    __shared__ float2 collected_mean[tilesize * tilesize / 4];
 
-    __shared__ float grad_color_x[tilesize * tilesize];
-    __shared__ float grad_color_y[tilesize * tilesize];
-    __shared__ float grad_color_z[tilesize * tilesize];
-    __shared__ float grad_invcov_x[tilesize * tilesize];
-    __shared__ float grad_invcov_y[tilesize * tilesize];
-    __shared__ float grad_invcov_z[tilesize * tilesize];
-    __shared__ float grad_mean_x[tilesize * tilesize];
-    __shared__ float grad_mean_y[tilesize * tilesize];
+    __shared__ float3 grad_color[tilesize * tilesize];
+    __shared__ float3 grad_invcov[tilesize * tilesize];
+    __shared__ float2 grad_mean[tilesize * tilesize];
     __shared__ float grad_opacity[tilesize * tilesize];
  
 
@@ -433,18 +422,15 @@ __global__ void raster_backward_kernel(
                 int index = offset - i;
                 int point_id = sorted_points[batch_id][index];
                 collected_point_id[i] = point_id;
-                collected_opacity[i] = opacity[batch_id][point_id][0];
 
-                collected_mean_x[i] = mean2d[batch_id][point_id][0];
-                collected_mean_y[i] = mean2d[batch_id][point_id][1];
+                collected_mean[i] = *reinterpret_cast<float2*>(mean2d[batch_id][point_id].data());
+                collected_invcov[i] = *reinterpret_cast<float3*>(cov2d_inv[batch_id][point_id].data());
 
-                collected_invcov_x[i] = cov2d_inv[batch_id][point_id][0][0];
-                collected_invcov_y[i] = cov2d_inv[batch_id][point_id][0][1];
-                collected_invcov_z[i] = cov2d_inv[batch_id][point_id][1][1];
 
-                collected_color_x[i] = color[batch_id][point_id][0];
-                collected_color_y[i] = color[batch_id][point_id][1];
-                collected_color_z[i] = color[batch_id][point_id][2];
+                collected_color[i].x = color[batch_id][point_id][0];
+                collected_color[i].y = color[batch_id][point_id][1];
+                collected_color[i].z = color[batch_id][point_id][2];
+                collected_color[i].w = opacity[batch_id][point_id][0];
             }
 
             __syncthreads();
@@ -456,150 +442,149 @@ __global__ void raster_backward_kernel(
             {
                 int index = offset - i;
                 bool bSkip = false;
+                int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
                 if (index > pixel_lst_index)
                 {
                     bSkip = true;
                 }
-                int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
-
-                float2 xy{ collected_mean_x[i], collected_mean_y[i] };
-                float2 d { xy.x - pixel_x,xy.y - pixel_y };
-                float3 cur_color{collected_color_x[i],collected_color_y[i],collected_color_z[i] };
-                float cur_opacity = collected_opacity[i];
-                float3 cur_cov2d_inv = { collected_invcov_x[i],collected_invcov_y[i],collected_invcov_z[i] };
-
-                float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
-                if (power > 0.0f)
-                    bSkip = true;
-
-                float G = exp(power);
-                float alpha = min(0.99f, cur_opacity * G);
-                if (alpha < 1.0f / 255.0f)
-                    bSkip = true;
-
-                if (bSkip == false && Done == false)
-                {
-                    transmittance /= (1 - alpha);
-                    //color
-                    grad_color_x[threadidx] = alpha * transmittance * d_pixel.x;
-                    grad_color_y[threadidx] = alpha * transmittance * d_pixel.y;
-                    grad_color_z[threadidx] = alpha * transmittance * d_pixel.z;
-
-
-                    //alpha
-                    accum_rec.x = last_alpha * last_color.x + (1.0f - last_alpha) * accum_rec.x;
-                    accum_rec.y = last_alpha * last_color.y + (1.0f - last_alpha) * accum_rec.y;
-                    accum_rec.z = last_alpha * last_color.z + (1.0f - last_alpha) * accum_rec.z;
-                    last_color = cur_color;
-                    last_alpha = alpha;
-
-                    float d_alpha = 0;
-                    d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
-                    d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
-                    d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
-
-                    //opacity
-                    grad_opacity[threadidx] = G * d_alpha;
-
-                    //cov2d_inv
-                    float d_G = cur_opacity * d_alpha;
-                    float d_power = G * d_G;
-                    grad_invcov_x[threadidx] = -0.5f * d.x * d.x * d_power;
-                    grad_invcov_z[threadidx] = -0.5f * d.y * d.y * d_power;
-                    grad_invcov_y[threadidx] = -0.5f * d.x * d.y * d_power;
-
-                    //mean2d
-                    float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
-                    float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
-                    grad_mean_x[threadidx] = d_deltax;
-                    grad_mean_y[threadidx] = d_deltay;
-                }
                 else
                 {
-                    grad_color_x[threadidx] = 0;
-                    grad_color_y[threadidx] = 0;
-                    grad_color_z[threadidx] = 0;
 
-                    grad_invcov_x[threadidx] = 0;
-                    grad_invcov_y[threadidx] = 0;
-                    grad_invcov_z[threadidx] = 0;
+                    float2 xy = collected_mean[i];
+                    float2 d{ xy.x - pixel_x,xy.y - pixel_y };
+                    float4 cur_color = collected_color[i];
+                    float3 cur_cov2d_inv = collected_invcov[i];
 
-                    grad_mean_x[threadidx] = 0;
-                    grad_mean_y[threadidx] = 0;
+                    float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
+                    bSkip |= power > 0.0f;
 
+                    float G = exp(power);
+                    float alpha = min(0.99f, cur_color.w * G);
+                    bSkip |= alpha < 1.0f / 255.0f;
+
+                    if (bSkip == false && Done == false)
+                    {
+                        transmittance /= (1 - alpha);
+                        //color
+                        grad_color[threadidx].x = alpha * transmittance * d_pixel.x;
+                        grad_color[threadidx].y = alpha * transmittance * d_pixel.y;
+                        grad_color[threadidx].z = alpha * transmittance * d_pixel.z;
+
+
+                        //alpha
+                        accum_rec.x = last_alpha * last_color.x + (1.0f - last_alpha) * accum_rec.x;
+                        accum_rec.y = last_alpha * last_color.y + (1.0f - last_alpha) * accum_rec.y;
+                        accum_rec.z = last_alpha * last_color.z + (1.0f - last_alpha) * accum_rec.z;
+                        last_color.x = cur_color.x;
+                        last_color.y = cur_color.y;
+                        last_color.z = cur_color.z;
+                        last_alpha = alpha;
+
+                        float d_alpha = 0;
+                        d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
+                        d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
+                        d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
+
+                        //opacity
+                        grad_opacity[threadidx] = G * d_alpha;
+
+                        //cov2d_inv
+                        float d_G = cur_color.w * d_alpha;
+                        float d_power = G * d_G;
+                        grad_invcov[threadidx].x = -0.5f * d.x * d.x * d_power;
+                        grad_invcov[threadidx].y = -0.5f * d.y * d.y * d_power;
+                        grad_invcov[threadidx].z = -0.5f * d.x * d.y * d_power;
+
+                        //mean2d
+                        float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
+                        float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
+                        grad_mean[threadidx].x = d_deltax;
+                        grad_mean[threadidx].y = d_deltay;
+                    }
+                }
+
+                
+                if (bSkip == true || Done == true)
+                {
+                    grad_color[threadidx] = { 0,0,0 };
+                    grad_invcov[threadidx] = { 0,0,0 };
+                    grad_mean[threadidx] = { 0,0 };
                     grad_opacity[threadidx] = 0;
-
                 }
 
                 __syncthreads();
+                int skip_num = __syncthreads_count(bSkip == true || Done == true);
                 //reduction
-                for (int offset = tilesize * tilesize / 2; offset > 32; offset /= 2)
+                if (skip_num != tilesize * tilesize)
                 {
-                    if (threadidx < offset)
+                    for (int offset = tilesize * tilesize / 2; offset > 32; offset /= 2)
                     {
-                        grad_color_x[threadidx] += grad_color_x[threadidx + offset];
-                        grad_color_y[threadidx] += grad_color_y[threadidx + offset];
-                        grad_color_z[threadidx] += grad_color_z[threadidx + offset];
+                        if (threadidx < offset)
+                        {
+                            grad_color[threadidx].x += grad_color[threadidx + offset].x;
+                            grad_color[threadidx].y += grad_color[threadidx + offset].y;
+                            grad_color[threadidx].z += grad_color[threadidx + offset].z;
 
-                        grad_invcov_x[threadidx] += grad_invcov_x[threadidx + offset];
-                        grad_invcov_y[threadidx] += grad_invcov_y[threadidx + offset];
-                        grad_invcov_z[threadidx] += grad_invcov_z[threadidx + offset];
+                            grad_invcov[threadidx].x += grad_invcov[threadidx + offset].x;
+                            grad_invcov[threadidx].y += grad_invcov[threadidx + offset].y;
+                            grad_invcov[threadidx].z += grad_invcov[threadidx + offset].z;
 
-                        grad_mean_x[threadidx] += grad_mean_x[threadidx + offset];
-                        grad_mean_y[threadidx] += grad_mean_y[threadidx + offset];
+                            grad_mean[threadidx].x += grad_mean[threadidx + offset].x;
+                            grad_mean[threadidx].y += grad_mean[threadidx + offset].y;
 
-                        grad_opacity[threadidx] += grad_opacity[threadidx + offset];
+                            grad_opacity[threadidx] += grad_opacity[threadidx + offset];
+                        }
+                        __syncthreads();
                     }
-                    __syncthreads();
-                }
-                if (threadidx < 32)
-                {
-                    float grad_color_x_warp = grad_color_x[threadidx] + grad_color_x[threadidx + 32];
-                    float grad_color_y_warp = grad_color_y[threadidx] + grad_color_y[threadidx + 32];
-                    float grad_color_z_warp = grad_color_z[threadidx] + grad_color_z[threadidx + 32];
-
-                    float grad_invcov_x_warp = grad_invcov_x[threadidx] + grad_invcov_x[threadidx + 32];
-                    float grad_invcov_y_warp = grad_invcov_y[threadidx] + grad_invcov_y[threadidx + 32];
-                    float grad_invcov_z_warp = grad_invcov_z[threadidx] + grad_invcov_z[threadidx + 32];
-
-                    float grad_mean_x_warp = grad_mean_x[threadidx] + grad_mean_x[threadidx + 32];
-                    float grad_mean_y_warp = grad_mean_y[threadidx] + grad_mean_y[threadidx + 32];
-
-                    float grad_opacity_warp = grad_opacity[threadidx] + grad_opacity[threadidx + 32];
-
-                    for (int offset = 16; offset > 0; offset /= 2)
+                    if (threadidx < 32)
                     {
-                        grad_color_x_warp += __shfl_down_sync(0xffffffff, grad_color_x_warp, offset);
-                        grad_color_y_warp += __shfl_down_sync(0xffffffff, grad_color_y_warp, offset);
-                        grad_color_z_warp += __shfl_down_sync(0xffffffff, grad_color_z_warp, offset);
+                        float grad_color_x_warp = grad_color[threadidx].x + grad_color[threadidx + 32].x;
+                        float grad_color_y_warp = grad_color[threadidx].y + grad_color[threadidx + 32].y;
+                        float grad_color_z_warp = grad_color[threadidx].z + grad_color[threadidx + 32].z;
 
-                        grad_invcov_x_warp += __shfl_down_sync(0xffffffff, grad_invcov_x_warp, offset);
-                        grad_invcov_y_warp += __shfl_down_sync(0xffffffff, grad_invcov_y_warp, offset);
-                        grad_invcov_z_warp += __shfl_down_sync(0xffffffff, grad_invcov_z_warp, offset);
+                        float grad_invcov_x_warp = grad_invcov[threadidx].x + grad_invcov[threadidx + 32].x;
+                        float grad_invcov_y_warp = grad_invcov[threadidx].y + grad_invcov[threadidx + 32].y;
+                        float grad_invcov_z_warp = grad_invcov[threadidx].z + grad_invcov[threadidx + 32].z;
 
-                        grad_mean_x_warp += __shfl_down_sync(0xffffffff, grad_mean_x_warp, offset);
-                        grad_mean_y_warp += __shfl_down_sync(0xffffffff, grad_mean_y_warp, offset);
+                        float grad_mean_x_warp = grad_mean[threadidx].x + grad_mean[threadidx + 32].x;
+                        float grad_mean_y_warp = grad_mean[threadidx].y + grad_mean[threadidx + 32].y;
 
-                        grad_opacity_warp += __shfl_down_sync(0xffffffff, grad_opacity_warp, offset);
+                        float grad_opacity_warp = grad_opacity[threadidx] + grad_opacity[threadidx + 32];
+
+                        for (int offset = 16; offset > 0; offset /= 2)
+                        {
+                            grad_color_x_warp += __shfl_down_sync(0xffffffff, grad_color_x_warp, offset);
+                            grad_color_y_warp += __shfl_down_sync(0xffffffff, grad_color_y_warp, offset);
+                            grad_color_z_warp += __shfl_down_sync(0xffffffff, grad_color_z_warp, offset);
+
+                            grad_invcov_x_warp += __shfl_down_sync(0xffffffff, grad_invcov_x_warp, offset);
+                            grad_invcov_y_warp += __shfl_down_sync(0xffffffff, grad_invcov_y_warp, offset);
+                            grad_invcov_z_warp += __shfl_down_sync(0xffffffff, grad_invcov_z_warp, offset);
+
+                            grad_mean_x_warp += __shfl_down_sync(0xffffffff, grad_mean_x_warp, offset);
+                            grad_mean_y_warp += __shfl_down_sync(0xffffffff, grad_mean_y_warp, offset);
+
+                            grad_opacity_warp += __shfl_down_sync(0xffffffff, grad_opacity_warp, offset);
+                        }
+                        if (threadidx == 0)
+                        {
+                            int point_id = collected_point_id[i];
+                            atomicAdd(&d_color[batch_id][point_id][0], grad_color_x_warp);
+                            atomicAdd(&d_color[batch_id][point_id][1], grad_color_y_warp);
+                            atomicAdd(&d_color[batch_id][point_id][2], grad_color_z_warp);
+
+                            atomicAdd(&d_opacity[batch_id][point_id][0], grad_opacity_warp);
+
+                            atomicAdd(&d_mean2d[batch_id][point_id][0], grad_mean_x_warp);
+                            atomicAdd(&d_mean2d[batch_id][point_id][1], grad_mean_y_warp);
+
+                            atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], grad_invcov_x_warp);
+                            atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], grad_invcov_y_warp);
+                            atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], grad_invcov_y_warp);
+                            atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], grad_invcov_z_warp);
+                        }
+
                     }
-                    if (threadidx == 0)
-                    {
-                        int point_id = collected_point_id[i];
-                        atomicAdd(&d_color[batch_id][point_id][0], grad_color_x_warp);
-                        atomicAdd(&d_color[batch_id][point_id][1], grad_color_y_warp);
-                        atomicAdd(&d_color[batch_id][point_id][2], grad_color_z_warp);
-
-                        atomicAdd(&d_opacity[batch_id][point_id][0], grad_opacity_warp);
-
-                        atomicAdd(&d_mean2d[batch_id][point_id][0], grad_mean_x_warp);
-                        atomicAdd(&d_mean2d[batch_id][point_id][1], grad_mean_y_warp);
-
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], grad_invcov_x_warp);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], grad_invcov_y_warp);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], grad_invcov_y_warp);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], grad_invcov_z_warp);
-                    }
-
                 }
                 __syncthreads();
 
