@@ -491,8 +491,8 @@ __global__ void raster_backward_kernel(
                         float d_G = cur_color.w * d_alpha;
                         float d_power = G * d_G;
                         grad_invcov[threadidx].x = -0.5f * d.x * d.x * d_power;
-                        grad_invcov[threadidx].y = -0.5f * d.y * d.y * d_power;
-                        grad_invcov[threadidx].z = -0.5f * d.x * d.y * d_power;
+                        grad_invcov[threadidx].y = -0.5f * d.x * d.y * d_power;
+                        grad_invcov[threadidx].z = -0.5f * d.y * d.y * d_power;
 
                         //mean2d
                         float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
