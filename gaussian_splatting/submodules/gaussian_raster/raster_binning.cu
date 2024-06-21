@@ -190,10 +190,6 @@ __global__ void raster_forward_kernel(
     {
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
-        if (start_index_in_tile == -1)
-        {
-            return;
-        }
 
         float transmittance = 1.0f;
         bool done = false;
@@ -398,6 +394,7 @@ __global__ void raster_backward_kernel(
 
         float transmittance = final_transmitance[batch_id][blockIdx.x][y_in_tile][x_in_tile];
         int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile];
+
         float3 d_pixel{ 0,0,0 };
         if (pixel_x < img_w && pixel_y < img_h)
         {
@@ -423,9 +420,11 @@ __global__ void raster_backward_kernel(
                 int point_id = sorted_points[batch_id][index];
                 collected_point_id[i] = point_id;
 
-                collected_mean[i] = *reinterpret_cast<float2*>(mean2d[batch_id][point_id].data());
-                collected_invcov[i] = *reinterpret_cast<float3*>(cov2d_inv[batch_id][point_id].data());
-
+                collected_mean[i].x = mean2d[batch_id][point_id][0];
+                collected_mean[i].y = mean2d[batch_id][point_id][1];
+                collected_invcov[i].x = cov2d_inv[batch_id][point_id][0][0];
+                collected_invcov[i].y = cov2d_inv[batch_id][point_id][0][1];
+                collected_invcov[i].z = cov2d_inv[batch_id][point_id][1][1];
 
                 collected_color[i].x = color[batch_id][point_id][0];
                 collected_color[i].y = color[batch_id][point_id][1];
