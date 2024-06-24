@@ -369,7 +369,7 @@ __global__ void raster_backward_kernel(
     __shared__ float3 grad_invcov[tilesize * tilesize];
     __shared__ float2 grad_mean[tilesize * tilesize];
     __shared__ float grad_opacity[tilesize * tilesize];
- 
+
 
 
     const int batch_id = blockIdx.y;
@@ -405,9 +405,6 @@ __global__ void raster_backward_kernel(
         bool Done = (d_pixel.x == 0 && d_pixel.y == 0 && d_pixel.z == 0);
 
         float3 accum_rec{ 0,0,0 };
-        float3 last_color{ 0,0,0 };
-        float last_alpha = 0;
-        
         for (int offset = end_index_in_tile-1; offset >= start_index_in_tile; offset -= (tilesize * tilesize / 4))
         {
 
@@ -471,18 +468,13 @@ __global__ void raster_backward_kernel(
 
 
                         //alpha
-                        accum_rec.x = last_alpha * last_color.x + (1.0f - last_alpha) * accum_rec.x;
-                        accum_rec.y = last_alpha * last_color.y + (1.0f - last_alpha) * accum_rec.y;
-                        accum_rec.z = last_alpha * last_color.z + (1.0f - last_alpha) * accum_rec.z;
-                        last_color.x = cur_color.x;
-                        last_color.y = cur_color.y;
-                        last_color.z = cur_color.z;
-                        last_alpha = alpha;
-
                         float d_alpha = 0;
                         d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
                         d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
                         d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
+                        accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
+                        accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
+                        accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
 
                         //opacity
                         grad_opacity[threadidx] = G * d_alpha;
