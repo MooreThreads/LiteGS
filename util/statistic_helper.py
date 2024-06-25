@@ -64,7 +64,6 @@ class StatisticsHelper:
     def update_mean_std(self,key:str,tensor:torch.Tensor):
         assert(self.cur_batch_visible_pts is not None)
         assert(self.cur_batch_visible_num is not None)
-        assert(tensor.shape[0]==self.batch_n)
         assert(tensor.shape[1]==self.gaussian_num)
 
         #update dict
@@ -105,7 +104,7 @@ class StatisticsHelper:
         for i in range(self.batch_n):
             points_num=self.cur_batch_visible_num[i]
             points_index=self.cur_batch_visible_pts[i,:points_num]
-            self._update_mean_std_compact_internel(key,compact_tensor[i],points_index)
+            self._update_mean_std_compact_internel(key,compact_tensor[i,:points_num],points_index)
         return
     
     @torch.no_grad
@@ -158,7 +157,7 @@ class StatisticsHelper:
         for i in range(self.batch_n):
             points_num=self.cur_batch_visible_num[i]
             points_index=self.cur_batch_visible_pts[i,:points_num]
-            self._update_max_min_compact_internel(key,compact_tensor[i],points_index)
+            self._update_max_min_compact_internel(key,compact_tensor[i,:points_num],points_index)
         return 
     
     @torch.no_grad
@@ -169,7 +168,7 @@ class StatisticsHelper:
         for i in range(self.batch_n):
             points_num=self.cur_batch_visible_num[i]
             points_index=self.cur_batch_visible_pts[i,:points_num]
-            self.visible_count[points_index]-=1*compacted_invisible_mask[0]
+            self.visible_count[points_index]-=1*compacted_invisible_mask[i,:points_num]
         return
 
     @torch.no_grad

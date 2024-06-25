@@ -160,10 +160,10 @@ class GaussianSplattingModel:
         axis_length=(coefficient.unsqueeze(-1)*eigen_val).sqrt().ceil()
         extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().max(dim=-2).values
         
-        L=((coordX-extension[...,0])/tile_size).floor().int().clamp(0,tilesX)
-        U=((coordY-extension[...,1])/tile_size).floor().int().clamp(0,tilesY)
-        R=((coordX+extension[...,0]+tile_size-1)/tile_size).floor().int().clamp(0,tilesX)
-        D=((coordY+extension[...,1]+tile_size-1)/tile_size).floor().int().clamp(0,tilesY)
+        L=((coordX-extension[...,0])/tile_size).int().clamp(0,tilesX)
+        U=((coordY-extension[...,1])/tile_size).int().clamp(0,tilesY)
+        R=((coordX+extension[...,0]+tile_size-1)/tile_size).int().clamp(0,tilesX)
+        D=((coordY+extension[...,1]+tile_size-1)/tile_size).int().clamp(0,tilesY)
 
         #calculate params of allocation
         tiles_touched=(R-L)*(D-U)
@@ -234,7 +234,7 @@ class GaussianSplattingModel:
         visible_cov2d=self.create_cov2d_optimized(visible_scales,visible_rotators,visible_positions,view_matrix,camera_focal)
         
         ### color ###
-        dirs=visible_positions[...,:3]-camera_center_batch
+        dirs=visible_positions[...,:3]-camera_center_batch.unsqueeze(1)
         dirs=torch.nn.functional.normalize(dirs,dim=-1)
         visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh,dirs)
         

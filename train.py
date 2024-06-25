@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_epochs", nargs="+", type=int, default=[i for i in range(0,400,20)])
+    parser.add_argument("--test_epochs", nargs="+", type=int, default=[i for i in range(20,400,20)])
     parser.add_argument("--save_epochs", nargs="+", type=int, default=[200,400])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[40,80,120,200,400])

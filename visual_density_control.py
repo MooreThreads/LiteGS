@@ -58,7 +58,7 @@ statistic_helper.StatisticsHelperInst.reset(gaussian_model._xyz.shape[0])
 statistic_helper.StatisticsHelperInst.start()
 density_controller=DensityControllerOurs(args)
 start=time.monotonic()
-for i in range(view_matrix.shape[0]):
+for i in range(0,view_matrix.shape[0],1):
     with torch.no_grad():
         view_matrix_batch=view_matrix[i:i+1]
         view_project_matrix_batch=view_project_matrix[i:i+1]
