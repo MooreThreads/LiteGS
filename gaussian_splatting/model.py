@@ -148,22 +148,22 @@ class GaussianSplattingModel:
         #_eigen_val,_eigen_vec=torch.linalg.eigh(cov2d)
         det=cov2d[:,:,0,0]*cov2d[:,:,1,1]-cov2d[:,:,0,1]*cov2d[:,:,0,1]
         mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
-        temp=(mid*mid-det).clamp_min(0.1).sqrt()
+        temp=(mid*mid-det).clamp_min(1e-9).sqrt()
         eigen_val=torch.cat(((mid-temp).unsqueeze(-1),(mid+temp).unsqueeze(-1)),dim=-1)
         eigen_vec_y=((eigen_val-cov2d[...,0,0].unsqueeze(-1))/cov2d[...,0,1].unsqueeze(-1))
         eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-1),eigen_vec_y.unsqueeze(-1)),dim=-1)
         eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-1)
 
         # Major and minor axes -> AABB extensions
-        opacity_clamped=opacity.squeeze(-1).clamp_min(0.005)
+        opacity_clamped=opacity.squeeze(-1).clamp_min(1/255)
         coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
         axis_length=(coefficient.unsqueeze(-1)*eigen_val).sqrt().ceil()
-        extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().max(dim=-2).values
+        extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().sum(dim=-2)
         
         L=((coordX-extension[...,0])/tile_size).int().clamp(0,tilesX)
         U=((coordY-extension[...,1])/tile_size).int().clamp(0,tilesY)
-        R=((coordX+extension[...,0]+tile_size-1)/tile_size).int().clamp(0,tilesX)
-        D=((coordY+extension[...,1]+tile_size-1)/tile_size).int().clamp(0,tilesY)
+        R=((coordX+extension[...,0])/tile_size).ceil().int().clamp(0,tilesX)
+        D=((coordY+extension[...,1])/tile_size).ceil().int().clamp(0,tilesY)
 
         #calculate params of allocation
         tiles_touched=(R-L)*(D-U)
