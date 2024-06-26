@@ -99,7 +99,7 @@ class GaussianTrain:
         self.opt_params=op
 
         self.image_size=self.image_list[0].image.size
-        self.tile_size=16
+        self.tile_size=8
         self.iter_start=0
 
         screen_size_threshold=None#20
