@@ -1671,3 +1671,114 @@ at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, at::Tensor sh, a
     CUDA_CHECK_ERRORS;
     return sh_grad;
 }
+
+
+template <typename scalar_t>
+__global__ void eigh_and_inv_2x2matrix_kernel_forward(
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> input,    //[batch,point_num,2,2] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> val,   //[batch,point_num,2] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> vec,   //[batch,point_num,2,2] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> inv   //[batch,point_num,2,2] 
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+
+    if (batch_id < input.size(0) && index < input.size(1))
+    {
+        float input_matrix[2][2] = { {input[batch_id][index][0][0],input[batch_id][index][0][1]},{input[batch_id][index][1][0],input[batch_id][index][1][1]}};
+        float det = input_matrix[0][0] * input_matrix[1][1] - input_matrix[0][1] * input_matrix[1][0];
+        float mid = 0.5f * (input_matrix[0][0] + input_matrix[1][1]);
+        float temp = sqrt(max(mid * mid - det,1e-9f));
+
+        val[batch_id][index][0] = mid - temp;
+        val[batch_id][index][1] = mid + temp;
+
+        float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / input_matrix[0][1];
+        float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / input_matrix[0][1];
+
+        float square_sum_0_recip = 1/sqrt(1 + vec_y_0 * vec_y_0);
+        float square_sum_1_recip = 1/sqrt(1 + vec_y_1 * vec_y_1);
+
+        vec[batch_id][index][0][0] = square_sum_0_recip; vec[batch_id][index][0][1] = vec_y_0 * square_sum_0_recip;
+        vec[batch_id][index][1][0] = square_sum_1_recip; vec[batch_id][index][1][1] = vec_y_1 * square_sum_1_recip;
+        
+        float det_recip = 1 / det;
+        inv[batch_id][index][0][1] = -input_matrix[0][1] * det_recip;
+        inv[batch_id][index][1][0] = -input_matrix[1][0] * det_recip;
+        inv[batch_id][index][0][0] = input_matrix[1][1] * det_recip;
+        inv[batch_id][index][1][1] = input_matrix[0][0] * det_recip;
+
+    }
+
+}
+
+
+template <typename scalar_t>
+__global__ void inv_2x2matrix_kernel_backward(
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> Invmatrix,    //[batch,point_num,2,2] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dInvmatrix,    //[batch,point_num,2,2] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dMatrix   //[batch,point_num,2,2] 
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.y;
+
+    if (batch_id < Invmatrix.size(0) && index < Invmatrix.size(1))
+    {
+        scalar_t inv_matrix[2][2];
+        scalar_t dl_dinvmatrix[2][2];
+        scalar_t temp[2][2];
+        scalar_t dl_dmatrix[2][2];
+
+        load_matrix<scalar_t, 2, 2>(&inv_matrix, Invmatrix[batch_id][index]);
+        load_matrix<scalar_t, 2, 2>(&dl_dinvmatrix, dL_dInvmatrix[batch_id][index]);
+
+        matmul<scalar_t, 2, 2, 2>(inv_matrix, dl_dinvmatrix, temp);
+        matmul<scalar_t, 2, 2, 2>(temp, inv_matrix, dl_dmatrix);
+
+        dl_dmatrix[0][0] = -dl_dmatrix[0][0]; dl_dmatrix[0][1] = -dl_dmatrix[0][1];
+        dl_dmatrix[1][0] = -dl_dmatrix[1][0]; dl_dmatrix[1][1] = -dl_dmatrix[1][1];
+
+        save_matrix<scalar_t, 2, 2>(&dl_dmatrix, dL_dMatrix[batch_id][index]);
+    }
+
+}
+
+std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
+{
+    int N = input.size(0);
+    int P = input.size(1);
+    at::Tensor vec = torch::zeros({ N,P,2,2 }, input.options().requires_grad(false));
+    at::Tensor val = torch::zeros({ N,P,2 }, input.options().requires_grad(false));
+    at::Tensor inv = torch::zeros({ N,P,2,2 }, input.options());
+
+    int threadsnum = 1024;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.type(), __FUNCTION__, [&] {eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
+        input.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+        val.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+        vec.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+        inv.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+
+    return { val,vec,inv };
+}
+
+at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix)
+{
+    int N = inv_matrix.size(0);
+    int P = inv_matrix.size(1);
+    at::Tensor dL_dMatrix = torch::zeros_like(dL_dInvMatrix);
+
+    int threadsnum = 1024;
+    dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
+
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(inv_matrix.type(), __FUNCTION__, [&] {inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
+        inv_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+        dL_dInvMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+        dL_dMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+
+    return dL_dMatrix;
+
+}

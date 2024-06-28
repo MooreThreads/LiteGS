@@ -15,4 +15,6 @@ TORCH_LIBRARY(RasterBinning, m) {
   m.def("createCov2dDirectly_backward", createCov2dDirectly_backward);
   m.def("sh2rgb_forward", sh2rgb_forward);
   m.def("sh2rgb_backward", sh2rgb_backward);
+  m.def("eigh_and_inv_2x2matrix_forward", eigh_and_inv_2x2matrix_forward);
+  m.def("inv_2x2matrix_backward", inv_2x2matrix_backward);
 }

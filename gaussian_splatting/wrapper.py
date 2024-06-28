@@ -361,3 +361,44 @@ def sh2rgb(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
         return SphericalHarmonic.apply(deg,sh,dirs).clamp_min(0)
     
     return sh2rgb_internel_v2(deg,sh,dirs)
+
+
+###
+### eigh[no grad] and inverse[grad] the matrix.
+###
+class EighAndInverse(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,input_matrix:torch.Tensor):
+        val,vec,inverse_matrix=torch.ops.RasterBinning.eigh_and_inv_2x2matrix_forward(input_matrix)
+        ctx.save_for_backward(inverse_matrix)
+        return val,vec,inverse_matrix
+    
+    @staticmethod
+    def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
+        (inverse_matrix,)=ctx.saved_tensors
+        matrix_grad=torch.ops.RasterBinning.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+        return matrix_grad
+    
+def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
+
+    def eigh_and_inverse_cov2d_internel_v1(cov2d:torch.Tensor):
+        det=torch.det(cov2d)
+        with torch.no_grad():
+            mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
+            temp=(mid*mid-det).clamp_min(1e-9).sqrt()
+            eigen_val=torch.cat(((mid-temp).unsqueeze(-1),(mid+temp).unsqueeze(-1)),dim=-1)
+            eigen_vec_y=((eigen_val-cov2d[...,0,0].unsqueeze(-1))/cov2d[...,0,1].unsqueeze(-1))
+            eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-1),eigen_vec_y.unsqueeze(-1)),dim=-1)
+            eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-1)
+        reci_det=1/(torch.det(cov2d)+1e-7)
+        cov2d_inv=torch.zeros_like(cov2d)
+        cov2d_inv[...,0,1]=-cov2d[...,0,1]*reci_det
+        cov2d_inv[...,1,0]=-cov2d[...,1,0]*reci_det
+        cov2d_inv[...,0,0]=cov2d[...,1,1]*reci_det
+        cov2d_inv[...,1,1]=cov2d[...,0,0]*reci_det
+        return eigen_val,eigen_vec,cov2d_inv
+    
+    def eigh_and_inverse_cov2d_internel_v2(cov2d:torch.Tensor):
+        return EighAndInverse.apply(cov2d)
+
+    return eigh_and_inverse_cov2d_internel_v2(cov2d)

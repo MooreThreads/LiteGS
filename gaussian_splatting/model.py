@@ -133,7 +133,7 @@ class GaussianSplattingModel:
 
     
     @torch.no_grad()
-    def binning(self,ndc:torch.Tensor,cov2d:torch.Tensor,opacity:torch.Tensor,valid_points_num:torch.Tensor,bTraining=False):
+    def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,valid_points_num:torch.Tensor,bTraining=False):
         
         tilesX=self.cached_tiles_size[0]
         tilesY=self.cached_tiles_size[1]
@@ -144,15 +144,6 @@ class GaussianSplattingModel:
 
         coordX=(ndc[:,:,0]+1.0)*0.5*image_size[0]-0.5
         coordY=(ndc[:,:,1]+1.0)*0.5*image_size[1]-0.5
-
-        #_eigen_val,_eigen_vec=torch.linalg.eigh(cov2d)
-        det=cov2d[:,:,0,0]*cov2d[:,:,1,1]-cov2d[:,:,0,1]*cov2d[:,:,0,1]
-        mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
-        temp=(mid*mid-det).clamp_min(1e-9).sqrt()
-        eigen_val=torch.cat(((mid-temp).unsqueeze(-1),(mid+temp).unsqueeze(-1)),dim=-1)
-        eigen_vec_y=((eigen_val-cov2d[...,0,0].unsqueeze(-1))/cov2d[...,0,1].unsqueeze(-1))
-        eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-1),eigen_vec_y.unsqueeze(-1)),dim=-1)
-        eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-1)
 
         # Major and minor axes -> AABB extensions
         opacity_clamped=opacity.squeeze(-1).clamp_min(1/255)
@@ -192,19 +183,10 @@ class GaussianSplattingModel:
             
         return tile_start_index,sorted_pointId,sorted_tileId,pixel_radius.unsqueeze(-1)
     
-    def raster(self,ndc_pos:torch.Tensor,cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
-        
-        # cov2d_inv=torch.linalg.inv(cov2d)#forward backward 1s
-        #faster but unstable
-        reci_det=1/(torch.det(cov2d)+1e-7)
-        cov2d_inv=torch.zeros_like(cov2d)
-        cov2d_inv[...,0,1]=-cov2d[...,0,1]*reci_det
-        cov2d_inv[...,1,0]=-cov2d[...,1,0]*reci_det
-        cov2d_inv[...,0,0]=cov2d[...,1,1]*reci_det
-        cov2d_inv[...,1,1]=cov2d[...,0,0]*reci_det
-
+    def raster(self,ndc_pos:torch.Tensor,inv_cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
+    
         mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
-        img,transmitance=wrapper.rasterize_2d_gaussian(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+        img,transmitance=wrapper.rasterize_2d_gaussian(sorted_pointId,tile_start_index,mean2d,inv_cov2d,color,opacities,tiles,
                                                self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
 
         return img,transmitance
@@ -232,6 +214,7 @@ class GaussianSplattingModel:
         #cov3d,transform_matrix=self.transform_to_cov3d(visible_scales,visible_rotators)
         #visible_cov2d=self.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix,camera_focal)
         visible_cov2d=self.create_cov2d_optimized(visible_scales,visible_rotators,visible_positions,view_matrix,camera_focal)
+        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(visible_cov2d)
         
         ### color ###
         dirs=visible_positions[...,:3]-camera_center_batch.unsqueeze(1)
@@ -242,7 +225,7 @@ class GaussianSplattingModel:
         ndc_pos_batch=wrapper.wrold2ndc(visible_positions,view_project_matrix)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,visible_cov2d,visible_opacities,visible_points_num)
+        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,visible_opacities,visible_points_num)
         if StatisticsHelperInst.bStart and visible_positions.requires_grad:
             StatisticsHelperInst.update_invisible_compact(radii.squeeze(-1)==0)
 
@@ -250,7 +233,7 @@ class GaussianSplattingModel:
         if tiles is None:
             batch_size=visible_points_num.shape[0]
             tiles=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
-        tile_img,tile_transmitance=self.raster(ndc_pos_batch,visible_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
+        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
 
         
         return tile_img,tile_transmitance.unsqueeze(2)
