@@ -12,7 +12,7 @@ def gaussian(window_size:int, sigma:float):
     gauss = torch.Tensor([math.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
     return gauss / gauss.sum()
 
-def ssim(img1,img2,window,window_size,channel,size_average=True):
+def _ssim(img1,img2,window,window_size,channel,size_average=True):
     mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
     mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
 
@@ -34,24 +34,23 @@ def ssim(img1,img2,window,window_size,channel,size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
-class LossSSIM:
+class LossSSIM(torch.nn.Module):
     def __init__(self,window_size:int=11,img_channel:int=3):
+        super(LossSSIM, self).__init__()
         self.window_size=window_size
         self.channel=img_channel
-        self.conv_kernel=self.__create_window()
+        gaussian_kernel=self.__create_window()
+        self.register_buffer('gaussian_kernel',gaussian_kernel)
         return
 
-    def cuda(self):
-        self.conv_kernel=self.conv_kernel.cuda()
-        return self
 
-    def loss(self,img1,img2,size_average=True):
-        result=ssim(img1,img2,self.conv_kernel,self.window_size,self.channel,size_average)
+    def forward(self,img1,img2,size_average=True):
+        result=_ssim(img1,img2,self.gaussian_kernel,self.window_size,self.channel,size_average)
         return result
     
     def __create_window(self):
         _1D_window = gaussian(self.window_size, 1.5).unsqueeze(1)
         _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-        window = torch.autograd.Variable(_2D_window.expand(self.channel, 1, self.window_size, self.window_size).contiguous())
+        window = torch.Tensor(_2D_window.expand(self.channel, 1, self.window_size, self.window_size).contiguous())
         return window
     

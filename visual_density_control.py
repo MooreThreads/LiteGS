@@ -4,11 +4,12 @@ import typing
 from loader.InfoLoader import CameraInfo,ImageInfo
 from gaussian_splatting.scene import GaussianScene
 from gaussian_splatting.model import GaussianSplattingModel
+import training.loss
+from training.loss.ssim import SSIM
 from training.training import ViewManager
 from training.densitycontroller import DensityControllerOurs
 import torch
 from util import tiles2img_torch,statistic_helper
-from training.utils import loss_utils
 from matplotlib import pyplot as plt 
 from training.arguments import OptimizationParams
 import time
@@ -53,7 +54,7 @@ camera_center=torch.Tensor(view_manager.camera_center_tensor).cuda()
 camera_focal=torch.Tensor(view_manager.camera_focal_tensor).cuda()
 ground_truth=torch.Tensor(view_manager.view_gt_tensor).cuda()
 total_views_num=view_matrix.shape[0]
-ssim_helper=loss_utils.LossSSIM().cuda()
+ssim_module=training.loss.LossSSIM().cuda()
 statistic_helper.StatisticsHelperInst.reset(gaussian_model._xyz.shape[0])
 statistic_helper.StatisticsHelperInst.start()
 density_controller=DensityControllerOurs(args)
@@ -69,11 +70,11 @@ for i in range(0,view_matrix.shape[0],1):
     tile_img,tile_transmitance=gaussian_model.render(None,None,
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,
                               None)
-    img=tiles2img_torch(tile_img,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]]
-    transmitance=tiles2img_torch(tile_transmitance,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]]
+    img=tiles2img_torch(tile_img,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]].contiguous()
+    #transmitance=tiles2img_torch(tile_transmitance,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]]
 
-    l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
-    ssim_loss=ssim_helper.loss(img,ground_truth_batch)
+    l1_loss=training.loss.l1_loss(img,ground_truth_batch)
+    ssim_loss=ssim_module(img,ground_truth_batch)
     loss=(1.0-0.2)*l1_loss+0.2*(1-ssim_loss)
     loss.backward()
     statistic_helper.StatisticsHelperInst.update_mean_std('xyz_grad',gaussian_model._xyz.grad.unsqueeze(0))

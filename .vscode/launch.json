@@ -37,6 +37,7 @@
             "request": "launch",
             "program": "${file}",
             "cwd":"${workspaceFolder}",
+            "justMyCode": false,
             "console": "integratedTerminal"
         }
     ]

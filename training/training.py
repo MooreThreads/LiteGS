@@ -2,9 +2,10 @@ from gaussian_splatting.model import GaussianSplattingModel
 from training.arguments import OptimizationParams,ModelParams
 from gaussian_splatting.scene import GaussianScene
 from loader.InfoLoader import CameraInfo,ImageInfo,PinHoleCameraInfo
+import training.loss.ssim
 from util.camera import View
 from training import cache
-from training.utils import loss_utils
+import training.loss
 from gaussian_splatting.division import GaussianSceneDivision
 from training.densitycontroller import DensityControllerOurs
 from util.statistic_helper import StatisticsHelperInst
@@ -206,7 +207,7 @@ class GaussianTrain:
         counter=0
         iter_range=list(range(0,total_views_num,batch_size))
         random.shuffle(iter_range)
-        ssim_helper=loss_utils.LossSSIM().cuda()
+        ssim_module=training.loss.ssim.SSIM(data_range=1.0).cuda()
 
         ### iter batch ###
         for iter_i,i in enumerate(iter_range):
@@ -226,11 +227,11 @@ class GaussianTrain:
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,
                               self.__regularization_loss_backward)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
 
             #### loss ###
-            l1_loss=loss_utils.l1_loss(img,ground_truth_batch)
-            ssim_loss=ssim_helper.loss(img,ground_truth_batch)
+            l1_loss=training.loss.l1_loss(img,ground_truth_batch)
+            ssim_loss=ssim_module(img,ground_truth_batch)
             loss=(1.0-self.opt_params.lambda_dssim)*l1_loss+self.opt_params.lambda_dssim*(1-ssim_loss)
             loss.backward()
             log_loss+=l1_loss.detach()
@@ -282,7 +283,7 @@ class GaussianTrain:
             tile_img,tile_transmitance=self.model.render(None,None,
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-            transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             
             img_list.append(img[...,0:self.image_size[1],0:self.image_size[0]])
             if bLog:

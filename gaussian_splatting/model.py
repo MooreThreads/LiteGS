@@ -236,4 +236,4 @@ class GaussianSplattingModel:
         tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
 
         
-        return tile_img,tile_transmitance.unsqueeze(2)
+        return tile_img,tile_transmitance.unsqueeze(1)
