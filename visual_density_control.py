@@ -27,7 +27,7 @@ args = OptimizationParams(ArgumentParser(description="Training script parameters
 
 
 gaussian_model=GaussianSplattingModel(scene,NerfNormRadius)
-gaussian_model.update_tiles_coord(image_size,16)
+gaussian_model.update_tiles_coord(image_size,8)
 (model_params,op_state_dict, first_iter,actived_sh_degree) = torch.load('output/chkpnt200_baseline.pth')
 gaussian_model.load_params(model_params)
 gaussian_model.actived_sh_degree=actived_sh_degree

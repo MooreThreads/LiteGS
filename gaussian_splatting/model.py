@@ -152,7 +152,7 @@ class GaussianSplattingModel:
         extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().sum(dim=-2)
 
         for i in range(ndc.shape[0]):
-            extension[i]=ndc[i,extension[i]]
+            extension[i]=extension[i,point_ids[i]]
         
         L=((coordX-extension[...,0])/tile_size).int().clamp(0,tilesX)
         U=((coordY-extension[...,1])/tile_size).int().clamp(0,tilesY)
@@ -226,7 +226,7 @@ class GaussianSplattingModel:
         ndc_pos_batch=wrapper.wrold2ndc(visible_positions,view_project_matrix)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,visible_cov2d,visible_opacities,visible_points_num)
+        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,visible_opacities,visible_points_num)
 
         #### raster ###
         if tiles is None:
