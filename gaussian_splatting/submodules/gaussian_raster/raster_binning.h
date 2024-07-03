@@ -1,7 +1,7 @@
 #include <torch/extension.h>
 
 
-std::vector<at::Tensor> duplicateWithKeys(at::Tensor L,at::Tensor U,at::Tensor R,at::Tensor D,at::Tensor ValidPointNum,at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX);
+std::vector<at::Tensor> duplicateWithKeys(at::Tensor L,at::Tensor U,at::Tensor R,at::Tensor D,at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX);
 at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_tileId);
 
 std::vector<at::Tensor> rasterize_forward(
@@ -50,7 +50,7 @@ at::Tensor createCov2dDirectly_backward(at::Tensor cov2d_grad, at::Tensor J, at:
 
 at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh, at::Tensor dir);
 
-at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, at::Tensor sh, at::Tensor dir);
+at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_dim, at::Tensor dir);
 
 std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input);
 at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix, at::Tensor dL_dInvMatrix);

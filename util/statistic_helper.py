@@ -62,8 +62,7 @@ class StatisticsHelper:
     
     @torch.no_grad
     def update_mean_std(self,key:str,tensor:torch.Tensor):
-        assert(self.cur_batch_visible_pts is not None)
-        assert(self.cur_batch_visible_num is not None)
+        #assert(tensor.shape[0]==self.batch_n)
         assert(tensor.shape[1]==self.gaussian_num)
 
         #update dict

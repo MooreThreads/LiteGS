@@ -84,7 +84,7 @@ for i in range(0,view_matrix.shape[0],1):
     #         diff_img=torch.abs(img - ground_truth_batch)
 torch.cuda.synchronize()
 end=time.monotonic()
-print("takes:{0} ms".format(end-start))
+print("takes:{0} ms".format(end-start))#19ms
 #########################################
 # plot abnormal points
 #########################################

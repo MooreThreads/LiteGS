@@ -130,12 +130,12 @@ class World2NDC(torch.autograd.Function):
         hom_pos=torch.matmul(position,view_project_matrix)
         repc_hom_w=1/(hom_pos[...,3:4]+1e-7)
         ndc_pos=hom_pos*repc_hom_w
-        ctx.save_for_backward(view_project_matrix,position,repc_hom_w)
+        ctx.save_for_backward(view_project_matrix,ndc_pos,repc_hom_w)
         return ndc_pos
     
     @staticmethod
     def backward(ctx,grad_ndc_pos:torch.Tensor):
-        (view_project_matrix,position,repc_hom_w)=ctx.saved_tensors
+        (view_project_matrix,ndc_pos,repc_hom_w)=ctx.saved_tensors
 
         # repc_hom_w=repc_hom_w[...,0]
         # position_grad=torch.zeros_like(position)
@@ -149,7 +149,7 @@ class World2NDC(torch.autograd.Function):
 
         # position_grad[...,2]=(view_project_matrix[...,2,0] * repc_hom_w - view_project_matrix[...,2,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,2,1] * repc_hom_w - view_project_matrix[...,2,3] * mul2) * grad_ndc_pos[...,1]
 
-        position_grad=torch.ops.RasterBinning.world2ndc_backword(view_project_matrix,position,repc_hom_w,grad_ndc_pos)
+        position_grad=torch.ops.RasterBinning.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
 
         return (position_grad,None)
 
@@ -338,16 +338,18 @@ def rasterize_2d_gaussian(
 class SphericalHarmonic(torch.autograd.Function):
     @staticmethod
     def forward(ctx,deg:int, sh:torch.Tensor, dirs:torch.Tensor):
-        ctx.save_for_backward(sh,dirs)
+        ctx.save_for_backward(dirs)
         ctx.degree=deg
+        ctx.sh_dim=sh.shape[-2]
         rgb=torch.ops.RasterBinning.sh2rgb_forward(deg,sh,dirs)
         return rgb
     
     @staticmethod
     def backward(ctx, grad_rgb):
-        sh,dirs=ctx.saved_tensors
+        (dirs,)=ctx.saved_tensors
         degree=ctx.degree
-        sh_grad=torch.ops.RasterBinning.sh2rgb_backward(degree,grad_rgb,sh,dirs)
+        sh_dim=ctx.sh_dim
+        sh_grad=torch.ops.RasterBinning.sh2rgb_backward(degree,grad_rgb,sh_dim,dirs)
 
 
         return None,sh_grad,None
