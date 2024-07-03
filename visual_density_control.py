@@ -71,7 +71,6 @@ for i in range(0,view_matrix.shape[0],1):
                               view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,
                               None)
     img=tiles2img_torch(tile_img,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]].contiguous()
-    #transmitance=tiles2img_torch(tile_transmitance,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]]
 
     l1_loss=training.loss.l1_loss(img,ground_truth_batch)
     ssim_loss=ssim_module(img,ground_truth_batch)

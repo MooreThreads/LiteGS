@@ -23,7 +23,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "./train.py",
-            "args":["--sh_degree","3","-s","dataset/garden","-i","images","-m","output/garden","--eval","--start_checkpoint","output/garden/chkpnt39.pth"],
+            "args":["--sh_degree","3","-s","dataset/garden","-i","images","-m","output/garden","--eval","--start_checkpoint","output/chkpnt200_baseline.pth"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false,
