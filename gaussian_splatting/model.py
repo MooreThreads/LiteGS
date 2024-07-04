@@ -119,17 +119,17 @@ class GaussianSplattingModel:
         return visible_point,visible_points_num
     
     def sample_by_visibility(self,visible_points_for_views):
-        scales=self._scaling[visible_points_for_views].contiguous().exp()
-        rotators=torch.nn.functional.normalize(self._rotation[visible_points_for_views].contiguous(),dim=-1)
+        scales=self._scaling.contiguous().exp()
+        rotators=torch.nn.functional.normalize(self._rotation.contiguous(),dim=-1)
 
-        visible_positions=self._xyz[visible_points_for_views].contiguous()
-        visible_opacities=self._opacity[visible_points_for_views].contiguous().sigmoid()
-        visible_sh=torch.concat((self._features_dc[visible_points_for_views],self._features_rest[visible_points_for_views]),dim=1).contiguous()
+        visible_positions=self._xyz.contiguous()
+        visible_opacities=self._opacity.contiguous().sigmoid()
+        visible_sh=torch.concat((self._features_dc,self._features_rest),dim=1).contiguous()
         return scales,rotators,visible_positions,visible_opacities,visible_sh
 
     
     @torch.no_grad()
-    def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,valid_points_num:torch.Tensor,bTraining=False):
+    def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor):
         
         tilesX=self.cached_tiles_size[0]
         tilesY=self.cached_tiles_size[1]
@@ -148,16 +148,17 @@ class GaussianSplattingModel:
         # Major and minor axes -> AABB extensions
         opacity_clamped=opacity.squeeze(-1).clamp_min(1/255)
         coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
-        axis_length=(coefficient.unsqueeze(-1)*eigen_val).sqrt().ceil()
+        axis_length=(coefficient.unsqueeze(-1)*eigen_val.abs()).sqrt().ceil()
         extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().sum(dim=-2)
 
         for i in range(ndc.shape[0]):
             extension[i]=extension[i,point_ids[i]]
         
-        L=((coordX-extension[...,0])/tile_size).int().clamp(0,tilesX)
-        U=((coordY-extension[...,1])/tile_size).int().clamp(0,tilesY)
-        R=((coordX+extension[...,0])/tile_size).ceil().int().clamp(0,tilesX)
-        D=((coordY+extension[...,1])/tile_size).ceil().int().clamp(0,tilesY)
+        b_visible=~((ndc[...,0]<-1.3)|(ndc[...,0]>1.3)|(ndc[...,1]>1.3)|(ndc[...,1]>1.3)|(ndc[...,2]>1)|(ndc[...,2]<0))
+        L=((coordX-extension[...,0])/tile_size).int().clamp(0,tilesX)*b_visible
+        U=((coordY-extension[...,1])/tile_size).int().clamp(0,tilesY)*b_visible
+        R=((coordX+extension[...,0])/tile_size).ceil().int().clamp(0,tilesX)*b_visible
+        D=((coordY+extension[...,1])/tile_size).ceil().int().clamp(0,tilesY)*b_visible
 
         #calculate params of allocation
         tiles_touched=(R-L)*(D-U)
@@ -204,10 +205,9 @@ class GaussianSplattingModel:
         if visible_points_num is None or visible_points is None:
             #compute visibility
             with torch.no_grad():
-                ndc_pos=cg_torch.world_to_ndc(self._xyz,view_project_matrix)
-                visible_points,visible_points_num=self.culling_and_sort(ndc_pos)
+                pass
 
-        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh=self.sample_by_visibility(visible_points)
+        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh=self.sample_by_visibility(None)
         if prebackward_func is not None:
             prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh)
 
@@ -226,7 +226,7 @@ class GaussianSplattingModel:
         ndc_pos_batch=wrapper.wrold2ndc(visible_positions,view_project_matrix)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,visible_opacities,visible_points_num)
+        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,visible_opacities)
 
         #### raster ###
         if tiles is None:

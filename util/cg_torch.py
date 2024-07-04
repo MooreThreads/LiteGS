@@ -83,7 +83,7 @@ def viewproj_to_frustumplane(viewproj_matrix:torch.Tensor)->torch.Tensor:
     return frustumplane
 
 @torch.no_grad
-def frustum_culling_aabb(frustumplane,aabb_origin,aabb_ext):
+def frustum_culling_aabb(frustumplane,aabb_origin,aabb_ext)->torch.Tensor:
     '''
     Parameters:
         frustumplane - the planes of view frustum. [N,6,4]
