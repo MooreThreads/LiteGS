@@ -53,14 +53,12 @@ class DensityControllerBase:
         return optimizable_tensors
 
     def _fix_model_parameters(self,gaussian_model:GaussianSplattingModel,optimizable_tensors:dict):
-        gen_chunk_num=optimizable_tensors["xyz"].shape[0]-gaussian_model._xyz.shape[0]
         gaussian_model._xyz = optimizable_tensors["xyz"]
         gaussian_model._features_dc = optimizable_tensors["f_dc"]
         gaussian_model._features_rest = optimizable_tensors["f_rest"]
         gaussian_model._opacity = optimizable_tensors["opacity"]
         gaussian_model._scaling = optimizable_tensors["scaling"]
         gaussian_model._rotation = optimizable_tensors["rotation"]
-        gaussian_model.build_AABB_for_additional_chunks(gen_chunk_num)
         return
     
     def _replace_tensor_to_optimizer(self, tensor:torch.Tensor, name:str,optimizer:torch.optim.Optimizer):
@@ -92,13 +90,17 @@ class DensityControllerBase:
         return
 
     def update_optimizer_and_model(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,valid_points_mask:torch.Tensor=None,dict_clone:dict=None,dict_split:dict=None):
+        gen_chunks_num=0
         if valid_points_mask is not None:
             optimizable_tensors=self._prune_optimizer(valid_points_mask,optimizer)
         if dict_clone is not None:
             optimizable_tensors=self._cat_tensors_to_optimizer(dict_clone,optimizer)
+            gen_chunks_num+=dict_clone['xyz'].shape[0]
         if dict_split is not None:
             optimizable_tensors=self._cat_tensors_to_optimizer(dict_split,optimizer)
+            gen_chunks_num+=dict_split['xyz'].shape[0]
         self._fix_model_parameters(gaussian_model,optimizable_tensors)
+        gaussian_model.build_AABB_for_additional_chunks(gen_chunks_num,valid_points_mask)
         return
     
 class DensityControllerOfficial(DensityControllerBase):
@@ -151,13 +153,12 @@ class DensityControllerOfficial(DensityControllerBase):
         
         
         prune_mask=self.prune(gaussian_model)
-        prune_mask=prune_mask.sum(1)>gaussian_model.chunk_size*0.5
+        prune_mask=prune_mask.sum(1)>gaussian_model.chunk_size*0.8
         if bPrune==False:
             prune_mask[:]=False
 
         clone_mask=self.densify_and_clone(gaussian_model)
-        clone_chunk_num=50
-        clone_mask=clone_mask.sum(1).sort(descending=True).indices[:clone_chunk_num]
+        clone_mask=clone_mask.sum(1)>gaussian_model.chunk_size*0.2
         
         dict_clone = {"xyz": gaussian_model._xyz[clone_mask],
         "opacity": gaussian_model._opacity[clone_mask],
@@ -188,16 +189,13 @@ class DensityControllerOfficial(DensityControllerBase):
         
         valid_points_mask=(~prune_mask)#&(~split_mask)
         self.update_optimizer_and_model(gaussian_model,optimizer,valid_points_mask,dict_clone,None)#dict_split)
-        print("\nclone_num:{0} prune_num:{1} cur_points_num:{2}".format(clone_chunk_num*gaussian_model.chunk_size,prune_mask.sum().cpu()*gaussian_model.chunk_size,gaussian_model._xyz.shape[0]*gaussian_model._xyz.shape[1]))
+        print("\nclone_num:{0} prune_num:{1} cur_points_num:{2}".format(clone_mask.sum().cpu()*gaussian_model.chunk_size,prune_mask.sum().cpu()*gaussian_model.chunk_size,gaussian_model._xyz.shape[0]*gaussian_model._xyz.shape[1]))
         torch.cuda.empty_cache()
         return
     
     @torch.no_grad
     def reset_opacity(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
-        def inverse_sigmoid(x):
-            return torch.log(x/(1-x))
-        decay_opacities=gaussian_model._opacity.sigmoid().clamp_max(0.01)
-        opacities_new = inverse_sigmoid(decay_opacities)
+        opacities_new = gaussian_model._opacity*0.5
         optimizable_tensors = self._replace_tensor_to_optimizer(opacities_new, "opacity",optimizer)
         self._opacity = optimizable_tensors["opacity"]
         torch.cuda.empty_cache()

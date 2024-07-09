@@ -120,7 +120,10 @@ class GaussianSplattingModel:
         return
 
     @torch.no_grad()
-    def build_AABB_for_additional_chunks(self,chunks_num):
+    def build_AABB_for_additional_chunks(self,chunks_num,valid_mask):
+        self.chunk_AABB_origin=self.chunk_AABB_origin[valid_mask]
+        self.chunk_AABB_extend=self.chunk_AABB_extend[valid_mask]
+
         scale=self._scaling[-1-chunks_num:-1].reshape(-1,3).exp()
         roator=torch.nn.functional.normalize(self._rotation[-1-chunks_num:-1],dim=-1).reshape(-1,4)
         cov3d,_=self.transform_to_cov3d(scale,roator)
