@@ -130,7 +130,14 @@ class GSpointBatch(ObjectBatchBase):
     @torch.no_grad()
     def _get_extend(self):
         #todo
-        eigen_val,eigen_vec=torch.linalg.eigh(self.cov)
+        eigen_val_list=[]
+        eigen_vec_list=[]
+        for start_inedx in range(0,self.cov.shape[0],1024*1024):
+            eigen_val,eigen_vec=torch.linalg.eigh(self.cov[start_inedx:start_inedx+1024*1024])
+            eigen_val_list.append(eigen_val)
+            eigen_vec_list.append(eigen_vec)
+        eigen_val=torch.cat(eigen_val_list)
+        eigen_vec=torch.cat(eigen_vec_list)
         eigen_val=eigen_val.abs()
         coefficient=2*math.log(255)
         extend=((coefficient*eigen_val.unsqueeze(-1)).sqrt()*eigen_vec).abs().sum(dim=-2)

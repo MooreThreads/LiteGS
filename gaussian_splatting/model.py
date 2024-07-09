@@ -144,8 +144,17 @@ class GaussianSplattingModel:
         scale=self._scaling.reshape(-1,3).exp()
         roator=torch.nn.functional.normalize(self._rotation,dim=-1).reshape(-1,4)
         cov3d,_=self.transform_to_cov3d(scale,roator)
+        cov3d=cov3d.reshape(-1,self.chunk_size,3,3)
 
-        eigen_val,eigen_vec=torch.linalg.eigh(cov3d.reshape(-1,self.chunk_size,3,3))
+        eigen_val_list=[]
+        eigen_vec_list=[]
+        for start_inedx in range(0,cov3d.shape[0],1024):
+            eigen_val,eigen_vec=torch.linalg.eigh(cov3d[start_inedx:start_inedx+1024])
+            eigen_val_list.append(eigen_val)
+            eigen_vec_list.append(eigen_vec)
+        eigen_val=torch.cat(eigen_val_list)
+        eigen_vec=torch.cat(eigen_vec_list)
+
         eigen_val=eigen_val.abs()
         coefficient=2*math.log(255)
         point_extend=((coefficient*eigen_val.unsqueeze(-1)).sqrt()*eigen_vec).abs().sum(dim=-2)
