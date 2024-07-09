@@ -5,7 +5,7 @@ import math
 
 class ObjectBase:
 
-    def __init__(self,obj_id:torch.Tensor,position:torch.Tensor=None,device='cuda'):
+    def __init__(self,obj_id:torch.Tensor,position:torch.Tensor=None,other_properties:dict[str,torch.Tensor]=None,device='cuda'):
         self.registered_properties:list[str]=[]
 
         assert(obj_id is not None)
@@ -18,6 +18,10 @@ class ObjectBase:
             self.position=position
         self.registered_properties.append('position')
 
+        if other_properties is not None:
+            for name,tensor in other_properties.items():
+                self.__setattr__(name,tensor)
+                self.registered_properties.append(name)
         return
     
     @property
@@ -48,10 +52,10 @@ class ObjectBase:
         return properties_dict
     
 class ObjectBatchBase(ObjectBase):
-    def __init__(self,obj_id:torch.Tensor,position:torch.Tensor,device='cuda'):
+    def __init__(self,obj_id:torch.Tensor,position:torch.Tensor,other_properties:dict[str,torch.Tensor]=None,device='cuda'):
         assert(position is not None)
         assert(obj_id is not None)
-        super(ObjectBatchBase,self).__init__(obj_id,position,device)
+        super(ObjectBatchBase,self).__init__(obj_id,position,other_properties,device)
         return
     
     def get_objects_num(self)->int:
@@ -85,10 +89,23 @@ class ObjectBatchBase(ObjectBase):
 
     @torch.no_grad()
     def devide(self,mask)->tuple[ObjectBatchBase,ObjectBatchBase]:
-        groupA=copy.deepcopy(self)
-        groupA.filter(mask)
-        groupB=copy.deepcopy(self)
-        groupB.filter(~mask)
+        #group A
+        obj_id_a=self.obj_id[mask]
+        obj_id_b=self.obj_id[~mask]
+        position_a=self.position[mask]
+        position_b=self.position[~mask]
+        other_properties_a={}
+        other_properties_b={}
+
+        for name in self.registered_properties:
+            if name!='obj_id' and name!='position':
+                tensor=self.__getattribute__(name)
+                other_properties_a[name]=tensor[mask]
+                other_properties_b[name]=tensor[~mask]
+
+        groupA=self.__class__(obj_id_a,position_a,other_properties_a)
+        groupB=self.__class__(obj_id_b,position_b,other_properties_b)
+
         return (groupA,groupB)
     
     @torch.no_grad()
@@ -104,10 +121,10 @@ class ObjectBatchBase(ObjectBase):
 
     
 class GSpointBatch(ObjectBatchBase):
-    def __init__(self,point_id:torch.Tensor,position:torch.Tensor,cov:torch.Tensor):
-        super(GSpointBatch,self).__init__(point_id,position)
-        self.cov=cov
-        self.registered_properties.append('cov')
+    def __init__(self,point_id:torch.Tensor,position:torch.Tensor,other_properties:dict[str,torch.Tensor]=None,device='cuda'):
+        assert('cov' in other_properties)
+        super(GSpointBatch,self).__init__(point_id,position,other_properties,device)
+        self.cov=other_properties['cov']
         return
     
     @torch.no_grad()

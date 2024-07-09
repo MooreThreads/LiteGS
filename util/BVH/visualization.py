@@ -21,7 +21,7 @@ class VisualizationHelper:
         self.color_in_chunks=[]
         self.origin_list:list[torch.Tensor]=[]
         self.extend_list:list[torch.Tensor]=[]
-        for node in bvh.leaf_nodes:
+        for node_index,node in enumerate(bvh.leaf_nodes):
             positions=self.point_positions[node.objs]
             self.position_in_chunks.append(positions)
             if self.point_colors is None:

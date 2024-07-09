@@ -18,10 +18,10 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_epochs", nargs="+", type=int, default=[i for i in range(20,400,20)])
-    parser.add_argument("--save_epochs", nargs="+", type=int, default=[200,400])
+    parser.add_argument("--test_epochs", nargs="+", type=int, default=[i for i in range(20,200,20)])
+    parser.add_argument("--save_epochs", nargs="+", type=int, default=[100,200])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[40,80,120,200,400])
+    parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[i-1 for i in range(20,200,20)])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_epochs.append(args.epoch)
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     cameras_info,images_info,scene,_,NerfNormRadius=TrainingDataLoader.load(lp.source_path,lp.images,lp.sh_degree,lp.resolution)
 
     #params & optimizer
-    gaussian_model=GaussianSplattingModel(scene,NerfNormRadius)
+    gaussian_model=GaussianSplattingModel(scene)
     training=GaussianTrain(gaussian_model,lp,op,NerfNormRadius,images_info,cameras_info)
 
     #start

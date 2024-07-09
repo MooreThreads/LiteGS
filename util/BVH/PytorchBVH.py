@@ -9,12 +9,13 @@ class BVHNode:
         origin,extend=ObjectBatchBase.get_AABB()
         self.origin=origin
         self.extend=extend
-
-        main_dim=self.extend.max(dim=0).indices
-
-        N=ObjectBatchBase.get_objects_num()
         self.child=None
         self.objs=None
+        self.leaf_index=-1
+
+        length=ObjectBatchBase.position.max(dim=0).values-ObjectBatchBase.position.min(dim=0).values
+        main_dim=length.max(dim=0).indices
+        N=ObjectBatchBase.get_objects_num()
         if N>terminate_obj_num:
             sorted_value,sorted_index=ObjectBatchBase.position[:,main_dim].sort()
 
@@ -51,6 +52,7 @@ class BVH:
     def __node_finish_callback(self,node:BVHNode):
         if node.is_leaf():
             self.leaf_nodes.append(node)
+            node.leaf_index=len(self.leaf_nodes)-1
         return
     
     def build(self,terminate_obj_num=32):

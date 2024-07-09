@@ -1,8 +1,8 @@
 import torch
 import typing
 class StatisticsHelper:
-    def __init__(self,gaussian_num):
-        self.reset(gaussian_num)
+    def __init__(self,chunk_num,chunk_size):
+        self.reset(chunk_num,chunk_size)
         return
     
     def start(self):
@@ -11,16 +11,15 @@ class StatisticsHelper:
     def pause(self):
         self.bStart=False
     
-    def reset(self,gaussian_num):
+    def reset(self,chunk_num,chunk_size):
         self.bStart=False
-        self.gaussian_num=gaussian_num
+        self.chunk_num=chunk_num
+        self.chunk_size=chunk_size
         self.mean_and_std:dict[str,torch.Tensor]={}
         self.max_and_min:dict[str,torch.Tensor]={}
-        self.visible_count=torch.zeros(gaussian_num,dtype=torch.int32,device='cuda')
-        self.cur_batch_visible_mask:torch.Tensor=None
-        self.cur_batch_visible_pts:torch.Tensor=None
-        self.cur_batch_visible_num:torch.Tensor=None
-        self.batch_n=0
+
+        self.visible_count=torch.zeros(chunk_num*chunk_size,dtype=torch.int32,device='cuda')
+        self.compact_mask:torch.Tensor=None
 
         self.handle_list:list[tuple[str,torch.Tensor,typing.Callable[[torch.Tensor],torch.Tensor],typing.Callable]]=[]
         return
@@ -47,24 +46,19 @@ class StatisticsHelper:
         return
     
     @torch.no_grad
-    def set_cur_batch_visibility(self,cur_visible_points:torch.Tensor,cur_visible_num:torch.Tensor):
-        assert(cur_visible_points.max()<self.gaussian_num)
-        assert(cur_visible_points.shape[0]==cur_visible_num.shape[0])
-        #set batch
-        self.batch_n=cur_visible_points.shape[0]
-        #update visible_count
-        for i in range(self.batch_n):
-            points_num=cur_visible_num[i]
-            self.visible_count[cur_visible_points[i,:points_num]]+=1
-        self.cur_batch_visible_pts=cur_visible_points
-        self.cur_batch_visible_num=cur_visible_num
+    def set_compact_mask(self,compact_mask:torch.Tensor):
+        self.compact_mask=compact_mask
         return
     
     @torch.no_grad
-    def update_mean_std(self,key:str,tensor:torch.Tensor):
-        #assert(tensor.shape[0]==self.batch_n)
-        assert(tensor.shape[1]==self.gaussian_num)
+    def update_visible_count(self,compacted_visible_mask:torch.Tensor):
+        assert(self.compact_mask is not None)
+        self.visible_count[self.compact_mask]+=compacted_visible_mask.sum(0)
+        return
+    
 
+    @torch.no_grad
+    def update_mean_std(self,key:str,tensor:torch.Tensor):
         #update dict
         tensor_sum=tensor.sum(0)
         square_sum=(tensor**2).sum(0)
@@ -76,48 +70,29 @@ class StatisticsHelper:
             data=[tensor_sum,square_sum]
             self.mean_and_std[key]=data
         return
-    
-    @torch.no_grad
-    def _update_mean_std_compact_internel(self,key:str,compact_tensor:torch.Tensor,pts:torch.Tensor):
-        data=self.mean_and_std.get(key,None)
-        if data is not None:
-            data[0][pts]+=compact_tensor
-            data[1][pts]+=compact_tensor**2
-        else:
-            shape=list(compact_tensor.shape)
-            shape[0]=self.gaussian_num
-            data0=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
-            data1=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
-            data=[data0,data1]
-            data[0][pts]+=compact_tensor
-            data[1][pts]+=compact_tensor**2
-            self.mean_and_std[key]=data
-        return
 
     @torch.no_grad
     def update_mean_std_compact(self,key:str,compact_tensor:torch.Tensor):
-        assert(self.cur_batch_visible_pts is not None)
-        assert(self.cur_batch_visible_num is not None)
-        assert(compact_tensor.shape[0]==self.batch_n)
+        assert(self.compact_mask is not None)
 
-        for i in range(self.batch_n):
-            points_num=self.cur_batch_visible_num[i]
-            points_index=self.cur_batch_visible_pts[i,:points_num]
-            self._update_mean_std_compact_internel(key,compact_tensor[i,:points_num],points_index)
+        tensor_sum=compact_tensor.sum(0)
+        square_sum=(compact_tensor**2).sum(0)
+
+        data=self.mean_and_std.get(key,None)
+        if data is not None:
+            data[0][self.compact_mask]+=tensor_sum
+            data[1][self.compact_mask]+=square_sum
+        else:
+            tensor_sum_uncompact=torch.zeros((self.chunk_num*self.chunk_size,*tensor_sum.shape[1:]),device=compact_tensor.device)
+            square_sum_uncompact=torch.zeros((self.chunk_num*self.chunk_size,*square_sum.shape[1:]),device=compact_tensor.device)
+            tensor_sum_uncompact[self.compact_mask]+=tensor_sum
+            square_sum_uncompact[self.compact_mask]+=square_sum
+            data=[tensor_sum_uncompact,square_sum_uncompact]
+            self.mean_and_std[key]=data
         return
     
     @torch.no_grad
     def update_max_min(self,key:str,tensor:torch.Tensor):
-        assert(self.cur_batch_visible_pts is not None)
-        assert(self.cur_batch_visible_num is not None)
-        assert(tensor.shape[0]==self.batch_n)
-        assert(tensor.shape[1]==self.gaussian_num)
-        
-        #filter invisible
-        for i in range(self.batch_n):
-            pts_num=self.cur_batch_visible_num[i]
-            tensor[self.cur_batch_visible_pts[i,:pts_num]]=0
-
         #update dict
         tensor_max=tensor.max(0)[0]
         tensor_min=tensor.min(0)[0]
@@ -130,45 +105,26 @@ class StatisticsHelper:
             self.mean_and_std[key]=data
         return
 
-    @torch.no_grad
-    def _update_max_min_compact_internel(self,key:str,compact_tensor:torch.Tensor,pts:torch.Tensor):
-        data=self.max_and_min.get(key,None)
-        if data is not None:
-            data[0][pts]=torch.max(compact_tensor,data[0][pts])
-            data[1][pts]=torch.min(compact_tensor,data[1][pts])
-        else:
-            shape=list(compact_tensor.shape)
-            shape[0]=self.gaussian_num
-            data0=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
-            data1=torch.zeros(shape,dtype=compact_tensor.dtype,device=compact_tensor.device)
-            data=[data0,data1]
-            data[0][pts]=torch.max(compact_tensor,data[0][pts])
-            data[1][pts]=torch.min(compact_tensor,data[1][pts])
-            self.max_and_min[key]=data
-        return
 
     @torch.no_grad
     def update_max_min_compact(self,key:str,compact_tensor:torch.Tensor):
-        assert(self.cur_batch_visible_pts is not None)
-        assert(self.cur_batch_visible_num is not None)
-        assert(compact_tensor.shape[0]==self.batch_n)
+        assert(self.compact_mask is not None)
 
-        for i in range(self.batch_n):
-            points_num=self.cur_batch_visible_num[i]
-            points_index=self.cur_batch_visible_pts[i,:points_num]
-            self._update_max_min_compact_internel(key,compact_tensor[i,:points_num],points_index)
+        tensor_max=compact_tensor.max(0)[0]
+        tensor_min=compact_tensor.min(0)[0]
+        data=self.max_and_min.get(key,None)
+        if data is not None:
+            data[0][self.compact_mask ]=torch.max(tensor_max,data[0][self.compact_mask ])
+            data[1][self.compact_mask ]=torch.min(tensor_min,data[1][self.compact_mask ])
+        else:
+            max_uncompact=torch.ones((self.chunk_num*self.chunk_size,*tensor_max.shape[1:]),device=compact_tensor.device)*(-torch.inf)
+            min_uncompact=torch.ones((self.chunk_num*self.chunk_size,*tensor_min.shape[1:]),device=compact_tensor.device)*torch.inf
+            data=[max_uncompact,min_uncompact]
+            data[0][self.compact_mask ]=tensor_max
+            data[1][self.compact_mask ]=tensor_min
+            self.max_and_min[key]=data
         return 
     
-    @torch.no_grad
-    def update_invisible_compact(self,compacted_invisible_mask:torch.Tensor):
-        assert(self.cur_batch_visible_pts is not None)
-        assert(self.cur_batch_visible_num is not None)
-        assert(compacted_invisible_mask.shape[0]==self.batch_n)
-        for i in range(self.batch_n):
-            points_num=self.cur_batch_visible_num[i]
-            points_index=self.cur_batch_visible_pts[i,:points_num]
-            self.visible_count[points_index]-=1*compacted_invisible_mask[i,:points_num]
-        return
 
     @torch.no_grad
     def get_max(self,key:str):
@@ -209,4 +165,4 @@ class StatisticsHelper:
             std_tensor=calc_std(data[0],data[1],self.visible_count)
         return std_tensor
 
-StatisticsHelperInst=StatisticsHelper(0)
+StatisticsHelperInst=StatisticsHelper(0,0)

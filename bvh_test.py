@@ -14,6 +14,7 @@ from matplotlib import pyplot as plt
 from training.arguments import OptimizationParams
 import time
 import numpy as np
+import math
 
 
 #load training data
@@ -58,8 +59,8 @@ with torch.no_grad():
     point_id=torch.arange(gaussian_model._xyz.shape[0],device='cuda')
     scale=gaussian_model._scaling.exp()
     roator=torch.nn.functional.normalize(gaussian_model._rotation,dim=-1)
-    cov=gaussian_model.transform_to_cov3d(scale.unsqueeze(0),roator.unsqueeze(0))[0][0]
-    points_batch=GSpointBatch(point_id,gaussian_model._xyz[:,:3],cov)
+    cov,_=gaussian_model.transform_to_cov3d(scale,roator)
+    points_batch=GSpointBatch(point_id,gaussian_model._xyz[:,:3],{'cov':cov})
     bvh=BVH([points_batch,])
     bvh.build(chunksize)
 
@@ -85,8 +86,13 @@ with torch.no_grad():
     new_scaling=torch.zeros((chunk_num,chunksize,3),device='cuda')
     new_rotation=torch.zeros((chunk_num,chunksize,4),device='cuda')
     for chunk_index,point_ids in enumerate(points_in_chunk):
-        #if chunk_index*chunksize+chunksize<gaussian_model._xyz.shape[0]:
-        #    new_xyz[chunk_index]=gaussian_model._xyz[chunk_index*chunksize:chunk_index*chunksize+chunksize]
+        # if chunk_index*chunksize+chunksize<gaussian_model._xyz.shape[0]:
+        #     new_xyz[chunk_index]=gaussian_model._xyz[chunk_index*chunksize:chunk_index*chunksize+chunksize]
+        #     new_features_dc[chunk_index]=gaussian_model._features_dc[chunk_index*chunksize:chunk_index*chunksize+chunksize]
+        #     new_features_rest[chunk_index]=gaussian_model._features_rest[chunk_index*chunksize:chunk_index*chunksize+chunksize]
+        #     new_opacity[chunk_index]=gaussian_model._opacity[chunk_index*chunksize:chunk_index*chunksize+chunksize]
+        #     new_scaling[chunk_index]=gaussian_model._scaling[chunk_index*chunksize:chunk_index*chunksize+chunksize]
+        #     new_rotation[chunk_index]=gaussian_model._rotation[chunk_index*chunksize:chunk_index*chunksize+chunksize]
         new_xyz[chunk_index]=gaussian_model._xyz[point_ids]
         new_features_dc[chunk_index]=gaussian_model._features_dc[point_ids]
         new_features_rest[chunk_index]=gaussian_model._features_rest[point_ids]

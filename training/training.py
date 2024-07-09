@@ -7,7 +7,7 @@ from util.camera import View
 from training import cache
 import training.loss
 from gaussian_splatting.division import GaussianSceneDivision
-from training.densitycontroller import DensityControllerOurs
+from training.densitycontroller import DensityControllerOurs,DensityControllerOfficial
 from util.statistic_helper import StatisticsHelperInst
 from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
 
@@ -105,7 +105,7 @@ class GaussianTrain:
 
         screen_size_threshold=None#20
         opacity_threshold=0.005
-        self.density_controller=DensityControllerOurs(self.opt_params)
+        self.density_controller=DensityControllerOfficial(op.densify_grad_threshold,opacity_threshold,screen_size_threshold,op.percent_dense,torch.Tensor(self.view_manager.view_matrix_tensor).cuda(),self.opt_params)
 
         return
     
@@ -121,6 +121,7 @@ class GaussianTrain:
         self.optimizer.load_state_dict(op_state_dict)
         self.iter_start=first_iter+1
         self.model.actived_sh_degree=actived_sh_degree
+        self.model.rebuild_AABB()
         return
     
     def __training_setup(self,gaussian_model:GaussianSplattingModel,args:OptimizationParams):
@@ -223,9 +224,8 @@ class GaussianTrain:
                 ground_truth_batch=ground_truth[i:batch_tail]
 
             ### render ###
-            tile_img,tile_transmitance=self.model.render(None,None,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,
-                              self.__regularization_loss_backward)
+            tile_img,tile_transmitance=self.model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,
+                                                         None,self.__regularization_loss_backward)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
 
@@ -280,8 +280,7 @@ class GaussianTrain:
                 camera_center_batch=camera_center[i:i+1]
 
             ### render ###
-            tile_img,tile_transmitance=self.model.render(None,None,
-                              view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
+            tile_img,tile_transmitance=self.model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             
@@ -328,11 +327,11 @@ class GaussianTrain:
         progress_bar = tqdm(range(self.iter_start*self.view_manager.view_matrix_tensor.shape[0], epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
         progress_bar.update(0)
         batch_size=1
-        StatisticsHelperInst.reset(self.model._xyz.shape[0])
+        StatisticsHelperInst.reset(self.model._xyz.shape[0],self.model._xyz.shape[1])
         torch.cuda.empty_cache()
         
         for epoch_i in range(self.iter_start,epoch+1):
-            if (epoch_i+1)%20==0:
+            if (epoch_i+1)%5==0:
                 self.model.oneupSHdegree()
 
             if StatisticsHelperInst.bStart==False and self.density_controller.IsDensify(epoch_i):
