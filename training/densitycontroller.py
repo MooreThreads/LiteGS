@@ -136,8 +136,8 @@ class DensityControllerOfficial(DensityControllerBase):
     def densify_and_clone(self,gaussian_model:GaussianSplattingModel)->torch.Tensor:
         mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad')#?std(gaussian3d.mean.grad) instead of mean(gaussian2d.mean.grad)
         abnormal_mask = mean2d_grads.norm(dim=-1) >= self.grad_threshold
-        tiny_pts_mask = gaussian_model._scaling.exp().max(dim=-1).values <= self.percent_dense*self.screen_extent
-        selected_pts_mask = abnormal_mask.reshape(-1,1024)&tiny_pts_mask
+        #tiny_pts_mask = gaussian_model._scaling.exp().max(dim=-1).values <= self.percent_dense*self.screen_extent
+        selected_pts_mask = abnormal_mask.reshape(-1,1024)#&tiny_pts_mask
         return selected_pts_mask
     
     @torch.no_grad

@@ -124,22 +124,23 @@ class GaussianSplattingModel:
         self.chunk_AABB_origin=self.chunk_AABB_origin[valid_mask]
         self.chunk_AABB_extend=self.chunk_AABB_extend[valid_mask]
 
-        scale=self._scaling[-1-chunks_num:-1].reshape(-1,3).exp()
-        roator=torch.nn.functional.normalize(self._rotation[-1-chunks_num:-1],dim=-1).reshape(-1,4)
-        cov3d,_=self.transform_to_cov3d(scale,roator)
+        if chunks_num>=1:
+            scale=self._scaling[-1-chunks_num:-1].reshape(-1,3).exp()
+            roator=torch.nn.functional.normalize(self._rotation[-1-chunks_num:-1],dim=-1).reshape(-1,4)
+            cov3d,_=self.transform_to_cov3d(scale,roator)
 
-        eigen_val,eigen_vec=torch.linalg.eigh(cov3d.reshape(-1,self.chunk_size,3,3))
-        eigen_val=eigen_val.abs()
-        coefficient=2*math.log(255)
-        point_extend=((coefficient*eigen_val.unsqueeze(-1)).sqrt()*eigen_vec).abs().sum(dim=-2)
-        position=self._xyz[-1-chunks_num:-1,:,:3]
-        max_xyz=(position+point_extend).max(dim=-2).values
-        min_xyz=(position-point_extend).min(dim=-2).values
-        origin=(max_xyz+min_xyz)/2
-        extend=(max_xyz-min_xyz)/2
+            eigen_val,eigen_vec=torch.linalg.eigh(cov3d.reshape(-1,self.chunk_size,3,3))
+            eigen_val=eigen_val.abs()
+            coefficient=2*math.log(255)
+            point_extend=((coefficient*eigen_val.unsqueeze(-1)).sqrt()*eigen_vec).abs().sum(dim=-2)
+            position=self._xyz[-1-chunks_num:-1,:,:3]
+            max_xyz=(position+point_extend).max(dim=-2).values
+            min_xyz=(position-point_extend).min(dim=-2).values
+            origin=(max_xyz+min_xyz)/2
+            extend=(max_xyz-min_xyz)/2
 
-        self.chunk_AABB_origin=torch.cat((self.chunk_AABB_origin,origin))
-        self.chunk_AABB_extend=torch.cat((self.chunk_AABB_extend,extend))
+            self.chunk_AABB_origin=torch.cat((self.chunk_AABB_origin,origin))
+            self.chunk_AABB_extend=torch.cat((self.chunk_AABB_extend,extend))
         return 
 
     @torch.no_grad()
