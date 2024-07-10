@@ -279,38 +279,40 @@ class GaussianSplattingModel:
         tile_size=self.cached_tile_size
         image_size=self.cached_image_size
 
-        values,point_ids=ndc[...,2].sort(dim=-1)
-        ndc=ndc.clone()
-        for i in range(ndc.shape[0]):
-            ndc[i]=ndc[i,point_ids[i]]
-
-        coordX=(ndc[:,:,0]+1.0)*0.5*image_size[0]-0.5
-        coordY=(ndc[:,:,1]+1.0)*0.5*image_size[1]-0.5
-
         # Major and minor axes -> AABB extensions
         opacity_clamped=opacity.squeeze(-1).clamp_min(1/255)
         coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
         axis_length=(coefficient.unsqueeze(-1)*eigen_val.abs()).sqrt().ceil()
         extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().sum(dim=-2)
 
-        for i in range(ndc.shape[0]):
-            extension[i]=extension[i,point_ids[i]]
-        
+        screen_coord=((ndc[...,:2]+1.0)*0.5*self.cached_image_size_tensor-0.5)
         b_visible=~((ndc[...,0]<-1.3)|(ndc[...,0]>1.3)|(ndc[...,1]>1.3)|(ndc[...,1]>1.3)|(ndc[...,2]>1)|(ndc[...,2]<0))
-        L=((coordX-extension[...,0])/tile_size).int().clamp(0,tilesX)*b_visible
-        U=((coordY-extension[...,1])/tile_size).int().clamp(0,tilesY)*b_visible
-        R=((coordX+extension[...,0])/tile_size).ceil().int().clamp(0,tilesX)*b_visible
-        D=((coordY+extension[...,1])/tile_size).ceil().int().clamp(0,tilesY)*b_visible
+        left_up=((screen_coord-extension)/tile_size).int()*b_visible.unsqueeze(-1)
+        right_down=((screen_coord+extension)/tile_size).int()*b_visible.unsqueeze(-1)
+        left_up[...,0].clamp_(0,tilesX)
+        left_up[...,1].clamp_(0,tilesY)
+        right_down[...,0].clamp_(0,tilesX)
+        right_down[...,1].clamp_(0,tilesY)
 
-        #calculate params of allocation
-        tiles_touched=(R-L)*(D-U)
-        prefix_sum=tiles_touched.cumsum(1)
+        #splatting area of each points
+        rect_length=right_down-left_up
+        tiles_touched=rect_length[...,0]*rect_length[...,1]
+        radius_pixel=(axis_length.max(-1).values*(tiles_touched!=0))
+
+        #sort by depth
+        values,point_ids=ndc[...,2].sort(dim=-1)
+        for i in range(ndc.shape[0]):
+            tiles_touched[i]=tiles_touched[i,point_ids[i]]
+            left_up[i]=left_up[i,point_ids[i]]
+            right_down[i]=right_down[i,point_ids[i]]
+
+        #calc the item num of table and the start index in table of each point
+        prefix_sum=tiles_touched.cumsum(1)#start index of points
         total_tiles_num_batch=prefix_sum[:,-1]
-        pixel_radius=(axis_length.max(-1).values*(tiles_touched!=0))
         allocate_size=total_tiles_num_batch.max().cpu()
-        
-        # allocate table and fill tile_id in it(uint 16)
-        my_table=torch.ops.RasterBinning.duplicateWithKeys(L,U,R,D,prefix_sum,int(allocate_size),int(tilesX))
+
+        # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
+        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,int(allocate_size),int(tilesX))
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
         pointId_table=point_ids.gather(dim=1,index=pointId_table.long()).int()
@@ -328,7 +330,7 @@ class GaussianSplattingModel:
         # range
         tile_start_index=torch.ops.RasterBinning.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
-        return tile_start_index,sorted_pointId,sorted_tileId,pixel_radius
+        return tile_start_index,sorted_pointId,sorted_tileId,radius_pixel
     
     def raster(self,ndc_pos:torch.Tensor,inv_cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
     

@@ -19,10 +19,8 @@ namespace cg = cooperative_groups;
             printf("Error in svox.%s : %s\n", __FUNCTION__, cudaGetErrorString(err))
 
  __global__ void duplicate_with_keys_kernel(
-    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> L,//viewnum,pointnum
-    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> U,
-    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> R,
-    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> D,
+    const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> LU,//viewnum,pointnum
+    const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> RD,
     const torch::PackedTensorAccessor32<int64_t, 2,torch::RestrictPtrTraits> prefix_sum,//view,pointnum
     int TileSizeX,
     torch::PackedTensorAccessor32 < int16_t, 2, torch::RestrictPtrTraits> table_tileId,
@@ -36,10 +34,10 @@ namespace cg = cooperative_groups;
     {
         int end = prefix_sum[view_id][point_id];
         //int end = prefix_sum[view_id][point_id+1];
-        int l = L[view_id][point_id];
-        int u = U[view_id][point_id];
-        int r = R[view_id][point_id];
-        int d = D[view_id][point_id];
+        int l = LU[view_id][point_id][0];
+        int u = LU[view_id][point_id][1];
+        int r = RD[view_id][point_id][0];
+        int d = RD[view_id][point_id][1];
         int count = 0;
 
         for (int i = u; i < d; i++)
@@ -59,27 +57,25 @@ namespace cg = cooperative_groups;
 
 
 
-std::vector<at::Tensor> duplicateWithKeys(at::Tensor L, at::Tensor U, at::Tensor R, at::Tensor D, at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX)
+std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX)
 {
-    at::DeviceGuard guard(L.device());
-    int64_t view_num = L.sizes()[0];
-    int64_t points_num = L.sizes()[1];
+    at::DeviceGuard guard(LU.device());
+    int64_t view_num = LU.sizes()[0];
+    int64_t points_num = LU.sizes()[1];
 
     std::vector<int64_t> output_shape{ view_num, allocate_size };
 
-    auto opt = torch::TensorOptions().dtype(torch::kInt16).layout(torch::kStrided).device(L.device()).requires_grad(false);
+    auto opt = torch::TensorOptions().dtype(torch::kInt16).layout(torch::kStrided).device(LU.device()).requires_grad(false);
     auto table_tileId = torch::zeros(output_shape, opt);
-    opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(L.device()).requires_grad(false);
+    opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(LU.device()).requires_grad(false);
     auto table_pointId= torch::zeros(output_shape, opt);
 
     dim3 Block3d(std::ceil(points_num/1024.0f), view_num, 1);
     
 
     duplicate_with_keys_kernel<<<Block3d ,1024>>>(
-        L.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        U.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        R.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        D.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        LU.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+        RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         prefix_sum.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
         TilesSizeX,
         table_tileId.packed_accessor32<int16_t, 2, torch::RestrictPtrTraits>(),
