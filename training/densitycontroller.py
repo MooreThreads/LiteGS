@@ -158,14 +158,20 @@ class DensityControllerOfficial(DensityControllerBase):
             prune_mask[:]=False
 
         clone_mask=self.densify_and_clone(gaussian_model)
-        clone_mask=clone_mask.sum(1)>gaussian_model.chunk_size*0.2
+        clone_mask=clone_mask.reshape(-1)
+
+        def gen_clone_chunk(tensor:torch.Tensor,clone_mask:torch.Tensor):
+            total_num=int(clone_mask.sum())
+            clone_chunks_num=int(total_num/gaussian_model.chunk_size)
+            result=tensor.reshape(-1,*tensor.shape[2:])[clone_mask][:clone_chunks_num*gaussian_model.chunk_size].reshape(clone_chunks_num,gaussian_model.chunk_size,*tensor.shape[2:])
+            return result
         
-        dict_clone = {"xyz": gaussian_model._xyz[clone_mask],
-        "opacity": gaussian_model._opacity[clone_mask],
-        "scaling" : gaussian_model._scaling[clone_mask],
-        "f_dc": gaussian_model._features_dc[clone_mask],
-        "f_rest": gaussian_model._features_rest[clone_mask],
-        "rotation" : gaussian_model._rotation[clone_mask]}
+        dict_clone = {"xyz": gen_clone_chunk(gaussian_model._xyz,clone_mask),
+        "opacity": gen_clone_chunk(gaussian_model._opacity,clone_mask),
+        "scaling" : gen_clone_chunk(gaussian_model._scaling,clone_mask),
+        "f_dc": gen_clone_chunk(gaussian_model._features_dc,clone_mask),
+        "f_rest": gen_clone_chunk(gaussian_model._features_rest,clone_mask),
+        "rotation" : gen_clone_chunk(gaussian_model._rotation,clone_mask)}
 
         # split_mask=self.densify_and_split(gaussian_model)
         # N=2
@@ -189,7 +195,7 @@ class DensityControllerOfficial(DensityControllerBase):
         
         valid_points_mask=(~prune_mask)#&(~split_mask)
         self.update_optimizer_and_model(gaussian_model,optimizer,valid_points_mask,dict_clone,None)#dict_split)
-        print("\nclone_num:{0} prune_num:{1} cur_points_num:{2}".format(clone_mask.sum().cpu()*gaussian_model.chunk_size,prune_mask.sum().cpu()*gaussian_model.chunk_size,gaussian_model._xyz.shape[0]*gaussian_model._xyz.shape[1]))
+        print("\nclone_num:{0} prune_num:{1} cur_points_num:{2}".format(clone_mask.sum().cpu(),prune_mask.sum().cpu()*gaussian_model.chunk_size,gaussian_model._xyz.shape[0]*gaussian_model._xyz.shape[1]))
         torch.cuda.empty_cache()
         return
     
