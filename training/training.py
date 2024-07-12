@@ -299,6 +299,10 @@ class GaussianTrain:
         ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
         psnr=image_utils.psnr(img,ground_truth)
         print("\n[EPOCH {}] Trainingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+        
+        out_img_list=None
+        img=None
+        ground_truth=None
         torch.cuda.empty_cache()
 
         if self.view_manager_testset is not None:
@@ -307,6 +311,10 @@ class GaussianTrain:
             ground_truth=torch.Tensor(self.view_manager_testset.view_gt_tensor).cuda()
             psnr=image_utils.psnr(img,ground_truth)
             print("[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+            
+            out_img_list=None
+            img=None
+            ground_truth=None
             torch.cuda.empty_cache()
         return
 
