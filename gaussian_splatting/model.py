@@ -73,7 +73,7 @@ class GaussianSplattingModel:
                 xyz_chunk[chunk_index][repeat_n*points_num:]=self._xyz[node.objs[:remain_num]]
                 features_dc_chunk[chunk_index][repeat_n*points_num:]=self._features_dc[node.objs[:remain_num]]
                 features_rest_chunk[chunk_index][repeat_n*points_num:]=self._features_rest[node.objs[:remain_num]]
-                opacity_chunk[chunk_index][repeat_n*points_num:]=self._opacity[node.objs[:remain_num]]
+                opacity_chunk[chunk_index][repeat_n*points_num:]=-1e5
                 scaling_chunk[chunk_index][repeat_n*points_num:]=self._scaling[node.objs[:remain_num]]
                 rotation_chunk[chunk_index][repeat_n*points_num:]=self._rotation[node.objs[:remain_num]]
 
@@ -289,7 +289,7 @@ class GaussianSplattingModel:
         screen_coord=((ndc[...,:2]+1.0)*0.5*self.cached_image_size_tensor-0.5)
         b_visible=~((ndc[...,0]<-1.3)|(ndc[...,0]>1.3)|(ndc[...,1]>1.3)|(ndc[...,1]>1.3)|(ndc[...,2]>1)|(ndc[...,2]<0))
         left_up=((screen_coord-extension)/tile_size).int()*b_visible.unsqueeze(-1)
-        right_down=((screen_coord+extension)/tile_size).int()*b_visible.unsqueeze(-1)
+        right_down=((screen_coord+extension)/tile_size).ceil().int()*b_visible.unsqueeze(-1)
         left_up[...,0].clamp_(0,tilesX)
         left_up[...,1].clamp_(0,tilesY)
         right_down[...,0].clamp_(0,tilesX)
