@@ -255,7 +255,10 @@ class DensityControllerOfficial(DensityControllerBase):
     
     @torch.no_grad
     def reset_opacity(self,gaussian_model:GaussianSplattingModel):
-        gaussian_model._opacity.data*=0.3
+        def inverse_sigmoid(x):
+            return torch.log(x/(1-x))
+        actived_opacities=gaussian_model._opacity.sigmoid()
+        gaussian_model._opacity.data=inverse_sigmoid(actived_opacities*0.5)
         return
 
     @torch.no_grad
