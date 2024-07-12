@@ -121,8 +121,9 @@ class GaussianSplattingModel:
 
     @torch.no_grad()
     def build_AABB_for_additional_chunks(self,chunks_num,valid_mask):
-        self.chunk_AABB_origin=self.chunk_AABB_origin[valid_mask]
-        self.chunk_AABB_extend=self.chunk_AABB_extend[valid_mask]
+        if valid_mask is not None:
+            self.chunk_AABB_origin=self.chunk_AABB_origin[valid_mask]
+            self.chunk_AABB_extend=self.chunk_AABB_extend[valid_mask]
 
         if chunks_num>=1:
             scale=self._scaling[-1-chunks_num:-1].reshape(-1,3).exp()
