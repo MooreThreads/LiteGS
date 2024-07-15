@@ -240,7 +240,6 @@ class GaussianTrain:
             self.optimizer.step()
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.backward_callback()
-                StatisticsHelperInst.update_mean_std('xyz_grad',self.model._xyz.grad.unsqueeze(0))
             self.optimizer.zero_grad(set_to_none = True)
 
         ### log ###
