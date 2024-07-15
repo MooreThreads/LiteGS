@@ -221,13 +221,13 @@ class GaussianTrain:
                 view_project_matrix_batch=view_project_matrix[i:batch_tail]
                 camera_focal_batch=camera_focal[i:batch_tail]
                 camera_center_batch=camera_center[i:batch_tail]
-                ground_truth_batch=ground_truth[i:batch_tail]
+                ground_truth_batch=ground_truth[i:batch_tail].contiguous()
 
             ### render ###
             tile_img,tile_transmitance=self.model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,
                                                          None,self.__regularization_loss_backward)
-            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-            #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]].contiguous()
+            #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]].contiguous()
 
             #### loss ###
             l1_loss=training.loss.l1_loss(img,ground_truth_batch)
