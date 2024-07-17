@@ -49,12 +49,12 @@ class GaussianSplattingModel:
 
         #split into chunk
         chunk_num=len(bvh.leaf_nodes)
-        xyz_chunk=torch.zeros((chunk_num,self.chunk_size,4),device='cuda')
-        features_dc_chunk=torch.zeros((chunk_num,self.chunk_size,1,3),device='cuda')
-        features_rest_chunk=torch.zeros((chunk_num,self.chunk_size,8,3),device='cuda')
-        opacity_chunk=torch.zeros((chunk_num,self.chunk_size,1),device='cuda')
-        scaling_chunk=torch.zeros((chunk_num,self.chunk_size,3),device='cuda')
-        rotation_chunk=torch.zeros((chunk_num,self.chunk_size,4),device='cuda')
+        xyz_chunk=torch.zeros((chunk_num,self.chunk_size,*self._xyz.shape[1:]),device='cuda')
+        features_dc_chunk=torch.zeros((chunk_num,self.chunk_size,*self._features_dc.shape[1:]),device='cuda')
+        features_rest_chunk=torch.zeros((chunk_num,self.chunk_size,*self._features_rest.shape[1:]),device='cuda')
+        opacity_chunk=torch.zeros((chunk_num,self.chunk_size,*self._opacity.shape[1:]),device='cuda')
+        scaling_chunk=torch.zeros((chunk_num,self.chunk_size,*self._scaling.shape[1:]),device='cuda')
+        rotation_chunk=torch.zeros((chunk_num,self.chunk_size,*self._rotation.shape[1:]),device='cuda')
 
         origin_list=[]
         extend_list=[]
@@ -96,7 +96,7 @@ class GaussianSplattingModel:
         assert(self.b_split_into_chunk==True)
         new_xyz=self._xyz.reshape(-1,*self._xyz.shape[2:])
         new_features_dc=self._features_dc.reshape(-1,*self._features_dc.shape[2:])
-        new_features_rest=self._features_rest.reshape(-1,*self._features_rest.shape[2:])
+        new_features_rest=self._features_rest.reshape(self._features_rest.shape[0]*self._features_rest.shape[1],*self._features_rest.shape[2:])
         new_opacity=self._opacity.reshape(-1,*self._opacity.shape[2:])
         new_scaling=self._scaling.reshape(-1,*self._scaling.shape[2:])
         new_rotation=self._rotation.reshape(-1,*self._rotation.shape[2:])
@@ -267,7 +267,10 @@ class GaussianSplattingModel:
 
         visible_positions=self._xyz[chunk_visibility].contiguous().reshape(-1,*self._xyz.shape[2:])
         visible_opacities=self._opacity[chunk_visibility].contiguous().sigmoid().reshape(-1,*self._opacity.shape[2:])
-        visible_sh=torch.concat((self._features_dc[chunk_visibility].reshape(-1,*self._features_dc.shape[2:]),self._features_rest[chunk_visibility].reshape(-1,*self._features_rest.shape[2:])),dim=-2).contiguous()
+        if self.actived_sh_degree==0:
+            visible_sh=self._features_dc[chunk_visibility].reshape(-1,*self._features_dc.shape[2:])
+        else:
+            visible_sh=torch.concat((self._features_dc[chunk_visibility].reshape(-1,*self._features_dc.shape[2:]),self._features_rest[chunk_visibility].reshape(-1,*self._features_rest.shape[2:])),dim=-2).contiguous()
         return scales,rotators,visible_positions,visible_opacities,visible_sh
 
     

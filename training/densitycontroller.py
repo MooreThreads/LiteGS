@@ -82,12 +82,13 @@ class DensityControllerBase:
             if group["name"] in tensor_dict.keys():
                 tensor=tensor_dict[group["name"]]
                 stored_state = optimizer.state.get(group['params'][0], None)
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                if stored_state is not None:
+                    stored_state["exp_avg"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
-                del optimizer.state[group['params'][0]]
-                group["params"][0] = tensor
-                optimizer.state[group['params'][0]] = stored_state
+                    del optimizer.state[group['params'][0]]
+                    group["params"][0] = tensor
+                    optimizer.state[group['params'][0]] = stored_state
         return
 
     def update_optimizer_and_model(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,valid_chunks_mask:torch.Tensor=None,dict_clone:dict=None,dict_split:dict=None):
@@ -153,7 +154,7 @@ class DensityControllerOfficial(DensityControllerBase):
     def prune_and_rebuildBVH(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
         
         def __prune_torch_parameter(tensor:torch.nn.Parameter,prune_mask:torch.Tensor,default_value:float):
-            tensor_data=tensor.data.reshape(-1,*tensor.shape[2:])
+            tensor_data=tensor.data.reshape(tensor.shape[0]*tensor.shape[1],*tensor.shape[2:])
             pruned_data=tensor_data[~prune_mask]
             
             #padding
@@ -161,7 +162,7 @@ class DensityControllerOfficial(DensityControllerBase):
             padding_data=torch.ones((padding_points_num,*tensor.shape[2:]),device=pruned_data.device)*default_value
             pruned_data=torch.cat((pruned_data,padding_data))
 
-            pruned_data_chunk=pruned_data.reshape(-1,1024,*tensor.shape[2:])
+            pruned_data_chunk=pruned_data.reshape(int(pruned_data.shape[0]/1024),1024,*pruned_data.shape[1:])
             tensor.data=pruned_data_chunk
             return
         
@@ -199,7 +200,7 @@ class DensityControllerOfficial(DensityControllerBase):
         split_mask=self.densify_and_split(gaussian_model)
 
         def merge_chunk(tensor:torch.Tensor):
-            return tensor.reshape(-1,*tensor.shape[2:])
+            return tensor.reshape(tensor.shape[0]*tensor.shape[1],*tensor.shape[2:])
         features_dc_data=merge_chunk(gaussian_model._features_dc.data)
         features_rest_data=merge_chunk(gaussian_model._features_rest.data)
         opacity_data=merge_chunk(gaussian_model._opacity.data)
