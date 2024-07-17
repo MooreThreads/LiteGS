@@ -1,7 +1,7 @@
 import torch
 import math
 
-@torch.no_grad
+@torch.no_grad()
 def world_to_ndc(position,view_project_matrix):
     '''
     no grad!!! AutoGrad for world2ndc may lead to floating-point precision issues.
@@ -35,7 +35,7 @@ def quaternion_to_rotation_matrix(rotator_vec:torch.Tensor)->torch.Tensor:
     rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
     return rotation_matrix
 
-@torch.no_grad
+@torch.no_grad()
 def viewproj_to_frustumplane(viewproj_matrix:torch.Tensor)->torch.Tensor:
     '''
     Parameters:
@@ -82,7 +82,7 @@ def viewproj_to_frustumplane(viewproj_matrix:torch.Tensor)->torch.Tensor:
 
     return frustumplane
 
-@torch.no_grad
+@torch.no_grad()
 def frustum_culling_aabb(frustumplane,aabb_origin,aabb_ext)->torch.Tensor:
     '''
     Parameters:
@@ -111,7 +111,7 @@ def frustum_culling_aabb(frustumplane,aabb_origin,aabb_ext)->torch.Tensor:
     visibility=(culling==0)
     return visibility
 
-@torch.no_grad
+@torch.no_grad()
 def make_aabb_mesh(aabb_origin:torch.Tensor,aabb_ext:torch.Tensor):
     '''
     Parameters:
@@ -201,7 +201,7 @@ def make_aabb_mesh(aabb_origin:torch.Tensor,aabb_ext:torch.Tensor):
     return triangles
 
 
-@torch.no_grad
+@torch.no_grad()
 def raster_large_triangle(vertices_ndc_pos:torch.Tensor,vertices_property:torch.Tensor,H:int,W:int,device='cuda'):
     '''
     Parameters:

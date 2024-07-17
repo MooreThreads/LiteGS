@@ -31,7 +31,7 @@ class StatisticsHelper:
         self.handle_list.append((key,tensor,grad_update_func,statistics_update_func))
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def backward_callback(self):
         for (key,tensor,grad_update_func,statistics_update_func) in self.handle_list:
             if tensor.grad is not None:
@@ -45,19 +45,19 @@ class StatisticsHelper:
         self.handle_list=[]
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def set_compact_mask(self,compact_mask:torch.Tensor):
         self.compact_mask=compact_mask
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def update_visible_count(self,compacted_visible_mask:torch.Tensor):
         assert(self.compact_mask is not None)
         self.visible_count[self.compact_mask]+=compacted_visible_mask.sum(0)
         return
     
 
-    @torch.no_grad
+    @torch.no_grad()
     def update_mean_std(self,key:str,tensor:torch.Tensor):
         #update dict
         tensor_sum=tensor.sum(0)
@@ -71,7 +71,7 @@ class StatisticsHelper:
             self.mean_and_std[key]=data
         return
 
-    @torch.no_grad
+    @torch.no_grad()
     def update_mean_std_compact(self,key:str,compact_tensor:torch.Tensor):
         assert(self.compact_mask is not None)
 
@@ -91,7 +91,7 @@ class StatisticsHelper:
             self.mean_and_std[key]=data
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def update_max_min(self,key:str,tensor:torch.Tensor):
         #update dict
         tensor_max=tensor.max(0)[0]
@@ -106,7 +106,7 @@ class StatisticsHelper:
         return
 
 
-    @torch.no_grad
+    @torch.no_grad()
     def update_max_min_compact(self,key:str,compact_tensor:torch.Tensor):
         assert(self.compact_mask is not None)
 
@@ -126,7 +126,7 @@ class StatisticsHelper:
         return 
     
 
-    @torch.no_grad
+    @torch.no_grad()
     def get_max(self,key:str):
         data = self.max_and_min.get(key,None)
         max_val=None
@@ -134,7 +134,7 @@ class StatisticsHelper:
             max_val=data[0]
         return max_val
     
-    @torch.no_grad
+    @torch.no_grad()
     def get_min(self,key:str):
         data = self.max_and_min.get(key,None)
         min_val=None
@@ -142,7 +142,7 @@ class StatisticsHelper:
             min_val=data[1]
         return min_val
 
-    @torch.no_grad
+    @torch.no_grad()
     def get_mean(self,key:str):
         data = self.mean_and_std.get(key,None)
         mean_val=None
@@ -150,7 +150,7 @@ class StatisticsHelper:
             mean_val=(data[0].transpose(0,-1)/(self.visible_count+1e-6)).transpose(0,-1)
         return mean_val
     
-    @torch.no_grad
+    @torch.no_grad()
     def get_std(self,key:str):
 
         def calc_std(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):

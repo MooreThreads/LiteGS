@@ -106,7 +106,7 @@ class DensityControllerBase:
         return
     
 class DensityControllerOfficial(DensityControllerBase):
-    @torch.no_grad
+    @torch.no_grad()
     def __init__(self,grad_threshold, min_opacity, max_screen_size,percent_dense,view_matrix:torch.Tensor,opt_params:OptimizationParams)->None:
         self.grad_threshold=grad_threshold
         self.min_opacity=min_opacity
@@ -125,7 +125,7 @@ class DensityControllerOfficial(DensityControllerBase):
         self.screen_extent=radius.cpu()
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def prune(self,gaussian_model:GaussianSplattingModel)->torch.Tensor:
         prune_mask = (gaussian_model._opacity.sigmoid() < self.min_opacity).squeeze()
         if self.max_screen_size:
@@ -134,7 +134,7 @@ class DensityControllerOfficial(DensityControllerBase):
             prune_mask = prune_mask| big_points_vs | big_points_ws
         return prune_mask
 
-    @torch.no_grad
+    @torch.no_grad()
     def densify_and_clone(self,gaussian_model:GaussianSplattingModel)->torch.Tensor:
         mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad')#?std(gaussian3d.mean.grad) instead of mean(gaussian2d.mean.grad)
         abnormal_mask = mean2d_grads.norm(dim=-1) >= self.grad_threshold
@@ -142,7 +142,7 @@ class DensityControllerOfficial(DensityControllerBase):
         selected_pts_mask = abnormal_mask&(tiny_pts_mask.reshape(-1))
         return selected_pts_mask
     
-    @torch.no_grad
+    @torch.no_grad()
     def densify_and_split(self,gaussian_model:GaussianSplattingModel,N=2)->torch.Tensor:
         mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad')
         abnormal_mask = mean2d_grads.norm(dim=-1) >= self.grad_threshold
@@ -150,7 +150,7 @@ class DensityControllerOfficial(DensityControllerBase):
         selected_pts_mask=abnormal_mask&(large_pts_mask.reshape(-1))
         return selected_pts_mask
     
-    @torch.no_grad
+    @torch.no_grad()
     def prune_and_rebuildBVH(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
         
         def __prune_torch_parameter(tensor:torch.nn.Parameter,prune_mask:torch.Tensor,default_value:float):
@@ -188,7 +188,7 @@ class DensityControllerOfficial(DensityControllerBase):
         torch.cuda.empty_cache()
         return
 
-    @torch.no_grad
+    @torch.no_grad()
     def split_and_clone(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,bPrune:bool):
         
         # valid_points_mask=None
@@ -254,7 +254,7 @@ class DensityControllerOfficial(DensityControllerBase):
         torch.cuda.empty_cache()
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def reset_opacity(self,gaussian_model:GaussianSplattingModel):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
@@ -262,7 +262,7 @@ class DensityControllerOfficial(DensityControllerBase):
         gaussian_model._opacity.data=inverse_sigmoid(actived_opacities*0.5)
         return
 
-    @torch.no_grad
+    @torch.no_grad()
     def step(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,epoch_i:int):
         if self.IsDensify(epoch_i)==True:
             bResetOpacity=(epoch_i%self.opt_params.opacity_reset_interval==0)
@@ -290,13 +290,13 @@ class DensityControllerOurs(DensityControllerBase):
         self.min_opacity=0.001
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def prune(self,gaussian_model:GaussianSplattingModel):
         prune_mask = (gaussian_model._opacity.sigmoid() < self.min_opacity).squeeze()
         invisible_mask = (StatisticsHelperInst.visible_count==0)
         return prune_mask|invisible_mask
     
-    @torch.no_grad
+    @torch.no_grad()
     def densify_and_clone(self,gaussian_model:GaussianSplattingModel,N=2):
         xyz_grad_mean=StatisticsHelperInst.get_mean('xyz_grad').nan_to_num(0)
         xyz_stable_score=xyz_grad_mean.sum(-1)
@@ -318,7 +318,7 @@ class DensityControllerOurs(DensityControllerBase):
 
         return clone_mask
     
-    @torch.no_grad
+    @torch.no_grad()
     def densify_and_split(self,gaussian_model:GaussianSplattingModel,N=2):
         xyz_grad_std=StatisticsHelperInst.get_std('xyz_grad').nan_to_num(0)
         color_grad_std=StatisticsHelperInst.get_std('color_grad').nan_to_num(0)
@@ -356,7 +356,7 @@ class DensityControllerOurs(DensityControllerBase):
         bDensify=epoch_i >= self.opt_params.densify_from_iter and epoch_i<self.opt_params.densify_until_iter and epoch_i % self.opt_params.densification_interval == 0
         return bDensify
     
-    @torch.no_grad
+    @torch.no_grad()
     def reset_opacity(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
@@ -367,7 +367,7 @@ class DensityControllerOurs(DensityControllerBase):
         torch.cuda.empty_cache()
         return
     
-    @torch.no_grad
+    @torch.no_grad()
     def step(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,epoch_i:int):
 
         if self.IsDensify(epoch_i)==True:
