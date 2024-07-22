@@ -337,32 +337,32 @@ def rasterize_2d_gaussian(
 ###
 class SphericalHarmonic(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,deg:int, sh:torch.Tensor, dirs:torch.Tensor):
+    def forward(ctx,deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
         ctx.save_for_backward(dirs)
         ctx.degree=deg
-        ctx.sh_dim=sh.shape[-2]
-        rgb=torch.ops.RasterBinning.sh2rgb_forward(deg,sh,dirs)
+        ctx.sh_rest_dim=sh_rest.shape[-2]
+        rgb=torch.ops.RasterBinning.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
         return rgb
     
     @staticmethod
     def backward(ctx, grad_rgb):
         (dirs,)=ctx.saved_tensors
         degree=ctx.degree
-        sh_dim=ctx.sh_dim
-        sh_grad=torch.ops.RasterBinning.sh2rgb_backward(degree,grad_rgb,sh_dim,dirs)
+        sh_rest_dim=ctx.sh_rest_dim
+        sh_base_grad,sh_reset_grad=torch.ops.RasterBinning.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs)
 
 
-        return None,sh_grad,None
+        return None,sh_base_grad,sh_reset_grad,None
 
-def sh2rgb(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
+def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
 
-    def sh2rgb_internel_v1(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
-        return spherical_harmonics.eval_sh(deg,sh,dirs).clamp_min(0)
+    def sh2rgb_internel_v1(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+        return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=-2),dirs).clamp_min(0)
     
-    def sh2rgb_internel_v2(deg:int, sh:torch.Tensor, dirs:torch.Tensor):
-        return SphericalHarmonic.apply(deg,sh,dirs).clamp_min(0)
+    def sh2rgb_internel_v2(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+        return SphericalHarmonic.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
     
-    return sh2rgb_internel_v2(deg,sh,dirs)
+    return sh2rgb_internel_v2(deg,sh_base,sh_rest,dirs)
 
 
 ###

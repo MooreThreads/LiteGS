@@ -48,9 +48,9 @@ at::Tensor createCov2dDirectly_forward(at::Tensor J, at::Tensor view_matrix,at::
 
 at::Tensor createCov2dDirectly_backward(at::Tensor cov2d_grad, at::Tensor J, at::Tensor view_matrix, at::Tensor transform_matrix);
 
-at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh, at::Tensor dir);
+at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor dir);
 
-at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_dim, at::Tensor dir);
+std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_rest_dim, at::Tensor dir);
 
 std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input);
 at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix, at::Tensor dL_dInvMatrix);

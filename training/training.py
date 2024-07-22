@@ -188,7 +188,7 @@ class GaussianTrain:
                 return lr
 
     @staticmethod
-    def __regularization_loss_backward(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh0):
+    def __regularization_loss_backward(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest):
         #regularization_loss=(1-visible_opacities).mean()*0.001+visible_scales.var(2).mean()*0.1
         regularization_loss=visible_scales.var(1).mean()*0.1
         regularization_loss.backward(retain_graph=True)

@@ -1225,6 +1225,10 @@ __global__ void create_cov2d_forward(
         scalar_t result[2][2];
         matmul_AtA<scalar_t, 3, 2>(temp1, result);//A.trans@A
 
+        //low-pass filter
+        result[0][0] += 0.3f;
+        result[1][1] += 0.3f;
+
         save_matrix<scalar_t, 2, 2>(&result, cov2d[batch_id][index]);
     }
 }
@@ -1384,7 +1388,8 @@ __device__ const float SH_C3[] = {
 
 template <typename scalar_t,int degree>
 __global__ void sh2rgb_forward_kernel(
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SHs,    //[point_num,(deg + 1) ** 2,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base,    //[point_num,1,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest,    //[point_num,(deg + 1) ** 2-1,3] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,point_num,3] 
     torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb         //[batch,point_num,3]
 )
@@ -1394,70 +1399,70 @@ __global__ void sh2rgb_forward_kernel(
 
     if (batch_id < rgb.size(0) && index < rgb.size(1))
     {
-        torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> sh = SHs[index];
+        torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> sh = SH_rest[index];
 
         float3 result;
-        result.x = SH_C0 * sh[0][0];
-        result.y = SH_C0 * sh[0][1];
-        result.z = SH_C0 * sh[0][2];
+        result.x = SH_C0 * SH_base[index][0][0];
+        result.y = SH_C0 * SH_base[index][0][1];
+        result.z = SH_C0 * SH_base[index][0][2];
         if (degree > 0)
         {
             float x = dirs[batch_id][index][0];
             float y = dirs[batch_id][index][1];
             float z = dirs[batch_id][index][2];
-            result.x = result.x - SH_C1 * y * sh[1][0] + SH_C1 * z * sh[2][0] - SH_C1 * x * sh[3][0];
-            result.y = result.y - SH_C1 * y * sh[1][1] + SH_C1 * z * sh[2][1] - SH_C1 * x * sh[3][1];
-            result.z = result.z - SH_C1 * y * sh[1][2] + SH_C1 * z * sh[2][2] - SH_C1 * x * sh[3][2];
+            result.x = result.x - SH_C1 * y * sh[0][0] + SH_C1 * z * sh[1][0] - SH_C1 * x * sh[2][0];
+            result.y = result.y - SH_C1 * y * sh[0][1] + SH_C1 * z * sh[1][1] - SH_C1 * x * sh[2][1];
+            result.z = result.z - SH_C1 * y * sh[0][2] + SH_C1 * z * sh[1][2] - SH_C1 * x * sh[2][2];
 
             if (degree > 1)
             {
                 float xx = x * x, yy = y * y, zz = z * z;
                 float xy = x * y, yz = y * z, xz = x * z;
                 result.x = result.x + 
-                    SH_C2[0] * xy * sh[4][0] +
-                    SH_C2[1] * yz * sh[5][0] +
-                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[6][0] +
-                    SH_C2[3] * xz * sh[7][0] +
-                    SH_C2[4] * (xx - yy) * sh[8][0];
+                    SH_C2[0] * xy * sh[3][0] +
+                    SH_C2[1] * yz * sh[4][0] +
+                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[5][0] +
+                    SH_C2[3] * xz * sh[6][0] +
+                    SH_C2[4] * (xx - yy) * sh[7][0];
                 result.y = result.y +
-                    SH_C2[0] * xy * sh[4][1] +
-                    SH_C2[1] * yz * sh[5][1] +
-                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[6][1] +
-                    SH_C2[3] * xz * sh[7][1] +
-                    SH_C2[4] * (xx - yy) * sh[8][1];
+                    SH_C2[0] * xy * sh[3][1] +
+                    SH_C2[1] * yz * sh[4][1] +
+                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[5][1] +
+                    SH_C2[3] * xz * sh[6][1] +
+                    SH_C2[4] * (xx - yy) * sh[7][1];
                 result.z = result.z +
-                    SH_C2[0] * xy * sh[4][2] +
-                    SH_C2[1] * yz * sh[5][2] +
-                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[6][2] +
-                    SH_C2[3] * xz * sh[7][2] +
-                    SH_C2[4] * (xx - yy) * sh[8][2];
+                    SH_C2[0] * xy * sh[3][2] +
+                    SH_C2[1] * yz * sh[4][2] +
+                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[5][2] +
+                    SH_C2[3] * xz * sh[6][2] +
+                    SH_C2[4] * (xx - yy) * sh[7][2];
 
                 if (degree > 2)
                 {
                     result.x = result.x +
-                        SH_C3[0] * y * (3.0f * xx - yy) * sh[9][0] +
-                        SH_C3[1] * xy * z * sh[10][0] +
-                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[11][0] +
-                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[12][0] +
-                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[13][0] +
-                        SH_C3[5] * z * (xx - yy) * sh[14][0] +
-                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[15][0];
+                        SH_C3[0] * y * (3.0f * xx - yy) * sh[8][0] +
+                        SH_C3[1] * xy * z * sh[9][0] +
+                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10][0] +
+                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11][0] +
+                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12][0] +
+                        SH_C3[5] * z * (xx - yy) * sh[13][0] +
+                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[14][0];
                     result.y = result.y +
-                        SH_C3[0] * y * (3.0f * xx - yy) * sh[9][1] +
-                        SH_C3[1] * xy * z * sh[10][1] +
-                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[11][1] +
-                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[12][1] +
-                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[13][1] +
-                        SH_C3[5] * z * (xx - yy) * sh[14][1] +
-                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[15][1];
+                        SH_C3[0] * y * (3.0f * xx - yy) * sh[8][1] +
+                        SH_C3[1] * xy * z * sh[9][1] +
+                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10][1] +
+                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11][1] +
+                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12][1] +
+                        SH_C3[5] * z * (xx - yy) * sh[13][1] +
+                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[14][1];
                     result.z = result.z +
-                        SH_C3[0] * y * (3.0f * xx - yy) * sh[9][2] +
-                        SH_C3[1] * xy * z * sh[10][2] +
-                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[11][2] +
-                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[12][2] +
-                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[13][2] +
-                        SH_C3[5] * z * (xx - yy) * sh[14][2] +
-                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[15][2];
+                        SH_C3[0] * y * (3.0f * xx - yy) * sh[8][2] +
+                        SH_C3[1] * xy * z * sh[9][2] +
+                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10][2] +
+                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11][2] +
+                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12][2] +
+                        SH_C3[5] * z * (xx - yy) * sh[13][2] +
+                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[14][2];
                 }
             }
 
@@ -1471,11 +1476,11 @@ __global__ void sh2rgb_forward_kernel(
     }
 }
 
-at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh, at::Tensor dir)
+at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor dir)
 {
     int N = dir.size(0);
     int P = dir.size(1);
-    at::Tensor rgb = torch::zeros({ N,P,3 }, sh.options());
+    at::Tensor rgb = torch::zeros({ N,P,3 }, sh_base.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1484,25 +1489,29 @@ at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh, at::Tensor dir)
     {
     case 0:
         sh2rgb_forward_kernel<float, 0> << <Block3d, threadsnum >> > (
-            sh.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
         sh2rgb_forward_kernel<float, 1> << <Block3d, threadsnum >> > (
-            sh.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
         sh2rgb_forward_kernel<float, 2> << <Block3d, threadsnum >> > (
-            sh.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
         sh2rgb_forward_kernel<float, 3> << <Block3d, threadsnum >> > (
-            sh.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
@@ -1522,7 +1531,8 @@ template <typename scalar_t, int degree>
 __global__ void sh2rgb_backward_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,point_num,3] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb_grad,         //[batch,point_num,3]
-    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SHs_grad   //[point_num,(deg + 1) ** 2,3] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base_grad,   //[point_num,1,3] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest_grad   //[point_num,(deg + 1) ** 2-1,3] 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1530,13 +1540,13 @@ __global__ void sh2rgb_backward_kernel(
     {
         if ( index < rgb_grad.size(1))
         {
-            torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> dL_dsh = SHs_grad[index];
+            torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> dL_dsh = SH_rest_grad[index];
             float3 dL_dRGB{ rgb_grad[batch_id][index][0], rgb_grad[batch_id][index][1], rgb_grad[batch_id][index][2] };
 
             float dRGBdsh0 = SH_C0;
-            dL_dsh[0][0] += dRGBdsh0 * dL_dRGB.x;
-            dL_dsh[0][1] += dRGBdsh0 * dL_dRGB.y;
-            dL_dsh[0][2] += dRGBdsh0 * dL_dRGB.z;
+            SH_base_grad[index][0][0] += dRGBdsh0 * dL_dRGB.x;
+            SH_base_grad[index][0][1] += dRGBdsh0 * dL_dRGB.y;
+            SH_base_grad[index][0][2] += dRGBdsh0 * dL_dRGB.z;
 
             if (degree > 0)
             {
@@ -1547,15 +1557,15 @@ __global__ void sh2rgb_backward_kernel(
                 float dRGBdsh1 = -SH_C1 * y;
                 float dRGBdsh2 = SH_C1 * z;
                 float dRGBdsh3 = -SH_C1 * x;
-                dL_dsh[1][0] += dRGBdsh1 * dL_dRGB.x;
-                dL_dsh[2][0] += dRGBdsh2 * dL_dRGB.x;
-                dL_dsh[3][0] += dRGBdsh3 * dL_dRGB.x;
-                dL_dsh[1][1] += dRGBdsh1 * dL_dRGB.y;
-                dL_dsh[2][1] += dRGBdsh2 * dL_dRGB.y;
-                dL_dsh[3][1] += dRGBdsh3 * dL_dRGB.y;
-                dL_dsh[1][2] += dRGBdsh1 * dL_dRGB.z;
-                dL_dsh[2][2] += dRGBdsh2 * dL_dRGB.z;
-                dL_dsh[3][2] += dRGBdsh3 * dL_dRGB.z;
+                dL_dsh[0][0] += dRGBdsh1 * dL_dRGB.x;
+                dL_dsh[1][0] += dRGBdsh2 * dL_dRGB.x;
+                dL_dsh[2][0] += dRGBdsh3 * dL_dRGB.x;
+                dL_dsh[0][1] += dRGBdsh1 * dL_dRGB.y;
+                dL_dsh[1][1] += dRGBdsh2 * dL_dRGB.y;
+                dL_dsh[2][1] += dRGBdsh3 * dL_dRGB.y;
+                dL_dsh[0][2] += dRGBdsh1 * dL_dRGB.z;
+                dL_dsh[1][2] += dRGBdsh2 * dL_dRGB.z;
+                dL_dsh[2][2] += dRGBdsh3 * dL_dRGB.z;
 
                 if (degree > 1)
                 {
@@ -1568,21 +1578,21 @@ __global__ void sh2rgb_backward_kernel(
                     float dRGBdsh7 = SH_C2[3] * xz;
                     float dRGBdsh8 = SH_C2[4] * (xx - yy);
 
-                    dL_dsh[4][0] += dRGBdsh4 * dL_dRGB.x;
-                    dL_dsh[5][0] += dRGBdsh5 * dL_dRGB.x;
-                    dL_dsh[6][0] += dRGBdsh6 * dL_dRGB.x;
-                    dL_dsh[7][0] += dRGBdsh7 * dL_dRGB.x;
-                    dL_dsh[8][0] += dRGBdsh8 * dL_dRGB.x;
-                    dL_dsh[4][1] += dRGBdsh4 * dL_dRGB.y;
-                    dL_dsh[5][1] += dRGBdsh5 * dL_dRGB.y;
-                    dL_dsh[6][1] += dRGBdsh6 * dL_dRGB.y;
-                    dL_dsh[7][1] += dRGBdsh7 * dL_dRGB.y;
-                    dL_dsh[8][1] += dRGBdsh8 * dL_dRGB.y;
-                    dL_dsh[4][2] += dRGBdsh4 * dL_dRGB.z;
-                    dL_dsh[5][2] += dRGBdsh5 * dL_dRGB.z;
-                    dL_dsh[6][2] += dRGBdsh6 * dL_dRGB.z;
-                    dL_dsh[7][2] += dRGBdsh7 * dL_dRGB.z;
-                    dL_dsh[8][2] += dRGBdsh8 * dL_dRGB.z;
+                    dL_dsh[3][0] += dRGBdsh4 * dL_dRGB.x;
+                    dL_dsh[4][0] += dRGBdsh5 * dL_dRGB.x;
+                    dL_dsh[5][0] += dRGBdsh6 * dL_dRGB.x;
+                    dL_dsh[6][0] += dRGBdsh7 * dL_dRGB.x;
+                    dL_dsh[7][0] += dRGBdsh8 * dL_dRGB.x;
+                    dL_dsh[3][1] += dRGBdsh4 * dL_dRGB.y;
+                    dL_dsh[4][1] += dRGBdsh5 * dL_dRGB.y;
+                    dL_dsh[5][1] += dRGBdsh6 * dL_dRGB.y;
+                    dL_dsh[6][1] += dRGBdsh7 * dL_dRGB.y;
+                    dL_dsh[7][1] += dRGBdsh8 * dL_dRGB.y;
+                    dL_dsh[3][2] += dRGBdsh4 * dL_dRGB.z;
+                    dL_dsh[4][2] += dRGBdsh5 * dL_dRGB.z;
+                    dL_dsh[5][2] += dRGBdsh6 * dL_dRGB.z;
+                    dL_dsh[6][2] += dRGBdsh7 * dL_dRGB.z;
+                    dL_dsh[7][2] += dRGBdsh8 * dL_dRGB.z;
 
                     if (degree > 2)
                     {
@@ -1593,27 +1603,27 @@ __global__ void sh2rgb_backward_kernel(
                         float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
                         float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
                         float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
-                        dL_dsh[9][0] += dRGBdsh9 * dL_dRGB.x;
-                        dL_dsh[10][0] += dRGBdsh10 * dL_dRGB.x;
-                        dL_dsh[11][0] += dRGBdsh11 * dL_dRGB.x;
-                        dL_dsh[12][0] += dRGBdsh12 * dL_dRGB.x;
-                        dL_dsh[13][0] += dRGBdsh13 * dL_dRGB.x;
-                        dL_dsh[14][0] += dRGBdsh14 * dL_dRGB.x;
-                        dL_dsh[15][0] += dRGBdsh15 * dL_dRGB.x;
-                        dL_dsh[9][1] += dRGBdsh9 * dL_dRGB.y;
-                        dL_dsh[10][1] += dRGBdsh10 * dL_dRGB.y;
-                        dL_dsh[11][1] += dRGBdsh11 * dL_dRGB.y;
-                        dL_dsh[12][1] += dRGBdsh12 * dL_dRGB.y;
-                        dL_dsh[13][1] += dRGBdsh13 * dL_dRGB.y;
-                        dL_dsh[14][1] += dRGBdsh14 * dL_dRGB.y;
-                        dL_dsh[15][1] += dRGBdsh15 * dL_dRGB.y;
-                        dL_dsh[9][2] += dRGBdsh9 * dL_dRGB.z;
-                        dL_dsh[10][2] += dRGBdsh10 * dL_dRGB.z;
-                        dL_dsh[11][2] += dRGBdsh11 * dL_dRGB.z;
-                        dL_dsh[12][2] += dRGBdsh12 * dL_dRGB.z;
-                        dL_dsh[13][2] += dRGBdsh13 * dL_dRGB.z;
-                        dL_dsh[14][2] += dRGBdsh14 * dL_dRGB.z;
-                        dL_dsh[15][2] += dRGBdsh15 * dL_dRGB.z;
+                        dL_dsh[8][0] += dRGBdsh9 * dL_dRGB.x;
+                        dL_dsh[9][0] += dRGBdsh10 * dL_dRGB.x;
+                        dL_dsh[10][0] += dRGBdsh11 * dL_dRGB.x;
+                        dL_dsh[11][0] += dRGBdsh12 * dL_dRGB.x;
+                        dL_dsh[12][0] += dRGBdsh13 * dL_dRGB.x;
+                        dL_dsh[13][0] += dRGBdsh14 * dL_dRGB.x;
+                        dL_dsh[14][0] += dRGBdsh15 * dL_dRGB.x;
+                        dL_dsh[8][1] += dRGBdsh9 * dL_dRGB.y;
+                        dL_dsh[9][1] += dRGBdsh10 * dL_dRGB.y;
+                        dL_dsh[10][1] += dRGBdsh11 * dL_dRGB.y;
+                        dL_dsh[11][1] += dRGBdsh12 * dL_dRGB.y;
+                        dL_dsh[12][1] += dRGBdsh13 * dL_dRGB.y;
+                        dL_dsh[13][1] += dRGBdsh14 * dL_dRGB.y;
+                        dL_dsh[14][1] += dRGBdsh15 * dL_dRGB.y;
+                        dL_dsh[8][2] += dRGBdsh9 * dL_dRGB.z;
+                        dL_dsh[9][2] += dRGBdsh10 * dL_dRGB.z;
+                        dL_dsh[10][2] += dRGBdsh11 * dL_dRGB.z;
+                        dL_dsh[11][2] += dRGBdsh12 * dL_dRGB.z;
+                        dL_dsh[12][2] += dRGBdsh13 * dL_dRGB.z;
+                        dL_dsh[13][2] += dRGBdsh14 * dL_dRGB.z;
+                        dL_dsh[14][2] += dRGBdsh15 * dL_dRGB.z;
                     }
                 }
 
@@ -1622,12 +1632,14 @@ __global__ void sh2rgb_backward_kernel(
     }
 }
 
-at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_dim, at::Tensor dir)
+std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_rest_dim, at::Tensor dir)
 {
     int N = rgb_grad.size(0);
     int P = rgb_grad.size(1);
     int C = rgb_grad.size(2);
-    at::Tensor sh_grad = torch::zeros({P,sh_dim ,C}, rgb_grad.options());
+
+    at::Tensor sh_grad = torch::zeros({ P,1 ,C }, rgb_grad.options());
+    at::Tensor sh_rest_grad = torch::zeros({ P,sh_rest_dim ,C }, rgb_grad.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1638,25 +1650,29 @@ at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_dim, 
         sh2rgb_backward_kernel<float, 0> << <blocknum, threadsnum >> > (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
         sh2rgb_backward_kernel<float, 1> << <blocknum, threadsnum >> > (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
         sh2rgb_backward_kernel<float, 2> << <blocknum, threadsnum >> > (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
         sh2rgb_backward_kernel<float, 3> << <blocknum, threadsnum >> > (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+            sh_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     default:
         ;
@@ -1665,7 +1681,7 @@ at::Tensor sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_dim, 
 
 
     CUDA_CHECK_ERRORS;
-    return sh_grad;
+    return { sh_grad,sh_rest_grad };
 }
 
 

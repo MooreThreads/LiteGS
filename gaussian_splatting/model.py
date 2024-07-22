@@ -209,8 +209,6 @@ class GaussianSplattingModel:
         transform_matrix=wrapper.create_transform_matrix(scaling_vec,rotator_vec)
         J=wrapper.create_rayspace_transform(None,point_positions,view_matrix,camera_focal,False)
         cov2d=wrapper.create_2dcov_directly(J,view_matrix,transform_matrix)
-        cov2d[:,:,0,0]+=0.3
-        cov2d[:,:,1,1]+=0.3
         return cov2d
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
@@ -267,11 +265,11 @@ class GaussianSplattingModel:
 
         visible_positions=self._xyz[chunk_visibility].contiguous().reshape(-1,*self._xyz.shape[2:])
         visible_opacities=self._opacity[chunk_visibility].contiguous().sigmoid().reshape(-1,*self._opacity.shape[2:])
-        if self.actived_sh_degree==0:
-            visible_sh=self._features_dc[chunk_visibility].reshape(-1,*self._features_dc.shape[2:])
-        else:
-            visible_sh=torch.concat((self._features_dc[chunk_visibility].reshape(-1,*self._features_dc.shape[2:]),self._features_rest[chunk_visibility].reshape(-1,*self._features_rest.shape[2:])),dim=-2).contiguous()
-        return scales,rotators,visible_positions,visible_opacities,visible_sh
+
+        visible_sh_base=self._features_dc[chunk_visibility].contiguous().reshape(-1,*self._features_dc.shape[2:])
+        visible_sh_rest=self._features_rest[chunk_visibility].contiguous().reshape(-1,*self._features_rest.shape[2:])
+
+        return scales,rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest
 
     
     @torch.no_grad()
@@ -362,9 +360,9 @@ class GaussianSplattingModel:
                 compact_mask=chunk_visibility.unsqueeze(-1).repeat(1,self.chunk_size).reshape(-1)
                 StatisticsHelperInst.set_compact_mask(compact_mask)
 
-        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh=self.sample_by_visibility(chunk_visibility)
+        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest=self.sample_by_visibility(chunk_visibility)
         if prebackward_func is not None:
-            prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh)
+            prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest)
 
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
         #cov3d,transform_matrix=self.transform_to_cov3d(visible_scales,visible_rotators)
@@ -375,7 +373,7 @@ class GaussianSplattingModel:
         ### color ###
         dirs=visible_positions[...,:3]-camera_center_batch.unsqueeze(1)#[N,P,3]
         dirs=torch.nn.functional.normalize(dirs,dim=-1)
-        visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh,dirs)
+        visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh_base,visible_sh_rest,dirs)
         
         ### mean of 2d-gaussian ###
         ndc_pos_batch=wrapper.wrold2ndc(visible_positions,view_project_matrix)

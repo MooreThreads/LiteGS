@@ -22,7 +22,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
     `python setup.py build_ext --inplace -j8`
 
-    `python setup.py build_ext --inplace -j8`
+    `python setup.py install`
 
 2. Install gaussian_raster
 
