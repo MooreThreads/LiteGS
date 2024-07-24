@@ -45,12 +45,16 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
 at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos);
 
 at::Tensor createCov2dDirectly_forward(at::Tensor J, at::Tensor view_matrix,at::Tensor transform_matrix);
-
 at::Tensor createCov2dDirectly_backward(at::Tensor cov2d_grad, at::Tensor J, at::Tensor view_matrix, at::Tensor transform_matrix);
 
 at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor dir);
-
 std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_rest_dim, at::Tensor dir);
+
+std::vector<at::Tensor> compact_visible_params_forward(int64_t visible_num,at::Tensor visible_mask, at::Tensor visible_mask_cumsum, 
+    at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity);
+std::vector<at::Tensor> compact_visible_params_backward(int64_t chunk_num, int64_t chunk_size, at::Tensor reverse_map,
+    at::Tensor compacted_position_grad, at::Tensor compacted_scale_grad, at::Tensor compacted_rotation_grad,
+    at::Tensor compacted_sh_base_grad, at::Tensor compacted_sh_rest_grad, at::Tensor compacted_opacity_grad);
 
 std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input);
 at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix, at::Tensor dL_dInvMatrix);

@@ -24,7 +24,11 @@ class GaussianSplattingModel:
         self.chunk_AABB_extend=None
         self.b_split_into_chunk=False
         
-        #parameters
+        self.load_from_scene(scene)
+        return
+    
+    @torch.no_grad()
+    def load_from_scene(self,scene:GaussianScene):
         self._xyz = torch.nn.Parameter(torch.Tensor(np.pad(scene.position,((0,0),(0,1)),'constant',constant_values=1)).cuda())
         self._features_dc = torch.nn.Parameter(torch.Tensor(scene.sh_coefficient_dc).transpose(1, 2).contiguous().cuda())
         self._features_rest = torch.nn.Parameter(torch.Tensor(scene.sh_coefficient_rest).transpose(1, 2).contiguous().cuda())
@@ -35,6 +39,20 @@ class GaussianSplattingModel:
         self.__split_into_chunk()
         return
     
+
+    @torch.no_grad()
+    def save_to_scene(self,scene:GaussianScene):
+        if self.b_split_into_chunk:
+            self.__concate_param_chunks()
+        scene.position=self._xyz[...,:3].cpu().numpy()
+        scene.sh_coefficient_dc=self._features_dc.cpu().numpy()
+        scene.sh_coefficient_rest=self._features_rest.cpu().numpy()
+        scene.rotator=self._rotation.cpu().numpy()
+        scene.scale=self._scaling.cpu().numpy()
+        scene.opacity=self._opacity.cpu().numpy()
+        scene.sh_degree=0
+        return
+    
     @torch.no_grad()
     def __split_into_chunk(self):
         assert(self.b_split_into_chunk==False)
@@ -42,40 +60,40 @@ class GaussianSplattingModel:
         temporary_point_id=torch.arange(self._xyz.shape[0],device='cuda')
         scale=self._scaling.exp()
         roator=torch.nn.functional.normalize(self._rotation,dim=-1)
-        temporary_cov3d,_=self.transform_to_cov3d(scale,roator)
+        temporary_cov3d,_=self.transform_to_cov3d(scale.transpose(0,1).contiguous(),roator.transpose(0,1).contiguous())
         points_batch=GSpointBatch(temporary_point_id,self._xyz[:,:3],{'cov':temporary_cov3d})
         bvh=BVH([points_batch,])
         bvh.build(self.chunk_size)
 
         #split into chunk
         chunk_num=len(bvh.leaf_nodes)
-        xyz_chunk=torch.zeros((chunk_num,self.chunk_size,*self._xyz.shape[1:]),device='cuda')
-        features_dc_chunk=torch.zeros((chunk_num,self.chunk_size,*self._features_dc.shape[1:]),device='cuda')
-        features_rest_chunk=torch.zeros((chunk_num,self.chunk_size,*self._features_rest.shape[1:]),device='cuda')
-        opacity_chunk=torch.zeros((chunk_num,self.chunk_size,*self._opacity.shape[1:]),device='cuda')
-        scaling_chunk=torch.zeros((chunk_num,self.chunk_size,*self._scaling.shape[1:]),device='cuda')
-        rotation_chunk=torch.zeros((chunk_num,self.chunk_size,*self._rotation.shape[1:]),device='cuda')
+        xyz_chunk=torch.zeros((chunk_num,*self._xyz.shape[1:],self.chunk_size),device='cuda')
+        features_dc_chunk=torch.zeros((chunk_num,*self._features_dc.shape[1:],self.chunk_size),device='cuda')
+        features_rest_chunk=torch.zeros((chunk_num,*self._features_rest.shape[1:],self.chunk_size),device='cuda')
+        opacity_chunk=torch.zeros((chunk_num,*self._opacity.shape[1:],self.chunk_size),device='cuda')
+        scaling_chunk=torch.zeros((chunk_num,*self._scaling.shape[1:],self.chunk_size),device='cuda')
+        rotation_chunk=torch.zeros((chunk_num,*self._rotation.shape[1:],self.chunk_size),device='cuda')
 
         origin_list=[]
         extend_list=[]
         for chunk_index,node in enumerate(bvh.leaf_nodes):
             points_num=node.objs.shape[0]
             repeat_n=int(self.chunk_size/points_num)
-            xyz_chunk[chunk_index][:repeat_n*points_num]=self._xyz[node.objs].repeat(repeat_n,1)
-            features_dc_chunk[chunk_index][:repeat_n*points_num]=self._features_dc[node.objs].repeat(repeat_n,1,1)
-            features_rest_chunk[chunk_index][:repeat_n*points_num]=self._features_rest[node.objs].repeat(repeat_n,1,1)
-            opacity_chunk[chunk_index][:repeat_n*points_num]=self._opacity[node.objs].repeat(repeat_n,1)
-            scaling_chunk[chunk_index][:repeat_n*points_num]=self._scaling[node.objs].repeat(repeat_n,1)
-            rotation_chunk[chunk_index][:repeat_n*points_num]=self._rotation[node.objs].repeat(repeat_n,1)
+            xyz_chunk[chunk_index,:,:repeat_n*points_num]=self._xyz[node.objs].repeat(repeat_n,1).transpose(0,1)
+            features_dc_chunk[chunk_index,:,:,:repeat_n*points_num]=self._features_dc[node.objs].repeat(repeat_n,1,1).transpose(0,1).transpose(1,2)
+            features_rest_chunk[chunk_index,:,:,:repeat_n*points_num]=self._features_rest[node.objs].repeat(repeat_n,1,1).transpose(0,1).transpose(1,2)
+            opacity_chunk[chunk_index,:,:repeat_n*points_num]=self._opacity[node.objs].repeat(repeat_n,1).transpose(0,1)
+            scaling_chunk[chunk_index,:,:repeat_n*points_num]=self._scaling[node.objs].repeat(repeat_n,1).transpose(0,1)
+            rotation_chunk[chunk_index,:,:repeat_n*points_num]=self._rotation[node.objs].repeat(repeat_n,1).transpose(0,1)
 
             remain_num=self.chunk_size-repeat_n*points_num
             if remain_num>0:
-                xyz_chunk[chunk_index][repeat_n*points_num:]=self._xyz[node.objs[:remain_num]]
-                features_dc_chunk[chunk_index][repeat_n*points_num:]=self._features_dc[node.objs[:remain_num]]
-                features_rest_chunk[chunk_index][repeat_n*points_num:]=self._features_rest[node.objs[:remain_num]]
-                opacity_chunk[chunk_index][repeat_n*points_num:]=-1e5
-                scaling_chunk[chunk_index][repeat_n*points_num:]=self._scaling[node.objs[:remain_num]]
-                rotation_chunk[chunk_index][repeat_n*points_num:]=self._rotation[node.objs[:remain_num]]
+                xyz_chunk[chunk_index,:,repeat_n*points_num:]=self._xyz[node.objs[:remain_num]].transpose(0,1)
+                features_dc_chunk[chunk_index,:,:,repeat_n*points_num:]=self._features_dc[node.objs[:remain_num]].transpose(0,1).transpose(1,2)
+                features_rest_chunk[chunk_index,:,:,repeat_n*points_num:]=self._features_rest[node.objs[:remain_num]].transpose(0,1).transpose(1,2)
+                opacity_chunk[chunk_index,:,repeat_n*points_num:]=-1e5
+                scaling_chunk[chunk_index,:,repeat_n*points_num:]=self._scaling[node.objs[:remain_num]].transpose(0,1)
+                rotation_chunk[chunk_index,:,repeat_n*points_num:]=self._rotation[node.objs[:remain_num]].transpose(0,1)
 
             origin_list.append(node.origin.unsqueeze(0))
             extend_list.append(node.extend.unsqueeze(0))
@@ -183,17 +201,6 @@ class GaussianSplattingModel:
     def reset_statistics_helper(self):
         self.statistics_helper.reset(self._xyz.shape[0])
         return
-
-    @torch.no_grad()
-    def save_to_scene(self,scene:GaussianScene):
-        scene.position=self._xyz[...,:3].cpu().numpy()
-        scene.sh_coefficient_dc=self._features_dc.cpu().numpy()
-        scene.sh_coefficient_rest=self._features_rest.cpu().numpy()
-        scene.rotator=self._rotation.cpu().numpy()
-        scene.scale=self._scaling.cpu().numpy()
-        scene.opacity=self._opacity.cpu().numpy()
-        scene.sh_degree=0
-        return
     
     def oneupSHdegree(self):
         if self.actived_sh_degree < self.max_sh_degree:
@@ -207,13 +214,13 @@ class GaussianSplattingModel:
         If you need to modifiy the intermediate variables, use the following functions: transform_to_cov3d -> proj_cov3d_to_cov2d
         '''
         transform_matrix=wrapper.create_transform_matrix(scaling_vec,rotator_vec)
-        J=wrapper.create_rayspace_transform(None,point_positions,view_matrix,camera_focal,False)
+        J=wrapper.create_rayspace_transform(point_positions,view_matrix,camera_focal,False)
         cov2d=wrapper.create_2dcov_directly(J,view_matrix,transform_matrix)
         return cov2d
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
-        transform_matrix=wrapper.create_transform_matrix(scaling_vec,rotator_vec)
-        cov3d=wrapper.create_cov3d(transform_matrix)
+        transform_matrix=wrapper.create_transform_matrix(scaling_vec,rotator_vec)#[3,3,P]
+        cov3d=wrapper.create_cov3d(transform_matrix.transpose(0,2).transpose(1,2))
         return cov3d,transform_matrix
     
     #@torch.compile
@@ -221,16 +228,16 @@ class GaussianSplattingModel:
         '''
         J^t @ M^t @ Cov3d @ M @J
         '''
-        trans_J=wrapper.create_rayspace_transform(cov3d,point_positions,view_matrix,camera_focal,True)[:,:,:2,:]
+        trans_J=wrapper.create_rayspace_transform(point_positions,view_matrix,camera_focal,True)[:,:2].transpose(-1,-2).transpose(-2,-3)
 
-        trans_M=view_matrix.unsqueeze(1)[:,:,0:3,0:3].transpose(-1,-2)
+        trans_M=view_matrix[:,0:3,0:3].unsqueeze(0).transpose(-1,-2)
         trans_T=(trans_J@trans_M).contiguous()
 
         cov2d=wrapper.project_3dcov_to_2d(cov3d,trans_T)#backward improvement
 
         cov2d[:,:,0,0]+=0.3
         cov2d[:,:,1,1]+=0.3
-        return cov2d
+        return cov2d.transpose(1,2).transpose(2,3)
 
     
     def update_tiles_coord(self,image_size,tile_size):
@@ -260,16 +267,14 @@ class GaussianSplattingModel:
         return visible_point,visible_points_num
     
     def sample_by_visibility(self,chunk_visibility):
-        scales=self._scaling[chunk_visibility].contiguous().exp().reshape(-1,*self._scaling.shape[2:])
-        rotators=torch.nn.functional.normalize(self._rotation[chunk_visibility].contiguous(),dim=-1).reshape(-1,*self._rotation.shape[2:])
 
-        visible_positions=self._xyz[chunk_visibility].contiguous().reshape(-1,*self._xyz.shape[2:])
-        visible_opacities=self._opacity[chunk_visibility].contiguous().sigmoid().reshape(-1,*self._opacity.shape[2:])
+        positions,scales,rotators,sh_base,sh_rest,opacities=wrapper.compact_visible_params(chunk_visibility,self._xyz,self._scaling,self._rotation,self._features_dc,self._features_rest,self._opacity)
 
-        visible_sh_base=self._features_dc[chunk_visibility].contiguous().reshape(-1,*self._features_dc.shape[2:])
-        visible_sh_rest=self._features_rest[chunk_visibility].contiguous().reshape(-1,*self._features_rest.shape[2:])
+        scales=scales.exp()
+        rotators=torch.nn.functional.normalize(rotators,dim=0)
+        opacities=opacities.sigmoid()
 
-        return scales,rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest
+        return positions,scales,rotators,sh_base,sh_rest,opacities
 
     
     @torch.no_grad()
@@ -282,31 +287,31 @@ class GaussianSplattingModel:
         image_size=self.cached_image_size
 
         # Major and minor axes -> AABB extensions
-        opacity_clamped=opacity.squeeze(-1).clamp_min(1/255)
+        opacity_clamped=opacity.unsqueeze(0).clamp_min(1/255)
         coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
-        axis_length=(coefficient.unsqueeze(-1)*eigen_val.abs()).sqrt().ceil()
-        extension=(axis_length.unsqueeze(-1)*eigen_vec).abs().sum(dim=-2)
+        axis_length=(coefficient*eigen_val.abs()).sqrt().ceil()
+        extension=(axis_length.unsqueeze(-2)*eigen_vec).abs().sum(dim=-3)
 
-        screen_coord=((ndc[...,:2]+1.0)*0.5*self.cached_image_size_tensor-0.5)
-        b_visible=~((ndc[...,0]<-1.3)|(ndc[...,0]>1.3)|(ndc[...,1]>1.3)|(ndc[...,1]>1.3)|(ndc[...,2]>1)|(ndc[...,2]<0))
-        left_up=((screen_coord-extension)/tile_size).int()*b_visible.unsqueeze(-1)
-        right_down=((screen_coord+extension)/tile_size).ceil().int()*b_visible.unsqueeze(-1)
-        left_up[...,0].clamp_(0,tilesX)
-        left_up[...,1].clamp_(0,tilesY)
-        right_down[...,0].clamp_(0,tilesX)
-        right_down[...,1].clamp_(0,tilesY)
+        screen_coord=((ndc[:,:2]+1.0)*0.5*self.cached_image_size_tensor.unsqueeze(-1)-0.5)
+        b_visible=~((ndc[:,0]<-1.3)|(ndc[:,0]>1.3)|(ndc[:,1]>1.3)|(ndc[:,1]>1.3)|(ndc[:,2]>1)|(ndc[:,2]<0))
+        left_up=((screen_coord-extension)/tile_size).int()*b_visible
+        right_down=((screen_coord+extension)/tile_size).ceil().int()*b_visible
+        left_up[:,0].clamp_(0,tilesX)
+        left_up[:,1].clamp_(0,tilesY)
+        right_down[:,0].clamp_(0,tilesX)
+        right_down[:,1].clamp_(0,tilesY)
 
         #splatting area of each points
         rect_length=right_down-left_up
-        tiles_touched=rect_length[...,0]*rect_length[...,1]
-        radius_pixel=(axis_length.max(-1).values*(tiles_touched!=0))
+        tiles_touched=rect_length[:,0]*rect_length[:,1]
+        radius_pixel=(axis_length.max(-2).values*(tiles_touched!=0))
 
         #sort by depth
-        values,point_ids=ndc[...,2].sort(dim=-1)
+        values,point_ids=ndc[:,2].sort(dim=-1)
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
-            left_up[i]=left_up[i,point_ids[i]]
-            right_down[i]=right_down[i,point_ids[i]]
+            left_up[i]=left_up[i,:,point_ids[i]]
+            right_down[i]=right_down[i,:,point_ids[i]]
 
         #calc the item num of table and the start index in table of each point
         prefix_sum=tiles_touched.cumsum(1)#start index of points
@@ -336,7 +341,7 @@ class GaussianSplattingModel:
     
     def raster(self,ndc_pos:torch.Tensor,inv_cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
     
-        mean2d=(ndc_pos[:,:,0:2]+1.0)*0.5*self.cached_image_size_tensor-0.5
+        mean2d=(ndc_pos[:,0:2]+1.0)*0.5*self.cached_image_size_tensor.unsqueeze(-1)-0.5
         if StatisticsHelperInst.bStart and ndc_pos.requires_grad:
             def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
                 return tensor[...,:2].norm(dim=-1,keepdim=True)
@@ -360,26 +365,26 @@ class GaussianSplattingModel:
                 compact_mask=chunk_visibility.unsqueeze(-1).repeat(1,self.chunk_size).reshape(-1)
                 StatisticsHelperInst.set_compact_mask(compact_mask)
 
-        visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest=self.sample_by_visibility(chunk_visibility)
+        positions,scales,rotators,sh_base,sh_rest,opacities=self.sample_by_visibility(chunk_visibility)
         if prebackward_func is not None:
-            prebackward_func(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest)
+            prebackward_func(positions,scales,rotators,sh_base,sh_rest,opacities)
 
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
-        #cov3d,transform_matrix=self.transform_to_cov3d(visible_scales,visible_rotators)
-        #visible_cov2d=self.proj_cov3d_to_cov2d(cov3d,visible_positions,view_matrix,camera_focal)
-        visible_cov2d=self.create_cov2d_optimized(visible_scales,visible_rotators,visible_positions,view_matrix,camera_focal)
-        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(visible_cov2d)
+        cov3d,transform_matrix=self.transform_to_cov3d(scales,rotators)
+        cov2d=self.proj_cov3d_to_cov2d(cov3d,positions,view_matrix,camera_focal)
+        #cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)
+        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)
         
         ### color ###
-        dirs=visible_positions[...,:3]-camera_center_batch.unsqueeze(1)#[N,P,3]
-        dirs=torch.nn.functional.normalize(dirs,dim=-1)
-        visible_color=wrapper.sh2rgb(self.actived_sh_degree,visible_sh_base,visible_sh_rest,dirs)
+        dirs=positions[:3]-camera_center_batch.unsqueeze(-1)#[N,P,3]
+        dirs=torch.nn.functional.normalize(dirs,dim=-2)
+        colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)
         
         ### mean of 2d-gaussian ###
-        ndc_pos_batch=wrapper.wrold2ndc(visible_positions,view_project_matrix)
+        ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,visible_opacities)
+        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_max_min_compact('radii',radii)
             StatisticsHelperInst.update_visible_count(radii>0)
@@ -388,7 +393,7 @@ class GaussianSplattingModel:
         if tiles is None:
             batch_size=view_matrix.shape[0]
             tiles=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
-        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,visible_color,visible_opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
+        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
 
         
         return tile_img,tile_transmitance.unsqueeze(1)

@@ -188,9 +188,9 @@ class GaussianTrain:
                 return lr
 
     @staticmethod
-    def __regularization_loss_backward(visible_scales,visible_rotators,visible_positions,visible_opacities,visible_sh_base,visible_sh_rest):
+    def __regularization_loss_backward(positions,scales,rotators,sh_base,sh_rest,opacities):
         #regularization_loss=(1-visible_opacities).mean()*0.001+visible_scales.var(2).mean()*0.1
-        regularization_loss=visible_scales.var(1).mean()*0.1
+        regularization_loss=scales.var(1).mean()*0.1
         regularization_loss.backward(retain_graph=True)
         return    
     
@@ -321,7 +321,7 @@ class GaussianTrain:
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
-        self.report_psnr(self.iter_start)
+        #self.report_psnr(self.iter_start)
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size)
             view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()

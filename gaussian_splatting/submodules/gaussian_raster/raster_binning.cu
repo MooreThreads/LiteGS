@@ -13,15 +13,25 @@ namespace cg = cooperative_groups;
 #include <ATen/core/TensorAccessor.h>
 //using namespace at;
 
-#define CUDA_CHECK_ERRORS \
-    cudaError_t err = cudaGetLastError(); \
-    if (err != cudaSuccess) \
-            printf("Error in svox.%s : %s\n", __FUNCTION__, cudaGetErrorString(err))
+void cuda_error_check(const char* file, const char* function)
+{
+    cudaDeviceSynchronize();
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        printf("Error in %s.%s : %s\n", file, function, cudaGetErrorString(err));
+}
+
+#define CUDA_DEBUG
+#ifdef CUDA_DEBUG
+    #define CUDA_CHECK_ERRORS cuda_error_check(__FILE__,__FUNCTION__)
+#else
+    #define CUDA_CHECK_ERRORS
+#endif
 
  __global__ void duplicate_with_keys_kernel(
-    const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> LU,//viewnum,pointnum
-    const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> RD,
-    const torch::PackedTensorAccessor32<int64_t, 2,torch::RestrictPtrTraits> prefix_sum,//view,pointnum
+    const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> LU,//viewnum,2,pointnum
+    const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> RD,//viewnum,2,pointnum
+    const torch::PackedTensorAccessor32<int64_t, 2,torch::RestrictPtrTraits> prefix_sum,//viewnum,pointnum
     int TileSizeX,
     torch::PackedTensorAccessor32 < int16_t, 2, torch::RestrictPtrTraits> table_tileId,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
@@ -34,10 +44,10 @@ namespace cg = cooperative_groups;
     {
         int end = prefix_sum[view_id][point_id];
         //int end = prefix_sum[view_id][point_id+1];
-        int l = LU[view_id][point_id][0];
-        int u = LU[view_id][point_id][1];
-        int r = RD[view_id][point_id][0];
-        int d = RD[view_id][point_id][1];
+        int l = LU[view_id][0][point_id];
+        int u = LU[view_id][1][point_id];
+        int r = RD[view_id][0][point_id];
+        int d = RD[view_id][1][point_id];
         int count = 0;
 
         for (int i = u; i < d; i++)
@@ -61,7 +71,7 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
 {
     at::DeviceGuard guard(LU.device());
     int64_t view_num = LU.sizes()[0];
-    int64_t points_num = LU.sizes()[1];
+    int64_t points_num = LU.sizes()[2];
 
     std::vector<int64_t> output_shape{ view_num, allocate_size };
 
@@ -152,10 +162,10 @@ template <int tilesize>
 __global__ void raster_forward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> mean2d,         //[batch,point_num,2]
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,point_num,2,2]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,point_num,3]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[point_num,1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> mean2d,         //[batch,2,point_num]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,2,2,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,3,point_num]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[1,point_num]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_img,    //[batch,3,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> output_transmitance,    //[batch,tile,tilesize,tilesize]
@@ -201,16 +211,16 @@ __global__ void raster_forward_kernel(
                 int i=threadIdx.y * blockDim.x + threadIdx.x;
                 int index = offset + i;
                 int point_id = sorted_points[batch_id][index];
-                collected_xy[i].x = mean2d[batch_id][point_id][0];
-                collected_xy[i].y = mean2d[batch_id][point_id][1];
-                collected_cov2d_inv[i].x = cov2d_inv[batch_id][point_id][0][0];
-                collected_cov2d_inv[i].y = cov2d_inv[batch_id][point_id][0][1];
-                collected_cov2d_inv[i].z = cov2d_inv[batch_id][point_id][1][1];
+                collected_xy[i].x = mean2d[batch_id][0][point_id];
+                collected_xy[i].y = mean2d[batch_id][1][point_id];
+                collected_cov2d_inv[i].x = cov2d_inv[batch_id][0][0][point_id];
+                collected_cov2d_inv[i].y = cov2d_inv[batch_id][0][1][point_id];
+                collected_cov2d_inv[i].z = cov2d_inv[batch_id][1][1][point_id];
 
-                collected_color[i].x = color[batch_id][point_id][0];
-                collected_color[i].y = color[batch_id][point_id][1];
-                collected_color[i].z = color[batch_id][point_id][2];
-                collected_opacity[i] = opacity[point_id][0];
+                collected_color[i].x = color[batch_id][0][point_id];
+                collected_color[i].y = color[batch_id][1][point_id];
+                collected_color[i].z = color[batch_id][2][point_id];
+                collected_opacity[i] = opacity[0][point_id];
             }
             __syncthreads();
 
@@ -352,18 +362,18 @@ std::vector<at::Tensor> rasterize_forward(
 __global__ void raster_backward_kernel_8x8(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> mean2d,         //[batch,point_num,2]
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,point_num,2,2]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,point_num,3]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[batch,point_num,1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> mean2d,         //[batch,2,point_num]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,2,2,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,3,point_num]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[1,point_num]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> final_transmitance,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_mean2d,         //[batch,point_num,2]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,point_num,2,2]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,point_num,3]
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[point_num,1]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_mean2d,         //[batch,2,point_num]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
     int tiles_num_x, int img_h, int img_w
 )
 {
@@ -412,10 +422,10 @@ __global__ void raster_backward_kernel_8x8(
 
                 if (skip == false)
                 {
-                    float2 xy{ mean2d[batch_id][point_id][0],mean2d[batch_id][point_id][1] };
+                    float2 xy{ mean2d[batch_id][0][point_id],mean2d[batch_id][1][point_id] };
                     float2 d{ xy.x - pixel_x,xy.y - pixel_y };
-                    float4 cur_color{ color[batch_id][point_id][0],color[batch_id][point_id][1],color[batch_id][point_id][2],opacity[point_id][0] };
-                    float3 cur_cov2d_inv{ cov2d_inv[batch_id][point_id][0][0],cov2d_inv[batch_id][point_id][0][1],cov2d_inv[batch_id][point_id][1][1] };
+                    float4 cur_color{ color[batch_id][0][point_id],color[batch_id][1][point_id],color[batch_id][2][point_id],opacity[0][point_id] };
+                    float3 cur_cov2d_inv{ cov2d_inv[batch_id][0][0][point_id],cov2d_inv[batch_id][0][1][point_id],cov2d_inv[batch_id][1][1][point_id] };
 
 
                     float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
@@ -481,19 +491,19 @@ __global__ void raster_backward_kernel_8x8(
                     }
                     if (warp.thread_rank() == 0)
                     {
-                        atomicAdd(&d_color[batch_id][point_id][0], grad_color.x);
-                        atomicAdd(&d_color[batch_id][point_id][1], grad_color.y);
-                        atomicAdd(&d_color[batch_id][point_id][2], grad_color.z);
+                        atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
+                        atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
+                        atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
 
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], grad_invcov.x);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], grad_invcov.y);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], grad_invcov.y);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], grad_invcov.z);
+                        atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
+                        atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
+                        atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
+                        atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
 
-                        atomicAdd(&d_mean2d[batch_id][point_id][0], grad_mean.x);
-                        atomicAdd(&d_mean2d[batch_id][point_id][1], grad_mean.y);
+                        atomicAdd(&d_mean2d[batch_id][0][point_id], grad_mean.x);
+                        atomicAdd(&d_mean2d[batch_id][1][point_id], grad_mean.y);
 
-                        atomicAdd(&d_opacity[point_id][0], grad_opacity);
+                        atomicAdd(&d_opacity[0][point_id], grad_opacity);
                     }
                 }
             }
@@ -509,18 +519,18 @@ template <int tilesize>
 __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> mean2d,         //[batch,point_num,2]
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,point_num,2,2]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,point_num,3]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[point_num,1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> mean2d,         //[batch,2,point_num]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,2,2,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,3,point_num]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[1,point_num]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> final_transmitance,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_mean2d,         //[batch,point_num,2]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,point_num,2,2]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,point_num,3]
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[point_num,1]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_mean2d,         //[batch,2,point_num]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
     int tiles_num_x, int img_h, int img_w
 )
 {
@@ -586,17 +596,15 @@ __global__ void raster_backward_kernel(
                 int point_id = sorted_points[batch_id][index];
                 collected_point_id[i] = point_id;
 
-                float2 _mean2d = *((float2*)(mean2d[batch_id][point_id].data()));
-                collected_mean[i] = _mean2d;
-                float4 _cov2d_inv= *((float4*)cov2d_inv[batch_id][point_id].data());
-                collected_invcov[i].x = _cov2d_inv.x;
-                collected_invcov[i].y = _cov2d_inv.y;
-                collected_invcov[i].z = _cov2d_inv.w;
-                float3 _color = *((float3*)(color[batch_id][point_id].data()));
-                collected_color[i].x = _color.x;
-                collected_color[i].y = _color.y;
-                collected_color[i].z = _color.z;
-                collected_color[i].w = opacity[point_id][0];
+                collected_mean[i].x = mean2d[batch_id][0][point_id];
+                collected_mean[i].y = mean2d[batch_id][1][point_id];
+                collected_invcov[i].x = cov2d_inv[batch_id][0][0][point_id];
+                collected_invcov[i].y = cov2d_inv[batch_id][0][1][point_id];
+                collected_invcov[i].z = cov2d_inv[batch_id][1][1][point_id];
+                collected_color[i].x = color[batch_id][0][point_id];
+                collected_color[i].y = color[batch_id][1][point_id];
+                collected_color[i].z = color[batch_id][2][point_id];
+                collected_color[i].w = opacity[0][point_id];
             }
             __syncthreads();
 
@@ -705,19 +713,19 @@ __global__ void raster_backward_kernel(
                     __syncthreads();
                     if (threadidx == 0)
                     {
-                        atomicAdd(&d_color[batch_id][point_id][0], shared_gradient_sum[0]);
-                        atomicAdd(&d_color[batch_id][point_id][1], shared_gradient_sum[1]);
-                        atomicAdd(&d_color[batch_id][point_id][2], shared_gradient_sum[2]);
+                        atomicAdd(&d_color[batch_id][0][point_id], shared_gradient_sum[0]);
+                        atomicAdd(&d_color[batch_id][1][point_id], shared_gradient_sum[1]);
+                        atomicAdd(&d_color[batch_id][2][point_id], shared_gradient_sum[2]);
                                 
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][0], shared_gradient_sum[3]);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][0][1], shared_gradient_sum[4]);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][0], shared_gradient_sum[4]);
-                        atomicAdd(&d_cov2d_inv[batch_id][point_id][1][1], shared_gradient_sum[5]);
+                        atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], shared_gradient_sum[3]);
+                        atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], shared_gradient_sum[4]);
+                        atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], shared_gradient_sum[4]);
+                        atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], shared_gradient_sum[5]);
 
-                        atomicAdd(&d_mean2d[batch_id][point_id][0], shared_gradient_sum[6]);
-                        atomicAdd(&d_mean2d[batch_id][point_id][1], shared_gradient_sum[7]);
+                        atomicAdd(&d_mean2d[batch_id][0][point_id], shared_gradient_sum[6]);
+                        atomicAdd(&d_mean2d[batch_id][1][point_id], shared_gradient_sum[7]);
 
-                        atomicAdd(&d_opacity[point_id][0], shared_gradient_sum[8]);
+                        atomicAdd(&d_opacity[0][point_id], shared_gradient_sum[8]);
                     }
                     
                 }
@@ -787,23 +795,6 @@ std::vector<at::Tensor> rasterize_backward(
             d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
             tilesnum_x, img_h, img_w);
         break;
-        //raster_backward_kernel<8> << <Block3d, Thread3d >> > (
-        //    sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        //    start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        //    mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        //    cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        //    color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        //    opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        //    tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        //    final_transmitance.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-        //    last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
-        //    d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-        //    d_mean2d.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-        //    d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-        //    d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-        //    d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
-        //    tilesnum_x, img_h, img_w);
-        //break;
     case 16:
         raster_backward_kernel<16> << <Block3d, Thread3d >> >(
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -851,45 +842,45 @@ std::vector<at::Tensor> rasterize_backward(
 
 template <typename scalar_t,bool TRNASPOSE=true>
 __global__ void jacobian_rayspace_kernel(
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> translated_position,    //[batch,point_num,4] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> translated_position,    //[batch,4,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> camera_focal,    //[batch,2] 
-    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian         //[batch,point_num,3,3]
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian         //[batch,3,3,point_num]
     )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
-    if (batch_id < translated_position.size(0) && index < translated_position.size(1))
+    if (batch_id < translated_position.size(0) && index < translated_position.size(2))
     {
         float focalx = camera_focal[batch_id][0];
         float focaly = camera_focal[batch_id][1];
 
-        float reciprocal_tz = 1.0f/translated_position[batch_id][index][2];
+        float reciprocal_tz = 1.0f/translated_position[batch_id][2][index];
         float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
 
-        jacobian[batch_id][index][0][0] = focalx * reciprocal_tz;
-        jacobian[batch_id][index][1][1] = focaly * reciprocal_tz;
+        jacobian[batch_id][0][0][index] = focalx * reciprocal_tz;
+        jacobian[batch_id][1][1][index] = focaly * reciprocal_tz;
         if (TRNASPOSE)
         {
-            jacobian[batch_id][index][0][2] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
-            jacobian[batch_id][index][1][2] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+            jacobian[batch_id][0][2][index] = -focalx * translated_position[batch_id][0][index] * square_reciprocal_tz;
+            jacobian[batch_id][1][2][index] = -focaly * translated_position[batch_id][1][index] * square_reciprocal_tz;
         }
         else
         {
-            jacobian[batch_id][index][2][0] = -focalx * translated_position[batch_id][index][0] * square_reciprocal_tz;
-            jacobian[batch_id][index][2][1] = -focaly * translated_position[batch_id][index][1] * square_reciprocal_tz;
+            jacobian[batch_id][2][0][index] = -focalx * translated_position[batch_id][0][index] * square_reciprocal_tz;
+            jacobian[batch_id][2][1][index] = -focaly * translated_position[batch_id][1][index] * square_reciprocal_tz;
         }
     }
 }
 
 at::Tensor jacobianRayspace(
-    at::Tensor translated_position, //N,P,4
+    at::Tensor translated_position, //N,4,P
     at::Tensor camera_focal, //N,2
     bool bTranspose
 )
 {
     int N = translated_position.size(0);
-    int P = translated_position.size(1);
-    at::Tensor jacobian_matrix = torch::zeros({N,P,3,3}, translated_position.options());
+    int P = translated_position.size(2);
+    at::Tensor jacobian_matrix = torch::zeros({N,3,3,P}, translated_position.options());
 
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P/(float)threadsnum), N, 1);
@@ -914,41 +905,41 @@ at::Tensor jacobianRayspace(
 }
 
 __global__ void create_transform_matrix_forward_kernel(
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[point_num,3]  
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[point_num,4] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> transform         //[point_num,3,3]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[3,point_num]  
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[4,point_num] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> transform         //[3,3,point_num]
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( index < quaternion.size(0))
+    if ( index < quaternion.size(1))
     {
-        float r = quaternion[index][0];
-        float x = quaternion[index][1];
-        float y = quaternion[index][2];
-        float z = quaternion[index][3];
+        float r = quaternion[0][index];
+        float x = quaternion[1][index];
+        float y = quaternion[2][index];
+        float z = quaternion[3][index];
 
-        float scale_x = scale[index][0];
-        float scale_y = scale[index][1];
-        float scale_z = scale[index][2];
+        float scale_x = scale[0][index];
+        float scale_y = scale[1][index];
+        float scale_z = scale[2][index];
 
-        transform[index][0][0] = (1 - 2 * (y * y + z * z))*scale_x;
-        transform[index][0][1] = 2 * (x * y + r * z) * scale_x;
-        transform[index][0][2] = 2 * (x * z - r * y) * scale_x;
+        transform[0][0][index] = (1 - 2 * (y * y + z * z))*scale_x;
+        transform[0][1][index] = 2 * (x * y + r * z) * scale_x;
+        transform[0][2][index] = 2 * (x * z - r * y) * scale_x;
 
-        transform[index][1][0] = 2 * (x * y - r * z) * scale_y;
-        transform[index][1][1] = (1 - 2 * (x * x + z * z)) * scale_y;
-        transform[index][1][2] = 2 * (y * z + r * x) * scale_y;
+        transform[1][0][index] = 2 * (x * y - r * z) * scale_y;
+        transform[1][1][index] = (1 - 2 * (x * x + z * z)) * scale_y;
+        transform[1][2][index] = 2 * (y * z + r * x) * scale_y;
 
-        transform[index][2][0] = 2 * (x * z + r * y) * scale_z;
-        transform[index][2][1] = 2 * (y * z - r * x) * scale_z;
-        transform[index][2][2] = (1 - 2 * (x * x + y * y)) * scale_z;
+        transform[2][0][index] = 2 * (x * z + r * y) * scale_z;
+        transform[2][1][index] = 2 * (y * z - r * x) * scale_z;
+        transform[2][2][index] = (1 - 2 * (x * x + y * y)) * scale_z;
     }
 }
 
 at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale)
 {
-    int P = quaternion.size(0);
-    at::Tensor transform_matrix = torch::zeros({ P,3,3 }, scale.options());
+    int P = quaternion.size(1);
+    at::Tensor transform_matrix = torch::zeros({ 3,3,P }, scale.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -961,41 +952,41 @@ at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale
 }
 
 __global__ void create_transform_matrix_backward_kernel(
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[point_num,3]  
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[point_num,4] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_transform,         //[point_num,3,3]
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_quaternion,    //[point_num,3]  
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_scale    //[point_num,4] 
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[3,point_num]  
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[4,point_num] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_transform,         //[3,3,point_num]
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_quaternion,    //[3,point_num]  
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_scale    //[4,point_num] 
 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( index < quaternion.size(0))
+    if ( index < quaternion.size(1))
     {
-        float r = quaternion[index][0];
-        float x = quaternion[index][1];
-        float y = quaternion[index][2];
-        float z = quaternion[index][3];
+        float r = quaternion[0][index];
+        float x = quaternion[1][index];
+        float y = quaternion[2][index];
+        float z = quaternion[3][index];
 
         float dt[9];
-        dt[0 * 3 + 0] = grad_transform[index][0][0];
-        dt[0 * 3 + 1] = grad_transform[index][0][1];
-        dt[0 * 3 + 2] = grad_transform[index][0][2];
+        dt[0 * 3 + 0] = grad_transform[0][0][index];
+        dt[0 * 3 + 1] = grad_transform[0][1][index];
+        dt[0 * 3 + 2] = grad_transform[0][2][index];
 
-        dt[1 * 3 + 0] = grad_transform[index][1][0];
-        dt[1 * 3 + 1] = grad_transform[index][1][1];
-        dt[1 * 3 + 2] = grad_transform[index][1][2];
+        dt[1 * 3 + 0] = grad_transform[1][0][index];
+        dt[1 * 3 + 1] = grad_transform[1][1][index];
+        dt[1 * 3 + 2] = grad_transform[1][2][index];
 
-        dt[2 * 3 + 0] = grad_transform[index][2][0];
-        dt[2 * 3 + 1] = grad_transform[index][2][1];
-        dt[2 * 3 + 2] = grad_transform[index][2][2];
+        dt[2 * 3 + 0] = grad_transform[2][0][index];
+        dt[2 * 3 + 1] = grad_transform[2][1][index];
+        dt[2 * 3 + 2] = grad_transform[2][2][index];
 
         {
             float grad_scale_x = 0;
             grad_scale_x += (1 - 2 * (y * y + z * z)) * dt[0 * 3 + 0];
             grad_scale_x += 2 * (x * y + r * z) * dt[0 * 3 + 1];
             grad_scale_x += 2 * (x * z - r * y) * dt[0 * 3 + 2];
-            grad_scale [index][0] = grad_scale_x;
+            grad_scale[0][index] = grad_scale_x;
         }
 
         {
@@ -1003,7 +994,7 @@ __global__ void create_transform_matrix_backward_kernel(
             grad_scale_y += 2 * (x * y - r * z) * dt[1 * 3 + 0];
             grad_scale_y += (1 - 2 * (x * x + z * z)) * dt[1 * 3 + 1];
             grad_scale_y += 2 * (y * z + r * x) * dt[1 * 3 + 2];
-            grad_scale [index][1] = grad_scale_y;
+            grad_scale[1][index] = grad_scale_y;
         }
 
         {
@@ -1011,26 +1002,26 @@ __global__ void create_transform_matrix_backward_kernel(
             grad_scale_z += 2 * (x * z + r * y) * dt[2 * 3 + 0];
             grad_scale_z += 2 * (y * z - r * x) * dt[2 * 3 + 1];
             grad_scale_z += (1 - 2 * (x * x + y * y)) * dt[2 * 3 + 2];
-            grad_scale [index][2] = grad_scale_z;
+            grad_scale[2][index] = grad_scale_z;
         }
 
         {
-            dt[0 * 3 + 0] *= scale[index][0];
-            dt[0 * 3 + 1] *= scale[index][0];
-            dt[0 * 3 + 2] *= scale[index][0];
+            dt[0 * 3 + 0] *= scale[0][index];
+            dt[0 * 3 + 1] *= scale[0][index];
+            dt[0 * 3 + 2] *= scale[0][index];
 
-            dt[1 * 3 + 0] *= scale[index][1];
-            dt[1 * 3 + 1] *= scale[index][1];
-            dt[1 * 3 + 2] *= scale[index][1];
+            dt[1 * 3 + 0] *= scale[1][index];
+            dt[1 * 3 + 1] *= scale[1][index];
+            dt[1 * 3 + 2] *= scale[1][index];
 
-            dt[2 * 3 + 0] *= scale[index][2];
-            dt[2 * 3 + 1] *= scale[index][2];
-            dt[2 * 3 + 2] *= scale[index][2];
+            dt[2 * 3 + 0] *= scale[2][index];
+            dt[2 * 3 + 1] *= scale[2][index];
+            dt[2 * 3 + 2] *= scale[2][index];
 
-            grad_quaternion[index][0] = 2 * z * (dt[0*3+1] - dt[1*3+0]) + 2 * y * (dt[2*3+0] - dt[0*3+2]) + 2 * x * (dt[1*3+2] - dt[2*3+1]);
-            grad_quaternion[index][1] = 2 * y * (dt[1*3+0] + dt[0*3+1]) + 2 * z * (dt[2*3+0] + dt[0*3+2]) + 2 * r * (dt[1*3+2] - dt[2*3+1]) - 4 * x * (dt[2*3+2] + dt[1*3+1]);
-            grad_quaternion[index][2] = 2 * x * (dt[1*3+0] + dt[0*3+1]) + 2 * r * (dt[2*3+0] - dt[0*3+2]) + 2 * z * (dt[1*3+2] + dt[2*3+1]) - 4 * y * (dt[2*3+2] + dt[0*3+0]);
-            grad_quaternion[index][3] = 2 * r * (dt[0*3+1] - dt[1*3+0]) + 2 * x * (dt[2*3+0] + dt[0*3+2]) + 2 * y * (dt[1*3+2] + dt[2*3+1]) - 4 * z * (dt[1*3+1] + dt[0*3+0]);
+            grad_quaternion[0][index] = 2 * z * (dt[0*3+1] - dt[1*3+0]) + 2 * y * (dt[2*3+0] - dt[0*3+2]) + 2 * x * (dt[1*3+2] - dt[2*3+1]);
+            grad_quaternion[1][index] = 2 * y * (dt[1*3+0] + dt[0*3+1]) + 2 * z * (dt[2*3+0] + dt[0*3+2]) + 2 * r * (dt[1*3+2] - dt[2*3+1]) - 4 * x * (dt[2*3+2] + dt[1*3+1]);
+            grad_quaternion[2][index] = 2 * x * (dt[1*3+0] + dt[0*3+1]) + 2 * r * (dt[2*3+0] - dt[0*3+2]) + 2 * z * (dt[1*3+2] + dt[2*3+1]) - 4 * y * (dt[2*3+2] + dt[0*3+0]);
+            grad_quaternion[3][index] = 2 * r * (dt[0*3+1] - dt[1*3+0]) + 2 * x * (dt[2*3+0] + dt[0*3+2]) + 2 * y * (dt[1*3+2] + dt[2*3+1]) - 4 * z * (dt[1*3+1] + dt[0*3+0]);
         }
 
 
@@ -1043,9 +1034,9 @@ __global__ void create_transform_matrix_backward_kernel(
 std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale)
 {
     //todo
-    int P = quaternion.size(0);
-    at::Tensor grad_quaternion = torch::zeros({ P,4 }, transform_matrix_grad.options());
-    at::Tensor grad_scale = torch::zeros({ P,3 }, transform_matrix_grad.options());
+    int P = quaternion.size(1);
+    at::Tensor grad_quaternion = torch::zeros({ 4,P }, transform_matrix_grad.options());
+    at::Tensor grad_scale = torch::zeros({ 3,P }, transform_matrix_grad.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1064,39 +1055,39 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
 
 __global__ void world2ndc_backword_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_project_matrix,    //[batch,4,4]  
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc_position,    //[batch,point_num,4] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> repc_hom_w_tensor,         //[batch,point_num,1]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_ndc_pos,    //[batch,point_num,4]  
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_position    //[point_num,4] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc_position,    //[batch,4,point_num] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> repc_hom_w_tensor,         //[batch,1,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_ndc_pos,    //[batch,4,point_num]  
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_position    //[4,point_num] 
 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     for (int batch_id = 0; batch_id < ndc_position.size(0); batch_id++)
     {
-        if (batch_id < ndc_position.size(0) && index < ndc_position.size(1))
+        if (batch_id < ndc_position.size(0) && index < ndc_position.size(2))
         {
-            float repc_hom_w = repc_hom_w_tensor[batch_id][index][0];
+            float repc_hom_w = repc_hom_w_tensor[batch_id][0][index];
 
-            float mul1 = ndc_position[batch_id][index][0] * repc_hom_w;
-            float mul2 = ndc_position[batch_id][index][1] * repc_hom_w;
-            float mul3 = ndc_position[batch_id][index][2] * repc_hom_w;
+            float mul1 = ndc_position[batch_id][0][index] * repc_hom_w;
+            float mul2 = ndc_position[batch_id][1][index] * repc_hom_w;
+            float mul3 = ndc_position[batch_id][2][index] * repc_hom_w;
 
-            float grad_x = (view_project_matrix[batch_id][0][0] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul1) * grad_ndc_pos[batch_id][index][0]
-                + (view_project_matrix[batch_id][0][1] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul2) * grad_ndc_pos[batch_id][index][1]
-                + (view_project_matrix[batch_id][0][2] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul3) * grad_ndc_pos[batch_id][index][2];
+            float grad_x = (view_project_matrix[batch_id][0][0] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul1) * grad_ndc_pos[batch_id][0][index]
+                + (view_project_matrix[batch_id][0][1] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul2) * grad_ndc_pos[batch_id][1][index]
+                + (view_project_matrix[batch_id][0][2] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul3) * grad_ndc_pos[batch_id][2][index];
 
-            float grad_y = (view_project_matrix[batch_id][1][0] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul1) * grad_ndc_pos[batch_id][index][0]
-                + (view_project_matrix[batch_id][1][1] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul2) * grad_ndc_pos[batch_id][index][1]
-                + (view_project_matrix[batch_id][1][2] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul3) * grad_ndc_pos[batch_id][index][2];
+            float grad_y = (view_project_matrix[batch_id][1][0] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul1) * grad_ndc_pos[batch_id][0][index]
+                + (view_project_matrix[batch_id][1][1] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul2) * grad_ndc_pos[batch_id][1][index]
+                + (view_project_matrix[batch_id][1][2] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul3) * grad_ndc_pos[batch_id][2][index];
 
-            float grad_z = (view_project_matrix[batch_id][2][0] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul1) * grad_ndc_pos[batch_id][index][0]
-                + (view_project_matrix[batch_id][2][1] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul2) * grad_ndc_pos[batch_id][index][1]
-                + (view_project_matrix[batch_id][2][2] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul3) * grad_ndc_pos[batch_id][index][2];
+            float grad_z = (view_project_matrix[batch_id][2][0] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul1) * grad_ndc_pos[batch_id][0][index]
+                + (view_project_matrix[batch_id][2][1] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul2) * grad_ndc_pos[batch_id][1][index]
+                + (view_project_matrix[batch_id][2][2] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul3) * grad_ndc_pos[batch_id][2][index];
 
-            grad_position[index][0] += grad_x;
-            grad_position[index][1] += grad_y;
-            grad_position[index][2] += grad_z;
+            grad_position[0][index] += grad_x;
+            grad_position[1][index] += grad_y;
+            grad_position[2][index] += grad_z;
         }
     }
 }
@@ -1106,8 +1097,8 @@ at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor ndc_pos
 
 
     int N = grad_ndcpos.size(0);
-    int P = grad_ndcpos.size(1);
-    at::Tensor d_position = torch::zeros({ P,4 }, grad_ndcpos.options());
+    int P = grad_ndcpos.size(2);
+    at::Tensor d_position = torch::zeros({ 4,P }, grad_ndcpos.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1119,7 +1110,7 @@ at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor ndc_pos
         grad_ndcpos.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         d_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
 
-
+    CUDA_CHECK_ERRORS;
     return d_position;
 }
 template <typename scalar_t,int ROW,int COL>
@@ -1136,6 +1127,32 @@ __device__ void load_matrix(scalar_t(* __restrict__ dest)[ROW][COL], const torch
 }
 
 template <typename scalar_t, int ROW, int COL>
+__device__ void load_matrix_batch(scalar_t(*__restrict__ dest)[ROW][COL], const torch::TensorAccessor<scalar_t, 3, torch::RestrictPtrTraits, int32_t> source,int index)
+{
+
+    for (int i = 0; i < ROW; i++)
+    {
+        for (int j = 0; j < COL; j++)
+        {
+            (*dest)[i][j] = source[i][j][index];
+        }
+    }
+}
+
+template <typename scalar_t, int ROW, int COL>
+__device__ void load_matrix_batch(scalar_t(*__restrict__ dest)[ROW][COL], const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> source, int index)
+{
+
+    for (int i = 0; i < ROW; i++)
+    {
+        for (int j = 0; j < COL; j++)
+        {
+            (*dest)[i][j] = source[i][j][index];
+        }
+    }
+}
+
+template <typename scalar_t, int ROW, int COL>
 __device__ void save_matrix(const scalar_t(*__restrict__ source)[ROW][COL], torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> dest)
 {
 
@@ -1144,6 +1161,32 @@ __device__ void save_matrix(const scalar_t(*__restrict__ source)[ROW][COL], torc
         for (int j = 0; j < COL; j++)
         {
             dest[i][j]=(*source)[i][j];
+        }
+    }
+}
+
+template <typename scalar_t, int ROW, int COL>
+__device__ void save_matrix_batch(const scalar_t(*__restrict__ source)[ROW][COL], torch::TensorAccessor<scalar_t, 3, torch::RestrictPtrTraits, int32_t> dest,int index)
+{
+
+    for (int i = 0; i < ROW; i++)
+    {
+        for (int j = 0; j < COL; j++)
+        {
+            dest[i][j][index] = (*source)[i][j];
+        }
+    }
+}
+
+template <typename scalar_t, int ROW, int COL>
+__device__ void save_matrix_batch(const scalar_t(*__restrict__ source)[ROW][COL], torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dest, int index)
+{
+
+    for (int i = 0; i < ROW; i++)
+    {
+        for (int j = 0; j < COL; j++)
+        {
+            dest[i][j][index] = (*source)[i][j];
         }
     }
 }
@@ -1191,10 +1234,10 @@ __device__ void matmul_AtA(scalar_t(*__restrict__ A)[N], scalar_t(*__restrict__ 
 
 template <typename scalar_t>
 __global__ void create_cov2d_forward(
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,point_num,3,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,3,3,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> view_matrix,    //[batch,4,4] 
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> world_transform_matrix,    //[point_num,3,3] 
-    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d         //[batch,point_num,2,2]
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> world_transform_matrix,    //[3,3,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d         //[batch,2,2,point_num]
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1209,17 +1252,17 @@ __global__ void create_cov2d_forward(
     }
     __syncthreads();
 
-    if (batch_id < view_matrix.size(0) && index < world_transform_matrix.size(0))
+    if (batch_id < view_matrix.size(0) && index < world_transform_matrix.size(2))
     {
         // world_transform_matrix @ view_matrix
         scalar_t T[3][3];
         scalar_t temp0[3][3];
-        load_matrix<scalar_t, 3, 3>(&T, world_transform_matrix[index]);
+        load_matrix_batch<scalar_t, 3, 3>(&T, world_transform_matrix, index);
         matmul<scalar_t, 3, 3, 3>(T, view, temp0);//world_transform_matrix@view_matrix
 
         scalar_t J[3][2];
         scalar_t temp1[3][2];
-        load_matrix<scalar_t, 3, 2>(&J, jacobian_matrix[batch_id][index]);
+        load_matrix_batch<scalar_t, 3, 2>(&J, jacobian_matrix[batch_id],index);
         matmul<scalar_t, 3, 2, 3>(temp0, J, temp1);//(world_transform_matrix@view_matrix)@jacobian_matrix
 
         scalar_t result[2][2];
@@ -1229,22 +1272,22 @@ __global__ void create_cov2d_forward(
         result[0][0] += 0.3f;
         result[1][1] += 0.3f;
 
-        save_matrix<scalar_t, 2, 2>(&result, cov2d[batch_id][index]);
+        save_matrix_batch<scalar_t, 2, 2>(&result, cov2d[batch_id],index);
     }
 }
 
 
 at::Tensor createCov2dDirectly_forward(
-    at::Tensor J, //N,P,3,3
-    at::Tensor view_matrix, //N,1,4,4
-    at::Tensor transform_matrix //P,3,3
+    at::Tensor J, //N,3,3,P
+    at::Tensor view_matrix, //N,4,4
+    at::Tensor transform_matrix //3,3,P
 )
 {
     int N = view_matrix.size(0);
-    int P = transform_matrix.size(0);
+    int P = transform_matrix.size(2);
     assert(J.size(0) == N);
-    assert(J.size(1) == P);
-    at::Tensor cov2d = torch::zeros({ N,P,2,2 }, transform_matrix.options());
+    assert(J.size(3) == P);
+    at::Tensor cov2d = torch::zeros({ N,2,2,P }, transform_matrix.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1269,11 +1312,11 @@ at::Tensor createCov2dDirectly_forward(
 
 template <typename scalar_t>
 __global__ void create_cov2d_backward(
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d_grad,    //[batch,point_num,2,2] 
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,point_num,3,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d_grad,    //[batch,2,2,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,3,3,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> view_matrix,    //[batch,4,4] 
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> world_transform_matrix,    //[point_num,3,3] 
-    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> transform_matrix_grad         //[point_num,3,3]
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> world_transform_matrix,    //[3,3,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> transform_matrix_grad         //[3,3,point_num]
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1290,14 +1333,14 @@ __global__ void create_cov2d_backward(
         }
         __syncthreads();
 
-        if ( index < world_transform_matrix.size(0))
+        if ( index < world_transform_matrix.size(2))
         {
             scalar_t view_rayspace_transform[3][2];
             scalar_t rayspace_transform[3][2];
-            load_matrix<scalar_t, 3, 2>(&rayspace_transform, jacobian_matrix[batch_id][index]);
+            load_matrix_batch<scalar_t, 3, 2>(&rayspace_transform, jacobian_matrix[batch_id],index);
             matmul<scalar_t, 3, 2, 3>(view, rayspace_transform, view_rayspace_transform);
             scalar_t world_transform[3][3];
-            load_matrix<scalar_t, 3, 3>(&world_transform, world_transform_matrix[index]);
+            load_matrix_batch<scalar_t, 3, 3>(&world_transform, world_transform_matrix,index);
 
             scalar_t T[3][2];
             matmul<scalar_t, 3, 2, 3>(world_transform, view_rayspace_transform, T);
@@ -1306,7 +1349,7 @@ __global__ void create_cov2d_backward(
             // dL/dT=2 * T@cov2d_grad
             scalar_t dL_dCov2d[2][2];
             scalar_t dL_dT[3][2];
-            load_matrix<scalar_t, 2, 2>(&dL_dCov2d, cov2d_grad[batch_id][index]);
+            load_matrix_batch<scalar_t, 2, 2>(&dL_dCov2d, cov2d_grad[batch_id],index);
             matmul<scalar_t, 3, 2, 2>(T, dL_dCov2d, dL_dT);
             dL_dT[0][0] *= 2; dL_dT[0][1] *= 2;
             dL_dT[1][0] *= 2; dL_dT[1][1] *= 2;
@@ -1329,24 +1372,24 @@ __global__ void create_cov2d_backward(
         __syncthreads();
     }
 
-    if (index < world_transform_matrix.size(0))
+    if (index < world_transform_matrix.size(2))
     {
-        save_matrix<scalar_t, 3, 3>(&dL_dTrans_sum, transform_matrix_grad[index]);
+        save_matrix_batch<scalar_t, 3, 3>(&dL_dTrans_sum, transform_matrix_grad,index);
     }
 }
 
 at::Tensor createCov2dDirectly_backward(
-    at::Tensor cov2d_grad, //N,P,2,2
-    at::Tensor J, //N,P,3,3
+    at::Tensor cov2d_grad, //N,2,2,P
+    at::Tensor J, //N,3,3,P
     at::Tensor view_matrix, //N,1,4,4
-    at::Tensor transform_matrix //P,3,3
+    at::Tensor transform_matrix //3,3,P
 )
 {
     int N = view_matrix.size(0);
-    int P = transform_matrix.size(0);
+    int P = transform_matrix.size(2);
     assert(cov2d_grad.size(0) == N);
-    assert(cov2d_grad.size(1) == P);
-    at::Tensor transform_matrix_grad = torch::zeros({ P,3,3 }, cov2d_grad.options());
+    assert(cov2d_grad.size(2) == P);
+    at::Tensor transform_matrix_grad = torch::zeros({ 3,3,P }, cov2d_grad.options());
 
     int threadsnum = 1024;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1388,81 +1431,79 @@ __device__ const float SH_C3[] = {
 
 template <typename scalar_t,int degree>
 __global__ void sh2rgb_forward_kernel(
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base,    //[point_num,1,3] 
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest,    //[point_num,(deg + 1) ** 2-1,3] 
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,point_num,3] 
-    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb         //[batch,point_num,3]
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base,    //[1,3,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest,    //[(deg + 1) ** 2-1,3,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,3,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb         //[batch,3,point_num]
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
 
-    if (batch_id < rgb.size(0) && index < rgb.size(1))
+    if (batch_id < rgb.size(0) && index < rgb.size(2))
     {
-        torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> sh = SH_rest[index];
-
         float3 result;
-        result.x = SH_C0 * SH_base[index][0][0];
-        result.y = SH_C0 * SH_base[index][0][1];
-        result.z = SH_C0 * SH_base[index][0][2];
+        result.x = SH_C0 * SH_base[0][0][index];
+        result.y = SH_C0 * SH_base[0][1][index];
+        result.z = SH_C0 * SH_base[0][2][index];
         if (degree > 0)
         {
-            float x = dirs[batch_id][index][0];
-            float y = dirs[batch_id][index][1];
-            float z = dirs[batch_id][index][2];
-            result.x = result.x - SH_C1 * y * sh[0][0] + SH_C1 * z * sh[1][0] - SH_C1 * x * sh[2][0];
-            result.y = result.y - SH_C1 * y * sh[0][1] + SH_C1 * z * sh[1][1] - SH_C1 * x * sh[2][1];
-            result.z = result.z - SH_C1 * y * sh[0][2] + SH_C1 * z * sh[1][2] - SH_C1 * x * sh[2][2];
+            float x = dirs[batch_id][0][index];
+            float y = dirs[batch_id][1][index];
+            float z = dirs[batch_id][2][index];
+            result.x = result.x - SH_C1 * y * SH_rest[0][0][index] + SH_C1 * z * SH_rest[1][0][index] - SH_C1 * x * SH_rest[2][0][index];
+            result.y = result.y - SH_C1 * y * SH_rest[0][1][index] + SH_C1 * z * SH_rest[1][1][index] - SH_C1 * x * SH_rest[2][1][index];
+            result.z = result.z - SH_C1 * y * SH_rest[0][2][index] + SH_C1 * z * SH_rest[1][2][index] - SH_C1 * x * SH_rest[2][2][index];
 
             if (degree > 1)
             {
                 float xx = x * x, yy = y * y, zz = z * z;
                 float xy = x * y, yz = y * z, xz = x * z;
                 result.x = result.x + 
-                    SH_C2[0] * xy * sh[3][0] +
-                    SH_C2[1] * yz * sh[4][0] +
-                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[5][0] +
-                    SH_C2[3] * xz * sh[6][0] +
-                    SH_C2[4] * (xx - yy) * sh[7][0];
+                    SH_C2[0] * xy * SH_rest[3][0][index] +
+                    SH_C2[1] * yz * SH_rest[4][0][index] +
+                    SH_C2[2] * (2.0f * zz - xx - yy) * SH_rest[5][0][index] +
+                    SH_C2[3] * xz * SH_rest[6][0][index] +
+                    SH_C2[4] * (xx - yy) * SH_rest[7][0][index];
                 result.y = result.y +
-                    SH_C2[0] * xy * sh[3][1] +
-                    SH_C2[1] * yz * sh[4][1] +
-                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[5][1] +
-                    SH_C2[3] * xz * sh[6][1] +
-                    SH_C2[4] * (xx - yy) * sh[7][1];
+                    SH_C2[0] * xy * SH_rest[3][1][index] +
+                    SH_C2[1] * yz * SH_rest[4][1][index] +
+                    SH_C2[2] * (2.0f * zz - xx - yy) * SH_rest[5][1][index] +
+                    SH_C2[3] * xz * SH_rest[6][1][index] +
+                    SH_C2[4] * (xx - yy) * SH_rest[7][1][index];
                 result.z = result.z +
-                    SH_C2[0] * xy * sh[3][2] +
-                    SH_C2[1] * yz * sh[4][2] +
-                    SH_C2[2] * (2.0f * zz - xx - yy) * sh[5][2] +
-                    SH_C2[3] * xz * sh[6][2] +
-                    SH_C2[4] * (xx - yy) * sh[7][2];
+                    SH_C2[0] * xy * SH_rest[3][2][index] +
+                    SH_C2[1] * yz * SH_rest[4][2][index] +
+                    SH_C2[2] * (2.0f * zz - xx - yy) * SH_rest[5][2][index] +
+                    SH_C2[3] * xz * SH_rest[6][2][index] +
+                    SH_C2[4] * (xx - yy) * SH_rest[7][2][index];
 
                 if (degree > 2)
                 {
                     result.x = result.x +
-                        SH_C3[0] * y * (3.0f * xx - yy) * sh[8][0] +
-                        SH_C3[1] * xy * z * sh[9][0] +
-                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10][0] +
-                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11][0] +
-                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12][0] +
-                        SH_C3[5] * z * (xx - yy) * sh[13][0] +
-                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[14][0];
+                        SH_C3[0] * y * (3.0f * xx - yy) * SH_rest[8][0][index] +
+                        SH_C3[1] * xy * z * SH_rest[9][0][index] +
+                        SH_C3[2] * y * (4.0f * zz - xx - yy) * SH_rest[10][0][index] +
+                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH_rest[11][0][index] +
+                        SH_C3[4] * x * (4.0f * zz - xx - yy) * SH_rest[12][0][index] +
+                        SH_C3[5] * z * (xx - yy) * SH_rest[13][0][index] +
+                        SH_C3[6] * x * (xx - 3.0f * yy) * SH_rest[14][0][index];
                     result.y = result.y +
-                        SH_C3[0] * y * (3.0f * xx - yy) * sh[8][1] +
-                        SH_C3[1] * xy * z * sh[9][1] +
-                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10][1] +
-                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11][1] +
-                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12][1] +
-                        SH_C3[5] * z * (xx - yy) * sh[13][1] +
-                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[14][1];
+                        SH_C3[0] * y * (3.0f * xx - yy) * SH_rest[8][1][index] +
+                        SH_C3[1] * xy * z * SH_rest[9][1][index] +
+                        SH_C3[2] * y * (4.0f * zz - xx - yy) * SH_rest[10][1][index] +
+                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH_rest[11][1][index] +
+                        SH_C3[4] * x * (4.0f * zz - xx - yy) * SH_rest[12][1][index] +
+                        SH_C3[5] * z * (xx - yy) * SH_rest[13][1][index] +
+                        SH_C3[6] * x * (xx - 3.0f * yy) * SH_rest[14][1][index];
                     result.z = result.z +
-                        SH_C3[0] * y * (3.0f * xx - yy) * sh[8][2] +
-                        SH_C3[1] * xy * z * sh[9][2] +
-                        SH_C3[2] * y * (4.0f * zz - xx - yy) * sh[10][2] +
-                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * sh[11][2] +
-                        SH_C3[4] * x * (4.0f * zz - xx - yy) * sh[12][2] +
-                        SH_C3[5] * z * (xx - yy) * sh[13][2] +
-                        SH_C3[6] * x * (xx - 3.0f * yy) * sh[14][2];
+                        SH_C3[0] * y * (3.0f * xx - yy) * SH_rest[8][2][index] +
+                        SH_C3[1] * xy * z * SH_rest[9][2][index] +
+                        SH_C3[2] * y * (4.0f * zz - xx - yy) * SH_rest[10][2][index] +
+                        SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH_rest[11][2][index] +
+                        SH_C3[4] * x * (4.0f * zz - xx - yy) * SH_rest[12][2][index] +
+                        SH_C3[5] * z * (xx - yy) * SH_rest[13][2][index] +
+                        SH_C3[6] * x * (xx - 3.0f * yy) * SH_rest[14][2][index];
                 }
             }
 
@@ -1470,17 +1511,17 @@ __global__ void sh2rgb_forward_kernel(
         result.x += 0.5f;
         result.y += 0.5f;
         result.z += 0.5f;
-        rgb[batch_id][index][0] = result.x;
-        rgb[batch_id][index][1] = result.y;
-        rgb[batch_id][index][2] = result.z;
+        rgb[batch_id][0][index] = result.x;
+        rgb[batch_id][1][index] = result.y;
+        rgb[batch_id][2][index] = result.z;
     }
 }
 
 at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor dir)
 {
     int N = dir.size(0);
-    int P = dir.size(1);
-    at::Tensor rgb = torch::zeros({ N,P,3 }, sh_base.options());
+    int P = dir.size(2);
+    at::Tensor rgb = torch::zeros({ N,3,P }, sh_base.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1529,43 +1570,42 @@ at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest
 
 template <typename scalar_t, int degree>
 __global__ void sh2rgb_backward_kernel(
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,point_num,3] 
-    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb_grad,         //[batch,point_num,3]
-    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base_grad,   //[point_num,1,3] 
-    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest_grad   //[point_num,(deg + 1) ** 2-1,3] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,3,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb_grad,         //[batch,3,point_num]
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base_grad,   //[1,3,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest_grad   //[(deg + 1) ** 2-1,3,point_num] 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     for (int batch_id = 0; batch_id < rgb_grad.size(0); batch_id++)
     {
-        if ( index < rgb_grad.size(1))
+        if ( index < rgb_grad.size(2))
         {
-            torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> dL_dsh = SH_rest_grad[index];
-            float3 dL_dRGB{ rgb_grad[batch_id][index][0], rgb_grad[batch_id][index][1], rgb_grad[batch_id][index][2] };
+            float3 dL_dRGB{ rgb_grad[batch_id][0][index], rgb_grad[batch_id][1][index], rgb_grad[batch_id][2][index] };
 
             float dRGBdsh0 = SH_C0;
-            SH_base_grad[index][0][0] += dRGBdsh0 * dL_dRGB.x;
-            SH_base_grad[index][0][1] += dRGBdsh0 * dL_dRGB.y;
-            SH_base_grad[index][0][2] += dRGBdsh0 * dL_dRGB.z;
+            SH_base_grad[0][0][index] += dRGBdsh0 * dL_dRGB.x;
+            SH_base_grad[0][1][index] += dRGBdsh0 * dL_dRGB.y;
+            SH_base_grad[0][2][index] += dRGBdsh0 * dL_dRGB.z;
 
             if (degree > 0)
             {
-                float x = dirs[batch_id][index][0];
-                float y = dirs[batch_id][index][1];
-                float z = dirs[batch_id][index][2];
+                float x = dirs[batch_id][0][index];
+                float y = dirs[batch_id][1][index];
+                float z = dirs[batch_id][2][index];
 
                 float dRGBdsh1 = -SH_C1 * y;
                 float dRGBdsh2 = SH_C1 * z;
                 float dRGBdsh3 = -SH_C1 * x;
-                dL_dsh[0][0] += dRGBdsh1 * dL_dRGB.x;
-                dL_dsh[1][0] += dRGBdsh2 * dL_dRGB.x;
-                dL_dsh[2][0] += dRGBdsh3 * dL_dRGB.x;
-                dL_dsh[0][1] += dRGBdsh1 * dL_dRGB.y;
-                dL_dsh[1][1] += dRGBdsh2 * dL_dRGB.y;
-                dL_dsh[2][1] += dRGBdsh3 * dL_dRGB.y;
-                dL_dsh[0][2] += dRGBdsh1 * dL_dRGB.z;
-                dL_dsh[1][2] += dRGBdsh2 * dL_dRGB.z;
-                dL_dsh[2][2] += dRGBdsh3 * dL_dRGB.z;
+                SH_rest_grad[0][0][index] += dRGBdsh1 * dL_dRGB.x;
+                SH_rest_grad[1][0][index] += dRGBdsh2 * dL_dRGB.x;
+                SH_rest_grad[2][0][index] += dRGBdsh3 * dL_dRGB.x;
+                SH_rest_grad[0][1][index] += dRGBdsh1 * dL_dRGB.y;
+                SH_rest_grad[1][1][index] += dRGBdsh2 * dL_dRGB.y;
+                SH_rest_grad[2][1][index] += dRGBdsh3 * dL_dRGB.y;
+                SH_rest_grad[0][2][index] += dRGBdsh1 * dL_dRGB.z;
+                SH_rest_grad[1][2][index] += dRGBdsh2 * dL_dRGB.z;
+                SH_rest_grad[2][2][index] += dRGBdsh3 * dL_dRGB.z;
 
                 if (degree > 1)
                 {
@@ -1578,21 +1618,21 @@ __global__ void sh2rgb_backward_kernel(
                     float dRGBdsh7 = SH_C2[3] * xz;
                     float dRGBdsh8 = SH_C2[4] * (xx - yy);
 
-                    dL_dsh[3][0] += dRGBdsh4 * dL_dRGB.x;
-                    dL_dsh[4][0] += dRGBdsh5 * dL_dRGB.x;
-                    dL_dsh[5][0] += dRGBdsh6 * dL_dRGB.x;
-                    dL_dsh[6][0] += dRGBdsh7 * dL_dRGB.x;
-                    dL_dsh[7][0] += dRGBdsh8 * dL_dRGB.x;
-                    dL_dsh[3][1] += dRGBdsh4 * dL_dRGB.y;
-                    dL_dsh[4][1] += dRGBdsh5 * dL_dRGB.y;
-                    dL_dsh[5][1] += dRGBdsh6 * dL_dRGB.y;
-                    dL_dsh[6][1] += dRGBdsh7 * dL_dRGB.y;
-                    dL_dsh[7][1] += dRGBdsh8 * dL_dRGB.y;
-                    dL_dsh[3][2] += dRGBdsh4 * dL_dRGB.z;
-                    dL_dsh[4][2] += dRGBdsh5 * dL_dRGB.z;
-                    dL_dsh[5][2] += dRGBdsh6 * dL_dRGB.z;
-                    dL_dsh[6][2] += dRGBdsh7 * dL_dRGB.z;
-                    dL_dsh[7][2] += dRGBdsh8 * dL_dRGB.z;
+                    SH_rest_grad[3][0][index] += dRGBdsh4 * dL_dRGB.x;
+                    SH_rest_grad[4][0][index] += dRGBdsh5 * dL_dRGB.x;
+                    SH_rest_grad[5][0][index] += dRGBdsh6 * dL_dRGB.x;
+                    SH_rest_grad[6][0][index] += dRGBdsh7 * dL_dRGB.x;
+                    SH_rest_grad[7][0][index] += dRGBdsh8 * dL_dRGB.x;
+                    SH_rest_grad[3][1][index] += dRGBdsh4 * dL_dRGB.y;
+                    SH_rest_grad[4][1][index] += dRGBdsh5 * dL_dRGB.y;
+                    SH_rest_grad[5][1][index] += dRGBdsh6 * dL_dRGB.y;
+                    SH_rest_grad[6][1][index] += dRGBdsh7 * dL_dRGB.y;
+                    SH_rest_grad[7][1][index] += dRGBdsh8 * dL_dRGB.y;
+                    SH_rest_grad[3][2][index] += dRGBdsh4 * dL_dRGB.z;
+                    SH_rest_grad[4][2][index] += dRGBdsh5 * dL_dRGB.z;
+                    SH_rest_grad[5][2][index] += dRGBdsh6 * dL_dRGB.z;
+                    SH_rest_grad[6][2][index] += dRGBdsh7 * dL_dRGB.z;
+                    SH_rest_grad[7][2][index] += dRGBdsh8 * dL_dRGB.z;
 
                     if (degree > 2)
                     {
@@ -1603,27 +1643,27 @@ __global__ void sh2rgb_backward_kernel(
                         float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
                         float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
                         float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
-                        dL_dsh[8][0] += dRGBdsh9 * dL_dRGB.x;
-                        dL_dsh[9][0] += dRGBdsh10 * dL_dRGB.x;
-                        dL_dsh[10][0] += dRGBdsh11 * dL_dRGB.x;
-                        dL_dsh[11][0] += dRGBdsh12 * dL_dRGB.x;
-                        dL_dsh[12][0] += dRGBdsh13 * dL_dRGB.x;
-                        dL_dsh[13][0] += dRGBdsh14 * dL_dRGB.x;
-                        dL_dsh[14][0] += dRGBdsh15 * dL_dRGB.x;
-                        dL_dsh[8][1] += dRGBdsh9 * dL_dRGB.y;
-                        dL_dsh[9][1] += dRGBdsh10 * dL_dRGB.y;
-                        dL_dsh[10][1] += dRGBdsh11 * dL_dRGB.y;
-                        dL_dsh[11][1] += dRGBdsh12 * dL_dRGB.y;
-                        dL_dsh[12][1] += dRGBdsh13 * dL_dRGB.y;
-                        dL_dsh[13][1] += dRGBdsh14 * dL_dRGB.y;
-                        dL_dsh[14][1] += dRGBdsh15 * dL_dRGB.y;
-                        dL_dsh[8][2] += dRGBdsh9 * dL_dRGB.z;
-                        dL_dsh[9][2] += dRGBdsh10 * dL_dRGB.z;
-                        dL_dsh[10][2] += dRGBdsh11 * dL_dRGB.z;
-                        dL_dsh[11][2] += dRGBdsh12 * dL_dRGB.z;
-                        dL_dsh[12][2] += dRGBdsh13 * dL_dRGB.z;
-                        dL_dsh[13][2] += dRGBdsh14 * dL_dRGB.z;
-                        dL_dsh[14][2] += dRGBdsh15 * dL_dRGB.z;
+                        SH_rest_grad[8][0][index] += dRGBdsh9 * dL_dRGB.x;
+                        SH_rest_grad[9][0][index] += dRGBdsh10 * dL_dRGB.x;
+                        SH_rest_grad[10][0][index] += dRGBdsh11 * dL_dRGB.x;
+                        SH_rest_grad[11][0][index] += dRGBdsh12 * dL_dRGB.x;
+                        SH_rest_grad[12][0][index] += dRGBdsh13 * dL_dRGB.x;
+                        SH_rest_grad[13][0][index] += dRGBdsh14 * dL_dRGB.x;
+                        SH_rest_grad[14][0][index] += dRGBdsh15 * dL_dRGB.x;
+                        SH_rest_grad[8][1][index] += dRGBdsh9 * dL_dRGB.y;
+                        SH_rest_grad[9][1][index] += dRGBdsh10 * dL_dRGB.y;
+                        SH_rest_grad[10][1][index] += dRGBdsh11 * dL_dRGB.y;
+                        SH_rest_grad[11][1][index] += dRGBdsh12 * dL_dRGB.y;
+                        SH_rest_grad[12][1][index] += dRGBdsh13 * dL_dRGB.y;
+                        SH_rest_grad[13][1][index] += dRGBdsh14 * dL_dRGB.y;
+                        SH_rest_grad[14][1][index] += dRGBdsh15 * dL_dRGB.y;
+                        SH_rest_grad[8][2][index] += dRGBdsh9 * dL_dRGB.z;
+                        SH_rest_grad[9][2][index] += dRGBdsh10 * dL_dRGB.z;
+                        SH_rest_grad[10][2][index] += dRGBdsh11 * dL_dRGB.z;
+                        SH_rest_grad[11][2][index] += dRGBdsh12 * dL_dRGB.z;
+                        SH_rest_grad[12][2][index] += dRGBdsh13 * dL_dRGB.z;
+                        SH_rest_grad[13][2][index] += dRGBdsh14 * dL_dRGB.z;
+                        SH_rest_grad[14][2][index] += dRGBdsh15 * dL_dRGB.z;
                     }
                 }
 
@@ -1635,11 +1675,11 @@ __global__ void sh2rgb_backward_kernel(
 std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int64_t sh_rest_dim, at::Tensor dir)
 {
     int N = rgb_grad.size(0);
-    int P = rgb_grad.size(1);
-    int C = rgb_grad.size(2);
+    int P = rgb_grad.size(2);
+    int C = rgb_grad.size(1);
 
-    at::Tensor sh_grad = torch::zeros({ P,1 ,C }, rgb_grad.options());
-    at::Tensor sh_rest_grad = torch::zeros({ P,sh_rest_dim ,C }, rgb_grad.options());
+    at::Tensor sh_grad = torch::zeros({ 1 ,C,P }, rgb_grad.options());
+    at::Tensor sh_rest_grad = torch::zeros({ sh_rest_dim ,C,P }, rgb_grad.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1687,24 +1727,24 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
 
 template <typename scalar_t>
 __global__ void eigh_and_inv_2x2matrix_kernel_forward(
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> input,    //[batch,point_num,2,2] 
-    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> val,   //[batch,point_num,2] 
-    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> vec,   //[batch,point_num,2,2] 
-    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> inv   //[batch,point_num,2,2] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> input,    //[batch,2,2,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> val,   //[batch,2,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> vec,   //[batch,2,2,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> inv   //[batch,2,2,point_num] 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
 
-    if (batch_id < input.size(0) && index < input.size(1))
+    if (batch_id < input.size(0) && index < input.size(3))
     {
-        float input_matrix[2][2] = { {input[batch_id][index][0][0],input[batch_id][index][0][1]},{input[batch_id][index][1][0],input[batch_id][index][1][1]}};
+        float input_matrix[2][2] = { {input[batch_id][0][0][index],input[batch_id][0][1][index]},{input[batch_id][1][0][index],input[batch_id][1][1][index]}};
         float det = input_matrix[0][0] * input_matrix[1][1] - input_matrix[0][1] * input_matrix[1][0];
         float mid = 0.5f * (input_matrix[0][0] + input_matrix[1][1]);
         float temp = sqrt(max(mid * mid - det,1e-9f));
 
-        val[batch_id][index][0] = mid - temp;
-        val[batch_id][index][1] = mid + temp;
+        val[batch_id][0][index] = mid - temp;
+        val[batch_id][1][index] = mid + temp;
 
         float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / input_matrix[0][1];
         float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / input_matrix[0][1];
@@ -1712,14 +1752,14 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
         float square_sum_0_recip = 1/sqrt(1 + vec_y_0 * vec_y_0);
         float square_sum_1_recip = 1/sqrt(1 + vec_y_1 * vec_y_1);
 
-        vec[batch_id][index][0][0] = square_sum_0_recip; vec[batch_id][index][0][1] = vec_y_0 * square_sum_0_recip;
-        vec[batch_id][index][1][0] = square_sum_1_recip; vec[batch_id][index][1][1] = vec_y_1 * square_sum_1_recip;
+        vec[batch_id][0][0][index] = square_sum_0_recip; vec[batch_id][0][1][index] = vec_y_0 * square_sum_0_recip;
+        vec[batch_id][1][0][index] = square_sum_1_recip; vec[batch_id][1][1][index] = vec_y_1 * square_sum_1_recip;
         
         float det_recip = 1 / det;
-        inv[batch_id][index][0][1] = -input_matrix[0][1] * det_recip;
-        inv[batch_id][index][1][0] = -input_matrix[1][0] * det_recip;
-        inv[batch_id][index][0][0] = input_matrix[1][1] * det_recip;
-        inv[batch_id][index][1][1] = input_matrix[0][0] * det_recip;
+        inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
+        inv[batch_id][1][0][index] = -input_matrix[1][0] * det_recip;
+        inv[batch_id][0][0][index] = input_matrix[1][1] * det_recip;
+        inv[batch_id][1][1][index] = input_matrix[0][0] * det_recip;
 
     }
 
@@ -1728,23 +1768,23 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
 
 template <typename scalar_t>
 __global__ void inv_2x2matrix_kernel_backward(
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> Invmatrix,    //[batch,point_num,2,2] 
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dInvmatrix,    //[batch,point_num,2,2] 
-    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dMatrix   //[batch,point_num,2,2] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> Invmatrix,    //[batch,2,2,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dInvmatrix,    //[batch,2,2,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dMatrix   //[batch,2,2,point_num] 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
 
-    if (batch_id < Invmatrix.size(0) && index < Invmatrix.size(1))
+    if (batch_id < Invmatrix.size(0) && index < Invmatrix.size(3))
     {
         scalar_t inv_matrix[2][2];
         scalar_t dl_dinvmatrix[2][2];
         scalar_t temp[2][2];
         scalar_t dl_dmatrix[2][2];
 
-        load_matrix<scalar_t, 2, 2>(&inv_matrix, Invmatrix[batch_id][index]);
-        load_matrix<scalar_t, 2, 2>(&dl_dinvmatrix, dL_dInvmatrix[batch_id][index]);
+        load_matrix_batch<scalar_t, 2, 2>(&inv_matrix, Invmatrix[batch_id],index);
+        load_matrix_batch<scalar_t, 2, 2>(&dl_dinvmatrix, dL_dInvmatrix[batch_id],index);
 
         matmul<scalar_t, 2, 2, 2>(inv_matrix, dl_dinvmatrix, temp);
         matmul<scalar_t, 2, 2, 2>(temp, inv_matrix, dl_dmatrix);
@@ -1752,7 +1792,7 @@ __global__ void inv_2x2matrix_kernel_backward(
         dl_dmatrix[0][0] = -dl_dmatrix[0][0]; dl_dmatrix[0][1] = -dl_dmatrix[0][1];
         dl_dmatrix[1][0] = -dl_dmatrix[1][0]; dl_dmatrix[1][1] = -dl_dmatrix[1][1];
 
-        save_matrix<scalar_t, 2, 2>(&dl_dmatrix, dL_dMatrix[batch_id][index]);
+        save_matrix_batch<scalar_t, 2, 2>(&dl_dmatrix, dL_dMatrix[batch_id],index);
     }
 
 }
@@ -1760,10 +1800,10 @@ __global__ void inv_2x2matrix_kernel_backward(
 std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
 {
     int N = input.size(0);
-    int P = input.size(1);
-    at::Tensor vec = torch::zeros({ N,P,2,2 }, input.options().requires_grad(false));
-    at::Tensor val = torch::zeros({ N,P,2 }, input.options().requires_grad(false));
-    at::Tensor inv = torch::zeros({ N,P,2,2 }, input.options());
+    int P = input.size(3);
+    at::Tensor vec = torch::zeros({ N,2,2,P }, input.options().requires_grad(false));
+    at::Tensor val = torch::zeros({ N,2,P }, input.options().requires_grad(false));
+    at::Tensor inv = torch::zeros({ N,2,2,P }, input.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1773,14 +1813,14 @@ std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
         val.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
         vec.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
         inv.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
-
+    CUDA_CHECK_ERRORS;
     return { val,vec,inv };
 }
 
 at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix)
 {
     int N = inv_matrix.size(0);
-    int P = inv_matrix.size(1);
+    int P = inv_matrix.size(3);
     at::Tensor dL_dMatrix = torch::zeros_like(dL_dInvMatrix);
 
     int threadsnum = 1024;
@@ -1790,7 +1830,207 @@ at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix
         inv_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
         dL_dInvMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
         dL_dMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
-
+    CUDA_CHECK_ERRORS;
     return dL_dMatrix;
 
+}
+
+__global__ void compact_visible_params_kernel_forward(
+    const torch::PackedTensorAccessor32<bool, 1, torch::RestrictPtrTraits> visible_mask,    //[chunk_num] 
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_mask_cumsum,    //[chunk_num] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[chunk_num,4,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[chunk_num,3,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[chunk_num,4,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[chunk_num,1,3,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[chunk_num,?,3,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[chunk_num,1,chunk_size] 
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_position,    //[4,p] 
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_scale,    //[3,p] 
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_rotation,    //[4,p] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_base,    //[1,3,p] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_rest,    //[?,3,p] 
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_opacity,    //[1,p] 
+    torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> reverse_map     //[visible_chunk_num]
+)
+{
+    if (visible_mask[blockIdx.x] == true)
+    {
+        int chunksize = position.size(2);
+        int compacted_index = (visible_mask_cumsum[blockIdx.x]-1)* chunksize;
+        if (threadIdx.x == 0)
+        {
+            reverse_map[compacted_index/ chunksize] = blockIdx.x;
+        }
+
+        for (int index = threadIdx.x; index < chunksize; index += blockDim.x)
+        {
+            //copy
+            compacted_position[0][compacted_index + index] = position[blockIdx.x][0][index];
+            compacted_position[1][compacted_index + index] = position[blockIdx.x][1][index];
+            compacted_position[2][compacted_index + index] = position[blockIdx.x][2][index];
+            compacted_position[3][compacted_index + index] = position[blockIdx.x][3][index];
+            compacted_scale[0][compacted_index + index] = scale[blockIdx.x][0][index];
+            compacted_scale[1][compacted_index + index] = scale[blockIdx.x][1][index];
+            compacted_scale[2][compacted_index + index] = scale[blockIdx.x][2][index];
+            compacted_rotation[0][compacted_index + index] = rotation[blockIdx.x][0][index];
+            compacted_rotation[1][compacted_index + index] = rotation[blockIdx.x][1][index];
+            compacted_rotation[2][compacted_index + index] = rotation[blockIdx.x][2][index];
+            compacted_rotation[3][compacted_index + index] = rotation[blockIdx.x][3][index];
+            compacted_sh_base[0][0][compacted_index + index] = sh_base[blockIdx.x][0][0][index];
+            compacted_sh_base[0][1][compacted_index + index] = sh_base[blockIdx.x][0][1][index];
+            compacted_sh_base[0][2][compacted_index + index] = sh_base[blockIdx.x][0][2][index];
+            for (int i = 0; i < sh_rest.size(2); i++)
+            {
+                compacted_sh_rest[i][0][compacted_index + index] = sh_rest[blockIdx.x][i][0][index];
+                compacted_sh_rest[i][1][compacted_index + index] = sh_rest[blockIdx.x][i][1][index];
+                compacted_sh_rest[i][2][compacted_index + index] = sh_rest[blockIdx.x][i][2][index];
+            }
+            compacted_opacity[0][compacted_index + index] = opacity[blockIdx.x][0][index];
+        }
+    }
+}
+
+
+std::vector<at::Tensor> compact_visible_params_forward(int64_t visible_num, at::Tensor visible_mask, at::Tensor visible_mask_cumsum, at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity)
+{
+    int64_t chunknum = position.size(0);
+    int64_t chunksize = position.size(2);
+
+    auto tensor_shape = position.sizes();
+    at::Tensor compacted_position = torch::zeros({ tensor_shape[1],chunksize * visible_num }, position.options());
+    tensor_shape = scale.sizes();
+    at::Tensor compacted_scale = torch::zeros({ tensor_shape[1],chunksize * visible_num }, scale.options());
+    tensor_shape = rotation.sizes();
+    at::Tensor compacted_rotation = torch::zeros({ tensor_shape[1],chunksize * visible_num }, rotation.options());
+
+    tensor_shape = sh_base.sizes();
+    at::Tensor compacted_sh_base = torch::zeros({ tensor_shape[1],tensor_shape[2],chunksize * visible_num }, sh_base.options());
+    tensor_shape = sh_rest.sizes();
+    at::Tensor compacted_sh_rest = torch::zeros({ tensor_shape[1],tensor_shape[2],chunksize * visible_num }, sh_rest.options());
+
+    tensor_shape = opacity.sizes();
+    at::Tensor compacted_opacity = torch::zeros({ tensor_shape[1],chunksize * visible_num }, opacity.options());
+
+    at::Tensor reverse_map = torch::zeros({ visible_num }, visible_mask_cumsum.options().requires_grad(false));
+
+    //dim3 Block3d(32, 1, 1);
+    compact_visible_params_kernel_forward<<<chunknum, 256 >>>(
+        visible_mask.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
+        visible_mask_cumsum.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        compacted_scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        compacted_rotation.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        compacted_sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        reverse_map.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>()
+    );
+    CUDA_CHECK_ERRORS;
+    return { compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity,reverse_map };
+}
+
+
+__global__ void compact_visible_params_kernel_backward(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> reverse_map,     //[visible_chunk_num]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_position_grad,    //[4,P] 
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_scale_grad,    //[3,P] 
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_rotation_grad,    //[4,P] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_base_grad,    //[1,3,P] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_rest_grad,    //[?,3,P] 
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_opacity_grad,    //[1,P] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position_grad,    //[chunk_num,4,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale_grad,    //[chunk_num,3,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation_grad,    //[chunk_num,4,chunk_size] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base_grad,    //[chunk_num,1,3,chunk_size] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest_grad,    //[chunk_num,?,3,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity_grad    //[chunk_num,1,chunk_size] 
+)
+{
+    //assert blockDim.x==chunksize
+
+    if (blockIdx.x<reverse_map.size(0))
+    {
+        int chunk_index = reverse_map[blockIdx.x];
+        int chunk_size = position_grad.size(2);
+        int offset = blockIdx.x * chunk_size;
+
+        //copy
+        for (int index = threadIdx.x; index < chunk_size; index += blockDim.x)
+        {
+            position_grad[chunk_index][0][index] = compacted_position_grad[0][offset+index];
+            position_grad[chunk_index][1][index] = compacted_position_grad[1][offset+index];
+            position_grad[chunk_index][2][index] = compacted_position_grad[2][offset+index];
+
+            scale_grad[chunk_index][0][index] = compacted_scale_grad[0][offset+index];
+            scale_grad[chunk_index][1][index] = compacted_scale_grad[1][offset+index];
+            scale_grad[chunk_index][2][index] = compacted_scale_grad[2][offset+index];
+
+            rotation_grad[chunk_index][0][index] = compacted_rotation_grad[0][offset+index];
+            rotation_grad[chunk_index][1][index] = compacted_rotation_grad[1][offset+index];
+            rotation_grad[chunk_index][2][index] = compacted_rotation_grad[2][offset+index];
+            rotation_grad[chunk_index][3][index] = compacted_rotation_grad[3][offset+index];
+
+            sh_base_grad[chunk_index][0][0][index] = compacted_sh_base_grad[0][0][offset+index];
+            sh_base_grad[chunk_index][0][1][index] = compacted_sh_base_grad[0][1][offset+index];
+            sh_base_grad[chunk_index][0][2][index] = compacted_sh_base_grad[0][2][offset+index];
+
+            for (int i = 0; i < compacted_sh_rest_grad.size(0); i++)
+            {
+                sh_rest_grad[chunk_index][i][0][index] = compacted_sh_rest_grad[i][0][offset+index];
+                sh_rest_grad[chunk_index][i][1][index] = compacted_sh_rest_grad[i][1][offset+index];
+                sh_rest_grad[chunk_index][i][2][index] = compacted_sh_rest_grad[i][2][offset+index];
+            }
+
+            opacity_grad[chunk_index][0][index] = compacted_opacity_grad[0][offset+index];
+        }
+    }
+}
+
+std::vector<at::Tensor> compact_visible_params_backward(int64_t chunk_num, int64_t chunk_size, at::Tensor reverse_map, 
+    at::Tensor compacted_position_grad, at::Tensor compacted_scale_grad, at::Tensor compacted_rotation_grad, 
+    at::Tensor compacted_sh_base_grad, at::Tensor compacted_sh_rest_grad, at::Tensor compacted_opacity_grad)
+{
+
+    auto tensor_shape = compacted_position_grad.sizes();
+    at::Tensor position_grad = torch::zeros({ chunk_num, tensor_shape[0],chunk_size }, compacted_position_grad.options());
+    
+    tensor_shape = compacted_scale_grad.sizes();
+    at::Tensor scale_grad = torch::zeros({ chunk_num, tensor_shape[0],chunk_size }, compacted_scale_grad.options());
+
+    tensor_shape = compacted_rotation_grad.sizes();
+    at::Tensor rotation_grad = torch::zeros({ chunk_num, tensor_shape[0],chunk_size }, compacted_rotation_grad.options());
+
+    tensor_shape = compacted_sh_base_grad.sizes();
+    at::Tensor sh_base_grad = torch::zeros({ chunk_num, tensor_shape[0],tensor_shape[1],chunk_size }, compacted_sh_base_grad.options());
+
+    tensor_shape = compacted_sh_rest_grad.sizes();
+    at::Tensor sh_rest_grad = torch::zeros({ chunk_num, tensor_shape[0],tensor_shape[1],chunk_size }, compacted_sh_rest_grad.options());
+
+    tensor_shape = compacted_opacity_grad.sizes();
+    at::Tensor opacity_grad = torch::zeros({ chunk_num, tensor_shape[0],chunk_size }, compacted_opacity_grad.options());
+
+    int visible_chunknum = compacted_position_grad.size(1) / chunk_size;
+    compact_visible_params_kernel_backward<<<visible_chunknum,256>>>(
+        reverse_map.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        compacted_position_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        compacted_scale_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        compacted_rotation_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        compacted_sh_base_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_sh_rest_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_opacity_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        position_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        sh_base_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        sh_rest_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
+        );
+    CUDA_CHECK_ERRORS;
+    return { position_grad,scale_grad,rotation_grad,sh_base_grad,sh_rest_grad,opacity_grad };
 }

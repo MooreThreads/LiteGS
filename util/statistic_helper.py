@@ -117,11 +117,11 @@ class StatisticsHelper:
             data[0][self.compact_mask ]=torch.max(tensor_max,data[0][self.compact_mask ])
             data[1][self.compact_mask ]=torch.min(tensor_min,data[1][self.compact_mask ])
         else:
-            max_uncompact=torch.ones((self.chunk_num*self.chunk_size,*tensor_max.shape[1:]),device=compact_tensor.device)*(-torch.inf)
-            min_uncompact=torch.ones((self.chunk_num*self.chunk_size,*tensor_min.shape[1:]),device=compact_tensor.device)*torch.inf
+            max_uncompact=torch.ones((*tensor_max.shape[:-1],self.chunk_num,self.chunk_size),device=compact_tensor.device)*(-torch.inf)
+            min_uncompact=torch.ones((*tensor_min.shape[:-1],self.chunk_num,self.chunk_size),device=compact_tensor.device)*torch.inf
             data=[max_uncompact,min_uncompact]
-            data[0][self.compact_mask ]=tensor_max
-            data[1][self.compact_mask ]=tensor_min
+            data[0][:,self.compact_mask]=tensor_max
+            data[1][self.compact_mask]=tensor_min
             self.max_and_min[key]=data
         return 
     

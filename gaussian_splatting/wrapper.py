@@ -13,7 +13,7 @@ elif plat == 'linux':
 ##
 ## Create Transform Matrix from scale and quaternion
 ##
-class CreateTransformMatrix(torch.autograd.Function):
+class CreateTransformMatrixFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
         ctx.save_for_backward(quaternion,scale)
@@ -30,71 +30,73 @@ def create_transform_matrix(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->
 
     def create_transform_matrix_internel_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
         '''faster'''
-        transform_matrix=CreateTransformMatrix.apply(rotator_vec,scaling_vec)
+        transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
         return transform_matrix
 
     def create_transform_matrix_internel_v1(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-        rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
+        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
 
-        r=rotator_vec[...,0]
-        x=rotator_vec[...,1]
-        y=rotator_vec[...,2]
-        z=rotator_vec[...,3]
+        r=rotator_vec[0]
+        x=rotator_vec[1]
+        y=rotator_vec[2]
+        z=rotator_vec[3]
 
 
-        rotation_matrix[...,0,0]=1 - 2 * (y * y + z * z)
-        rotation_matrix[...,0,1]=2 * (x * y + r * z)
-        rotation_matrix[...,0,2]=2 * (x * z - r * y)
+        rotation_matrix[0,0]=1 - 2 * (y * y + z * z)
+        rotation_matrix[0,1]=2 * (x * y + r * z)
+        rotation_matrix[0,2]=2 * (x * z - r * y)
 
-        rotation_matrix[...,1,0]=2 * (x * y - r * z)
-        rotation_matrix[...,1,1]=1 - 2 * (x * x + z * z)
-        rotation_matrix[...,1,2]=2 * (y * z + r * x)
+        rotation_matrix[1,0]=2 * (x * y - r * z)
+        rotation_matrix[1,1]=1 - 2 * (x * x + z * z)
+        rotation_matrix[1,2]=2 * (y * z + r * x)
 
-        rotation_matrix[...,2,0]=2 * (x * z + r * y)
-        rotation_matrix[...,2,1]=2 * (y * z - r * x)
-        rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
+        rotation_matrix[2,0]=2 * (x * z + r * y)
+        rotation_matrix[2,1]=2 * (y * z - r * x)
+        rotation_matrix[2,2]=1 - 2 * (x * x + y * y)
 
-        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(-1)
+        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(1)
         return transform_matrix
     
-    return create_transform_matrix_internel_v2(scaling_vec,rotator_vec)
+    return create_transform_matrix_internel_v1(scaling_vec,rotator_vec)
 
 
 ##
 ## Create Rayspace Transform Matrix through first-order Taylor expansion.
 ##
-def create_rayspace_transform(cov3d:torch.Tensor,point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
+def create_rayspace_transform(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
     #Keep no_grad. Auto gradient will make bad influence of xyz
 
     @torch.no_grad()
-    def create_rayspace_transform_v1(cov3d:torch.Tensor,point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
-        t=torch.matmul(point_positions,view_matrix)
-        J=torch.zeros_like(cov3d,device='cuda')#view point mat3x3
-        camera_focal=camera_focal.unsqueeze(1)
-        tz_square=t[:,:,2]*t[:,:,2]
-        J[:,:,0,0]=camera_focal[:,:,0]/t[:,:,2]#focal x
-        J[:,:,1,1]=camera_focal[:,:,1]/t[:,:,2]#focal y
+    def create_rayspace_transform_v1(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
+        #todo fix float
+        t=torch.matmul(point_positions.transpose(-1,-2).contiguous(),view_matrix).transpose(-1,-2).contiguous()#torch.matmul(view_matrix.transpose(-1,-2),point_positions)
+        J=torch.zeros((t.shape[0],3,3,t.shape[-1]),device=t.device)#view point mat3x3
+        camera_focal=camera_focal.unsqueeze(-1)
+        tz_square=t[:,2]*t[:,2]
+        J[:,0,0]=camera_focal[:,0]/t[:,2]#focal x
+        J[:,1,1]=camera_focal[:,1]/t[:,2]#focal y
         if bTranspose:
-            J[:,:,0,2]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            J[:,:,1,2]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            J[:,0,2]=-(camera_focal[:,0]*t[:,0])/tz_square
+            J[:,1,2]=-(camera_focal[:,1]*t[:,1])/tz_square
         else:
-            J[:,:,2,0]=-(camera_focal[:,:,0]*t[:,:,0])/tz_square
-            J[:,:,2,1]=-(camera_focal[:,:,1]*t[:,:,1])/tz_square
+            J[:,2,0]=-(camera_focal[:,0]*t[:,0])/tz_square
+            J[:,2,1]=-(camera_focal[:,1]*t[:,1])/tz_square
         return J
 
     @torch.no_grad()
-    def create_rayspace_transform_v2(cov3d:torch.Tensor,point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
+    def create_rayspace_transform_v2(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
         '''faster'''
-        t=torch.matmul(point_positions,view_matrix)
+        #todo fix float
+        t=torch.matmul(point_positions.transpose(-1,-2).contiguous(),view_matrix).transpose(-1,-2).contiguous()#torch.matmul(view_matrix.transpose(-1,-2),point_positions)
         J=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal,bTranspose)
         return J
     
-    return create_rayspace_transform_v2(cov3d,point_positions,view_matrix,camera_focal,bTranspose)
+    return create_rayspace_transform_v1(point_positions,view_matrix,camera_focal,bTranspose)
 
 ##
 ## Create Covariance matrix through transform matrix
 ##
-class CreateCovarianceMatrix(torch.autograd.Function):
+class CreateCovarianceMatrixFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,transforms:torch.Tensor):
         ctx.save_for_backward(transforms)
@@ -108,6 +110,7 @@ class CreateCovarianceMatrix(torch.autograd.Function):
 
 def create_cov3d(transform_matrix:torch.Tensor)->torch.Tensor:
     '''
+        transform_matrix:[P,3,3]
         trans^t @ trans
     '''
     def create_cov3d_internel_v1(transform_matrix:torch.Tensor)->torch.Tensor:
@@ -116,7 +119,7 @@ def create_cov3d(transform_matrix:torch.Tensor)->torch.Tensor:
     
     def create_cov3d_internel_v2(transform_matrix:torch.Tensor)->torch.Tensor:
         '''simplify the calculations in the backward phase.(The grad of Cov3d will be symmetric)'''
-        cov3d=CreateCovarianceMatrix.apply(transform_matrix)
+        cov3d=CreateCovarianceMatrixFunc.apply(transform_matrix)
         return cov3d
 
     return create_cov3d_internel_v2(transform_matrix)
@@ -124,11 +127,12 @@ def create_cov3d(transform_matrix:torch.Tensor)->torch.Tensor:
 ###
 ### world position to ndc position
 ###
-class World2NDC(torch.autograd.Function):
+class World2NdcFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,position:torch.Tensor,view_project_matrix:torch.Tensor):
-        hom_pos=torch.matmul(position,view_project_matrix)
-        repc_hom_w=1/(hom_pos[...,3:4]+1e-7)
+        #todo fix float
+        hom_pos=torch.matmul(position.transpose(-1,-2).contiguous(),view_project_matrix).transpose(-1,-2).contiguous()#torch.matmul(view_project_matrix.transpose(-1,-2),position)
+        repc_hom_w=1/(hom_pos[:,3:4]+1e-7)
         ndc_pos=hom_pos*repc_hom_w
         ctx.save_for_backward(view_project_matrix,ndc_pos,repc_hom_w)
         return ndc_pos
@@ -136,33 +140,19 @@ class World2NDC(torch.autograd.Function):
     @staticmethod
     def backward(ctx,grad_ndc_pos:torch.Tensor):
         (view_project_matrix,ndc_pos,repc_hom_w)=ctx.saved_tensors
-
-        # repc_hom_w=repc_hom_w[...,0]
-        # position_grad=torch.zeros_like(position)
-
-        # mul1=(view_project_matrix[...,0,0] * position[...,0] + view_project_matrix[...,1,0] * position[...,1] + view_project_matrix[...,2,0] * position[...,2] + view_project_matrix[...,3,0]) * repc_hom_w * repc_hom_w
-        # mul2=(view_project_matrix[...,0,1] * position[...,0] + view_project_matrix[...,1,1] * position[...,1] + view_project_matrix[...,2,1] * position[...,2] + view_project_matrix[...,3,1]) * repc_hom_w * repc_hom_w
-
-        # position_grad[...,0]=(view_project_matrix[...,0,0] * repc_hom_w - view_project_matrix[...,0,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,0,1] * repc_hom_w - view_project_matrix[...,0,3] * mul2) * grad_ndc_pos[...,1]
-
-        # position_grad[...,1]=(view_project_matrix[...,1,0] * repc_hom_w - view_project_matrix[...,1,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,1,1] * repc_hom_w - view_project_matrix[...,1,3] * mul2) * grad_ndc_pos[...,1]
-
-        # position_grad[...,2]=(view_project_matrix[...,2,0] * repc_hom_w - view_project_matrix[...,2,3] * mul1) * grad_ndc_pos[...,0] + (view_project_matrix[...,2,1] * repc_hom_w - view_project_matrix[...,2,3] * mul2) * grad_ndc_pos[...,1]
-
         position_grad=torch.ops.RasterBinning.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
-
         return (position_grad,None)
 
 def wrold2ndc(position:torch.Tensor,view_project_matrix:torch.Tensor)->torch.Tensor:
     '''
     Override the backward. AutoGrad for world2ndc may lead to floating-point precision issues.
     '''
-    return World2NDC.apply(position,view_project_matrix)
+    return World2NdcFunc.apply(position,view_project_matrix)
 
 ###
 ### project the 3d-cov in world space to screen space
 ###
-class Transform3dCovAndProjTo2d(torch.autograd.Function):
+class ProjCov3dTo2dFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,cov3d:torch.Tensor,transforms_t:torch.Tensor):
         ctx.save_for_backward(transforms_t)
@@ -193,14 +183,14 @@ def project_3dcov_to_2d(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Ten
         return cov2d
     def project_3dcov_to_2d_internel_v2(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
         '''simplify the calculations in the backward phase.'''
-        return Transform3dCovAndProjTo2d.apply(cov3d,transforms_t)
+        return ProjCov3dTo2dFunc.apply(cov3d,transforms_t)
     
     return project_3dcov_to_2d_internel_v2(cov3d,transforms_t)
 
 ###
 ### The fastest version of Create cov2d. 
 ###
-class Cov2dCreateV2(torch.autograd.Function):
+class Cov2dCreateV2Func(torch.autograd.Function):
     @staticmethod
     def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
         ctx.save_for_backward(J,view_matrix,transform_matrix)
@@ -213,7 +203,7 @@ class Cov2dCreateV2(torch.autograd.Function):
         transform_matrix_grad=torch.ops.RasterBinning.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
         return (None,None,transform_matrix_grad)
     
-class Cov2dCreateV1(torch.autograd.Function):
+class Cov2dCreateV1Func(torch.autograd.Function):
     '''
     Used only for debugging and testing purposes
     '''
@@ -238,16 +228,13 @@ def create_2dcov_directly(J:torch.Tensor,view_matrix:torch.Tensor,transform_matr
 
     The usual method contains several matrix multiplications with a large batch number and a small K. Loading and writing these intermediate variables takes a lot of time.
     '''
-    def create_2dcov_directly_internel_v1(J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
-
-        return
-    cov2d=Cov2dCreateV2.apply(J,view_matrix,transform_matrix)
+    cov2d=Cov2dCreateV2Func.apply(J,view_matrix,transform_matrix)
     return cov2d
 
 ###
 ### the rasterization of 2d guassian.
 ###
-class GaussiansRaster(torch.autograd.Function):
+class GaussiansRasterFunc(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
@@ -283,7 +270,6 @@ class GaussiansRaster(torch.autograd.Function):
                                                                                                         transmitance,lst_contributor,grad_out_color,
                                                                                                         tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
 
-
         grads = (
             None,
             None,
@@ -315,7 +301,7 @@ def rasterize_2d_gaussian(
         img_h:int,
         img_w:int):
     
-    return GaussiansRaster.apply(
+    return GaussiansRasterFunc.apply(
         sorted_pointId,
         tile_start_index,
         mean2d,
@@ -335,12 +321,12 @@ def rasterize_2d_gaussian(
 ###
 ### the rasterization of 2d guassian.
 ###
-class SphericalHarmonic(torch.autograd.Function):
+class SphericalHarmonicFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
         ctx.save_for_backward(dirs)
         ctx.degree=deg
-        ctx.sh_rest_dim=sh_rest.shape[-2]
+        ctx.sh_rest_dim=sh_rest.shape[0]
         rgb=torch.ops.RasterBinning.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
         return rgb
     
@@ -357,18 +343,18 @@ class SphericalHarmonic(torch.autograd.Function):
 def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
 
     def sh2rgb_internel_v1(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=-2),dirs).clamp_min(0)
+        return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
     
     def sh2rgb_internel_v2(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        return SphericalHarmonic.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
+        return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
     
-    return sh2rgb_internel_v2(deg,sh_base,sh_rest,dirs)
+    return sh2rgb_internel_v1(deg,sh_base,sh_rest,dirs)
 
 
 ###
 ### eigh[no grad] and inverse[grad] the matrix.
 ###
-class EighAndInverse(torch.autograd.Function):
+class EighAndInverse2x2Func(torch.autograd.Function):
     @staticmethod
     def forward(ctx,input_matrix:torch.Tensor):
         val,vec,inverse_matrix=torch.ops.RasterBinning.eigh_and_inv_2x2matrix_forward(input_matrix)
@@ -384,23 +370,73 @@ class EighAndInverse(torch.autograd.Function):
 def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
 
     def eigh_and_inverse_cov2d_internel_v1(cov2d:torch.Tensor):
-        det=torch.det(cov2d)
+        det=cov2d[:,0,0]*cov2d[:,1,1]-cov2d[:,0,1]*cov2d[:,1,0]
         with torch.no_grad():
-            mid=0.5*(cov2d[:,:,0,0]+cov2d[:,:,1,1])
+            mid=0.5*(cov2d[:,0,0]+cov2d[:,1,1])
             temp=(mid*mid-det).clamp_min(1e-9).sqrt()
-            eigen_val=torch.cat(((mid-temp).unsqueeze(-1),(mid+temp).unsqueeze(-1)),dim=-1)
-            eigen_vec_y=((eigen_val-cov2d[...,0,0].unsqueeze(-1))/cov2d[...,0,1].unsqueeze(-1))
-            eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-1),eigen_vec_y.unsqueeze(-1)),dim=-1)
-            eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-1)
-        reci_det=1/(torch.det(cov2d)+1e-7)
+            eigen_val=torch.cat(((mid-temp).unsqueeze(1),(mid+temp).unsqueeze(1)),dim=1)
+            eigen_vec_y=((eigen_val-cov2d[:,0,0].unsqueeze(1))/cov2d[:,0,1].unsqueeze(1))
+            eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-2),eigen_vec_y.unsqueeze(-2)),dim=-2)
+            eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-2)
+        reci_det=1/(det+1e-7)
         cov2d_inv=torch.zeros_like(cov2d)
-        cov2d_inv[...,0,1]=-cov2d[...,0,1]*reci_det
-        cov2d_inv[...,1,0]=-cov2d[...,1,0]*reci_det
-        cov2d_inv[...,0,0]=cov2d[...,1,1]*reci_det
-        cov2d_inv[...,1,1]=cov2d[...,0,0]*reci_det
+        cov2d_inv[:,0,1]=-cov2d[:,0,1]*reci_det
+        cov2d_inv[:,1,0]=-cov2d[:,1,0]*reci_det
+        cov2d_inv[:,0,0]=cov2d[:,1,1]*reci_det
+        cov2d_inv[:,1,1]=cov2d[:,0,0]*reci_det
         return eigen_val,eigen_vec,cov2d_inv
     
     def eigh_and_inverse_cov2d_internel_v2(cov2d:torch.Tensor):
-        return EighAndInverse.apply(cov2d)
+        return EighAndInverse2x2Func.apply(cov2d)
 
-    return eigh_and_inverse_cov2d_internel_v2(cov2d)
+    return eigh_and_inverse_cov2d_internel_v1(cov2d)
+
+###
+### compact params
+###
+
+class CompactVisibleParamsFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,visible_mask:torch.Tensor,
+                position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,
+                sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+        visible_mask_cumsum=visible_mask.cumsum(0)
+        visible_chunks_num=int(visible_mask_cumsum[-1].cpu())
+        compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,reverse_map=torch.ops.RasterBinning.compact_visible_params_forward(
+            visible_chunks_num,
+            visible_mask,
+            visible_mask_cumsum,
+            position,
+            scale,
+            rotation,
+            sh_base,
+            sh_rest,
+            opacity)
+        ctx.save_for_backward(reverse_map)
+        ctx.chunk_num=position.shape[0]
+        ctx.chunk_size=position.shape[-1]
+        return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity
+    
+    @staticmethod
+    def backward(ctx,compacted_pos_grad:torch.Tensor,compacted_scale_grad:torch.Tensor,compacted_rot_grad:torch.Tensor,compacted_sh_base_grad:torch.Tensor,compacted_sh_rest_grad:torch.Tensor,compacted_opacity_grad:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+        (reverse_map,)=ctx.saved_tensors
+        chunk_num=ctx.chunk_num
+        chunk_size=ctx.chunk_size
+        grads=torch.ops.RasterBinning.compact_visible_params_backward(chunk_num,chunk_size,reverse_map,compacted_pos_grad,compacted_scale_grad,compacted_rot_grad,compacted_sh_base_grad,compacted_sh_rest_grad,compacted_opacity_grad)
+        return None,*grads
+
+def compact_visible_params(visible_mask:torch.Tensor,position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+    # compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity=CompactVisibleParamsFunc.apply(
+    #     visible_mask,
+    #     position,scale,rotation,
+    #     sh_base,sh_rest,opacity)
+    compacted_pos=position[visible_mask].transpose(0,1).reshape(4,-1)
+    compacted_scale=scale[visible_mask].transpose(0,1).reshape(3,-1)
+    compacted_rot=rotation[visible_mask].transpose(0,1).reshape(4,-1)
+    compacted_sh_base=sh_base[visible_mask].transpose(0,1).transpose(1,2).reshape(1,3,-1)
+    compacted_sh_rest=sh_rest[visible_mask].transpose(0,1).transpose(1,2).reshape(sh_rest.shape[1],3,compacted_sh_base.shape[-1])
+    compacted_opacity=opacity[visible_mask].transpose(0,1).reshape(1,-1)
+
+
+
+    return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity
