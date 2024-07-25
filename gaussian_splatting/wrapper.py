@@ -411,7 +411,7 @@ class CompactVisibleParamsFunc(torch.autograd.Function):
             sh_rest,
             opacity)
         ctx.save_for_backward(reverse_map)
-        ctx.chunk_num=position.shape[0]
+        ctx.chunk_num=position.shape[-2]
         ctx.chunk_size=position.shape[-1]
         return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity
     
@@ -423,19 +423,19 @@ class CompactVisibleParamsFunc(torch.autograd.Function):
         grads=torch.ops.RasterBinning.compact_visible_params_backward(chunk_num,chunk_size,reverse_map,compacted_pos_grad,compacted_scale_grad,compacted_rot_grad,compacted_sh_base_grad,compacted_sh_rest_grad,compacted_opacity_grad)
         return None,*grads
 
-def compact_visible_params(visible_mask:torch.Tensor,position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+def compact_visible_params(visible_mask:torch.Tensor,
+                           position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,
+                           sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
+                           additional_params:list[torch.Tensor]=None)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,list[torch.Tensor]]:
     compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity=CompactVisibleParamsFunc.apply(
         visible_mask,
         position,scale,rotation,
         sh_base,sh_rest,opacity)
     
-    # compacted_pos=position[visible_mask].transpose(0,1).reshape(4,-1)
-    # compacted_scale=scale[visible_mask].transpose(0,1).reshape(3,-1)
-    # compacted_rot=rotation[visible_mask].transpose(0,1).reshape(4,-1)
-    # compacted_sh_base=sh_base[visible_mask].transpose(0,1).transpose(1,2).reshape(1,3,-1)
-    # compacted_sh_rest=sh_rest[visible_mask].transpose(0,1).transpose(1,2).reshape(sh_rest.shape[1],3,compacted_sh_base.shape[-1])
-    # compacted_opacity=opacity[visible_mask].transpose(0,1).reshape(1,-1)
+    compacted_additional_params=[]
+    if additional_params is not None:
+        for params in additional_params:
+            compacted_tensor=params[...,visible_mask,:].reshape(*params.shape[:-2],-1)
+            compacted_additional_params.append(compacted_tensor)
 
-
-
-    return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity
+    return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,compacted_additional_params

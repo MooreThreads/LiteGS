@@ -334,7 +334,7 @@ class GaussianTrain:
         progress_bar = tqdm(range(self.iter_start*self.view_manager.view_matrix_tensor.shape[0], epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
         progress_bar.update(0)
         batch_size=1
-        StatisticsHelperInst.reset(self.model._xyz.shape[0],self.model._xyz.shape[1])
+        StatisticsHelperInst.reset(self.model._xyz.shape[-2],self.model._xyz.shape[-1])
         torch.cuda.empty_cache()
         
         for epoch_i in range(self.iter_start,epoch+1):

@@ -14,25 +14,29 @@ def world_to_view(position,view_matrix):
     return position@view_matrix
 
 def quaternion_to_rotation_matrix(rotator_vec:torch.Tensor)->torch.Tensor:
-    rotation_matrix=torch.zeros((*(rotator_vec.shape[0:-1]),3,3),device='cuda')
+    '''
+    rotator_vec: 4,P
+    return: 3,3,P
+    '''
+    rotation_matrix=torch.zeros((3,3,*(rotator_vec.shape[1:])),device='cuda')
 
-    r=rotator_vec[...,0]
-    x=rotator_vec[...,1]
-    y=rotator_vec[...,2]
-    z=rotator_vec[...,3]
+    r=rotator_vec[0]
+    x=rotator_vec[1]
+    y=rotator_vec[2]
+    z=rotator_vec[3]
 
 
-    rotation_matrix[...,0,0]=1 - 2 * (y * y + z * z)
-    rotation_matrix[...,0,1]=2 * (x * y + r * z)
-    rotation_matrix[...,0,2]=2 * (x * z - r * y)
+    rotation_matrix[0,0]=1 - 2 * (y * y + z * z)
+    rotation_matrix[0,1]=2 * (x * y + r * z)
+    rotation_matrix[0,2]=2 * (x * z - r * y)
 
-    rotation_matrix[...,1,0]=2 * (x * y - r * z)
-    rotation_matrix[...,1,1]=1 - 2 * (x * x + z * z)
-    rotation_matrix[...,1,2]=2 * (y * z + r * x)
+    rotation_matrix[1,0]=2 * (x * y - r * z)
+    rotation_matrix[1,1]=1 - 2 * (x * x + z * z)
+    rotation_matrix[1,2]=2 * (y * z + r * x)
 
-    rotation_matrix[...,2,0]=2 * (x * z + r * y)
-    rotation_matrix[...,2,1]=2 * (y * z - r * x)
-    rotation_matrix[...,2,2]=1 - 2 * (x * x + y * y)
+    rotation_matrix[2,0]=2 * (x * z + r * y)
+    rotation_matrix[2,1]=2 * (y * z - r * x)
+    rotation_matrix[2,2]=1 - 2 * (x * x + y * y)
     return rotation_matrix
 
 @torch.no_grad()
