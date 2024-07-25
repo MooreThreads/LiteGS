@@ -57,7 +57,7 @@ def create_transform_matrix(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->
         transform_matrix=rotation_matrix*scaling_vec.unsqueeze(1)
         return transform_matrix
     
-    return create_transform_matrix_internel_v1(scaling_vec,rotator_vec)
+    return create_transform_matrix_internel_v2(scaling_vec,rotator_vec)
 
 
 ##
@@ -68,8 +68,7 @@ def create_rayspace_transform(point_positions:torch.Tensor,view_matrix:torch.Ten
 
     @torch.no_grad()
     def create_rayspace_transform_v1(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
-        #todo fix float
-        t=torch.matmul(point_positions.transpose(-1,-2).contiguous(),view_matrix).transpose(-1,-2).contiguous()#torch.matmul(view_matrix.transpose(-1,-2),point_positions)
+        t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
         J=torch.zeros((t.shape[0],3,3,t.shape[-1]),device=t.device)#view point mat3x3
         camera_focal=camera_focal.unsqueeze(-1)
         tz_square=t[:,2]*t[:,2]
@@ -86,12 +85,11 @@ def create_rayspace_transform(point_positions:torch.Tensor,view_matrix:torch.Ten
     @torch.no_grad()
     def create_rayspace_transform_v2(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
         '''faster'''
-        #todo fix float
-        t=torch.matmul(point_positions.transpose(-1,-2).contiguous(),view_matrix).transpose(-1,-2).contiguous()#torch.matmul(view_matrix.transpose(-1,-2),point_positions)
+        t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
         J=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal,bTranspose)
         return J
     
-    return create_rayspace_transform_v1(point_positions,view_matrix,camera_focal,bTranspose)
+    return create_rayspace_transform_v2(point_positions,view_matrix,camera_focal,bTranspose)
 
 ##
 ## Create Covariance matrix through transform matrix
@@ -348,7 +346,7 @@ def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor
     def sh2rgb_internel_v2(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
         return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
     
-    return sh2rgb_internel_v1(deg,sh_base,sh_rest,dirs)
+    return sh2rgb_internel_v2(deg,sh_base,sh_rest,dirs)
 
 
 ###
@@ -389,7 +387,7 @@ def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
     def eigh_and_inverse_cov2d_internel_v2(cov2d:torch.Tensor):
         return EighAndInverse2x2Func.apply(cov2d)
 
-    return eigh_and_inverse_cov2d_internel_v1(cov2d)
+    return eigh_and_inverse_cov2d_internel_v2(cov2d)
 
 ###
 ### compact params
@@ -426,16 +424,17 @@ class CompactVisibleParamsFunc(torch.autograd.Function):
         return None,*grads
 
 def compact_visible_params(visible_mask:torch.Tensor,position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
-    # compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity=CompactVisibleParamsFunc.apply(
-    #     visible_mask,
-    #     position,scale,rotation,
-    #     sh_base,sh_rest,opacity)
-    compacted_pos=position[visible_mask].transpose(0,1).reshape(4,-1)
-    compacted_scale=scale[visible_mask].transpose(0,1).reshape(3,-1)
-    compacted_rot=rotation[visible_mask].transpose(0,1).reshape(4,-1)
-    compacted_sh_base=sh_base[visible_mask].transpose(0,1).transpose(1,2).reshape(1,3,-1)
-    compacted_sh_rest=sh_rest[visible_mask].transpose(0,1).transpose(1,2).reshape(sh_rest.shape[1],3,compacted_sh_base.shape[-1])
-    compacted_opacity=opacity[visible_mask].transpose(0,1).reshape(1,-1)
+    compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity=CompactVisibleParamsFunc.apply(
+        visible_mask,
+        position,scale,rotation,
+        sh_base,sh_rest,opacity)
+    
+    # compacted_pos=position[visible_mask].transpose(0,1).reshape(4,-1)
+    # compacted_scale=scale[visible_mask].transpose(0,1).reshape(3,-1)
+    # compacted_rot=rotation[visible_mask].transpose(0,1).reshape(4,-1)
+    # compacted_sh_base=sh_base[visible_mask].transpose(0,1).transpose(1,2).reshape(1,3,-1)
+    # compacted_sh_rest=sh_rest[visible_mask].transpose(0,1).transpose(1,2).reshape(sh_rest.shape[1],3,compacted_sh_base.shape[-1])
+    # compacted_opacity=opacity[visible_mask].transpose(0,1).reshape(1,-1)
 
 
 
