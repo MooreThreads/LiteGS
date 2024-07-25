@@ -1879,7 +1879,7 @@ __global__ void compact_visible_params_kernel_forward(
             compacted_sh_base[0][0][compacted_index + index] = sh_base[0][0][blockIdx.x][index];
             compacted_sh_base[0][1][compacted_index + index] = sh_base[0][1][blockIdx.x][index];
             compacted_sh_base[0][2][compacted_index + index] = sh_base[0][2][blockIdx.x][index];
-            for (int i = 0; i < sh_rest.size(1); i++)
+            for (int i = 0; i < sh_rest.size(0); i++)
             {
                 compacted_sh_rest[i][0][compacted_index + index] = sh_rest[i][0][blockIdx.x][index];
                 compacted_sh_rest[i][1][compacted_index + index] = sh_rest[i][1][blockIdx.x][index];
