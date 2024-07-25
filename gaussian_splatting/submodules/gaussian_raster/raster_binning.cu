@@ -21,7 +21,7 @@ void cuda_error_check(const char* file, const char* function)
         printf("Error in %s.%s : %s\n", file, function, cudaGetErrorString(err));
 }
 
-#define CUDA_DEBUG
+//#define CUDA_DEBUG
 #ifdef CUDA_DEBUG
     #define CUDA_CHECK_ERRORS cuda_error_check(__FILE__,__FUNCTION__)
 #else
@@ -1879,7 +1879,7 @@ __global__ void compact_visible_params_kernel_forward(
             compacted_sh_base[0][0][compacted_index + index] = sh_base[blockIdx.x][0][0][index];
             compacted_sh_base[0][1][compacted_index + index] = sh_base[blockIdx.x][0][1][index];
             compacted_sh_base[0][2][compacted_index + index] = sh_base[blockIdx.x][0][2][index];
-            for (int i = 0; i < sh_rest.size(2); i++)
+            for (int i = 0; i < sh_rest.size(1); i++)
             {
                 compacted_sh_rest[i][0][compacted_index + index] = sh_rest[blockIdx.x][i][0][index];
                 compacted_sh_rest[i][1][compacted_index + index] = sh_rest[blockIdx.x][i][1][index];
