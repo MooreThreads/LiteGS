@@ -128,8 +128,7 @@ def create_cov3d(transform_matrix:torch.Tensor)->torch.Tensor:
 class World2NdcFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,position:torch.Tensor,view_project_matrix:torch.Tensor):
-        #todo fix float
-        hom_pos=torch.matmul(position.transpose(-1,-2).contiguous(),view_project_matrix).transpose(-1,-2).contiguous()#torch.matmul(view_project_matrix.transpose(-1,-2),position)
+        hom_pos=torch.matmul(view_project_matrix.transpose(-1,-2),position)
         repc_hom_w=1/(hom_pos[:,3:4]+1e-7)
         ndc_pos=hom_pos*repc_hom_w
         ctx.save_for_backward(view_project_matrix,ndc_pos,repc_hom_w)
