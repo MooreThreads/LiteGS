@@ -281,7 +281,7 @@ class GaussianSplattingModel:
     
     @torch.no_grad()
     def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor):
-        
+        #!!!befor duplicateWithKeys 5.7ms!!!!
         tilesX=self.cached_tiles_size[0]
         tilesY=self.cached_tiles_size[1]
         tiles_num=tilesX*tilesY
@@ -309,7 +309,7 @@ class GaussianSplattingModel:
         radius_pixel=(axis_length.max(-2).values*(tiles_touched!=0))
 
         #sort by depth
-        values,point_ids=ndc[:,2].sort(dim=-1)
+        values,point_ids=ndc[:,2].sort(dim=-1)#0.8ms
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
             left_up[i]=left_up[i,:,point_ids[i]]
@@ -321,14 +321,14 @@ class GaussianSplattingModel:
         allocate_size=total_tiles_num_batch.max().cpu()
 
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,int(allocate_size),int(tilesX))
+        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,int(allocate_size),int(tilesX))#2ms
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
-        pointId_table=point_ids.gather(dim=1,index=pointId_table.long()).int()
+        pointId_table=point_ids.gather(dim=1,index=pointId_table.long()).int()#!!!!2ms!!!
 
         # sort tile_id with torch.sort
         sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
-        sorted_pointId=pointId_table.gather(dim=1,index=indices)
+        sorted_pointId=pointId_table.gather(dim=1,index=indices)#!!!1.2ms!!!
 
         #debug:check total_tiles_num_batch
         #cmp_result=(tileId_table!=0).sum(dim=1)==total_tiles_num_batch[:,0]
@@ -336,7 +336,7 @@ class GaussianSplattingModel:
         #cmp_result=(sorted_tileId!=0).sum(dim=1)==total_tiles_num_batch[:,0]
         #print(cmp_result)
 
-        # range
+        # range 0.3ms
         tile_start_index=torch.ops.RasterBinning.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
         return tile_start_index,sorted_pointId,sorted_tileId,radius_pixel
@@ -366,26 +366,26 @@ class GaussianSplattingModel:
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.set_compact_mask(chunk_visibility)
 
-        positions,scales,rotators,sh_base,sh_rest,opacities=self.sample_by_visibility(chunk_visibility)
+        positions,scales,rotators,sh_base,sh_rest,opacities=self.sample_by_visibility(chunk_visibility)#forward 1.5ms(compact 0.7ms)
         if prebackward_func is not None:
             prebackward_func(positions,scales,rotators,sh_base,sh_rest,opacities)
 
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
         #cov3d,transform_matrix=self.transform_to_cov3d(scales,rotators)
         #cov2d=self.proj_cov3d_to_cov2d(cov3d,positions,view_matrix,camera_focal)
-        cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)
-        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)
-        
-        ### color ###
-        dirs=positions[:3]-camera_center_batch.unsqueeze(-1)#[N,P,3]
-        dirs=torch.nn.functional.normalize(dirs,dim=-2)
-        colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)
+        cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)#1.46ms
+        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)#0.5ms
         
         ### mean of 2d-gaussian ###
-        ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)
+        ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)#1ms
+
+        ### color ###
+        dirs=positions[:3]-camera_center_batch.unsqueeze(-1)
+        dirs=torch.nn.functional.normalize(dirs,dim=-2)#dir 0.5ms
+        colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)#degree0: 0.1ms
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)
+        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)#15ms sort1 0.8ms sort2 2ms
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_max_min_compact('radii',radii)
             StatisticsHelperInst.update_visible_count(radii>0)
@@ -394,7 +394,7 @@ class GaussianSplattingModel:
         if tiles is None:
             batch_size=view_matrix.shape[0]
             tiles=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
-        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
+        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)#5.7ms
 
         
         return tile_img,tile_transmitance.unsqueeze(1)

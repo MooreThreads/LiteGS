@@ -21,7 +21,7 @@ plt_index=[0,14]
 cameras_info:typing.Dict[int,CameraInfo]=None
 images_info:typing.List[ImageInfo]=None
 scene:GaussianScene=None
-cameras_info,images_info,scene,_,NerfNormRadius=TrainingDataLoader.load('./dataset/garden','images',2,-1)
+cameras_info,images_info,scene,_,NerfNormRadius=TrainingDataLoader.load('./dataset/garden','images',0,-1)
 image_size=images_info[0].image.size
 
 args = OptimizationParams(ArgumentParser(description="Training script parameters"))
@@ -29,7 +29,7 @@ args = OptimizationParams(ArgumentParser(description="Training script parameters
 
 gaussian_model=GaussianSplattingModel(scene)
 gaussian_model.update_tiles_coord(image_size,8)
-(model_params,op_state_dict, first_iter,actived_sh_degree) = torch.load('output/chkpnt_chunk_baseline.pth')
+(model_params,op_state_dict, first_iter,actived_sh_degree) = torch.load('output/sh0_4M.pth')
 gaussian_model.load_params(model_params)
 gaussian_model.actived_sh_degree=actived_sh_degree
 gaussian_model.rebuild_AABB()
@@ -57,7 +57,7 @@ camera_focal=torch.Tensor(view_manager.camera_focal_tensor).cuda()
 ground_truth=torch.Tensor(view_manager.view_gt_tensor).cuda()
 total_views_num=view_matrix.shape[0]
 ssim_module=training.loss.ssim.SSIM(data_range=1.0).cuda()
-statistic_helper.StatisticsHelperInst.reset(gaussian_model._xyz.shape[0],gaussian_model._xyz.shape[1])
+statistic_helper.StatisticsHelperInst.reset(gaussian_model._xyz.shape[-2],gaussian_model._xyz.shape[-1])
 statistic_helper.StatisticsHelperInst.start()
 density_controller=DensityControllerOurs(args)
 start=time.monotonic()
