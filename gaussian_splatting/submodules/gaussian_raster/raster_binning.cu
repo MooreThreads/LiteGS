@@ -290,15 +290,15 @@ std::vector<at::Tensor> rasterize_forward(
 
     std::vector<int64_t> shape_img{ viewsnum,3, tilesnum,tilesize,tilesize };
     torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
-    at::Tensor output_img = torch::zeros(shape_img, opt_img);
+    at::Tensor output_img = torch::empty(shape_img, opt_img);
 
     std::vector<int64_t> shape_t{ viewsnum, tilesnum, tilesize, tilesize };
     torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
-    at::Tensor output_transmitance = torch::zeros(shape_t, opt_t);
+    at::Tensor output_transmitance = torch::empty(shape_t, opt_t);
 
     std::vector<int64_t> shape_c{ viewsnum, tilesnum, tilesize, tilesize };
     torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
-    at::Tensor output_last_contributor = torch::zeros(shape_c, opt_c);
+    at::Tensor output_last_contributor = torch::empty(shape_c, opt_c);
 
 
 
@@ -941,7 +941,7 @@ __global__ void create_transform_matrix_forward_kernel(
 at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale)
 {
     int P = quaternion.size(1);
-    at::Tensor transform_matrix = torch::zeros({ 3,3,P }, scale.options());
+    at::Tensor transform_matrix = torch::empty({ 3,3,P }, scale.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -957,8 +957,8 @@ __global__ void create_transform_matrix_backward_kernel(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[3,point_num]  
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[4,point_num] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_transform,         //[3,3,point_num]
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_quaternion,    //[3,point_num]  
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_scale    //[4,point_num] 
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_quaternion,    //[4,point_num]  
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_scale    //[3,point_num] 
 
 )
 {
@@ -1037,8 +1037,8 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
 {
     //todo
     int P = quaternion.size(1);
-    at::Tensor grad_quaternion = torch::zeros({ 4,P }, transform_matrix_grad.options());
-    at::Tensor grad_scale = torch::zeros({ 3,P }, transform_matrix_grad.options());
+    at::Tensor grad_quaternion = torch::empty({ 4,P }, transform_matrix_grad.options());
+    at::Tensor grad_scale = torch::empty({ 3,P }, transform_matrix_grad.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1100,7 +1100,7 @@ at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor ndc_pos
 
     int N = grad_ndcpos.size(0);
     int P = grad_ndcpos.size(2);
-    at::Tensor d_position = torch::zeros({ 4,P }, grad_ndcpos.options());
+    at::Tensor d_position = torch::empty({ 4,P }, grad_ndcpos.options());
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1289,7 +1289,7 @@ at::Tensor createCov2dDirectly_forward(
     int P = transform_matrix.size(2);
     assert(J.size(0) == N);
     assert(J.size(3) == P);
-    at::Tensor cov2d = torch::zeros({ N,2,2,P }, transform_matrix.options());
+    at::Tensor cov2d = torch::empty({ N,2,2,P }, transform_matrix.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1391,7 +1391,7 @@ at::Tensor createCov2dDirectly_backward(
     int P = transform_matrix.size(2);
     assert(cov2d_grad.size(0) == N);
     assert(cov2d_grad.size(2) == P);
-    at::Tensor transform_matrix_grad = torch::zeros({ 3,3,P }, cov2d_grad.options());
+    at::Tensor transform_matrix_grad = torch::empty({ 3,3,P }, cov2d_grad.options());
 
     int threadsnum = 1024;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -1523,7 +1523,7 @@ at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest
 {
     int N = dir.size(0);
     int P = dir.size(2);
-    at::Tensor rgb = torch::zeros({ N,3,P }, sh_base.options());
+    at::Tensor rgb = torch::empty({ N,3,P }, sh_base.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1680,7 +1680,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
     int P = rgb_grad.size(2);
     int C = rgb_grad.size(1);
 
-    at::Tensor sh_grad = torch::zeros({ 1 ,C,P }, rgb_grad.options());
+    at::Tensor sh_grad = torch::empty({ 1 ,C,P }, rgb_grad.options());
     at::Tensor sh_rest_grad = torch::zeros({ sh_rest_dim ,C,P }, rgb_grad.options());
 
     int threadsnum = 256;
@@ -1803,9 +1803,9 @@ std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
 {
     int N = input.size(0);
     int P = input.size(3);
-    at::Tensor vec = torch::zeros({ N,2,2,P }, input.options().requires_grad(false));
-    at::Tensor val = torch::zeros({ N,2,P }, input.options().requires_grad(false));
-    at::Tensor inv = torch::zeros({ N,2,2,P }, input.options());
+    at::Tensor vec = torch::empty({ N,2,2,P }, input.options().requires_grad(false));
+    at::Tensor val = torch::empty({ N,2,P }, input.options().requires_grad(false));
+    at::Tensor inv = torch::empty({ N,2,2,P }, input.options());
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1823,7 +1823,7 @@ at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix
 {
     int N = inv_matrix.size(0);
     int P = inv_matrix.size(3);
-    at::Tensor dL_dMatrix = torch::zeros_like(dL_dInvMatrix);
+    at::Tensor dL_dMatrix = torch::empty_like(dL_dInvMatrix);
 
     int threadsnum = 1024;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
@@ -1899,21 +1899,21 @@ std::vector<at::Tensor> compact_visible_params_forward(int64_t visible_num, at::
     int64_t chunksize = position.size(2);
 
     auto tensor_shape = position.sizes();
-    at::Tensor compacted_position = torch::zeros({ tensor_shape[0],chunksize * visible_num }, position.options());
+    at::Tensor compacted_position = torch::empty({ tensor_shape[0],chunksize * visible_num }, position.options());
     tensor_shape = scale.sizes();
-    at::Tensor compacted_scale = torch::zeros({ tensor_shape[0],chunksize * visible_num }, scale.options());
+    at::Tensor compacted_scale = torch::empty({ tensor_shape[0],chunksize * visible_num }, scale.options());
     tensor_shape = rotation.sizes();
-    at::Tensor compacted_rotation = torch::zeros({ tensor_shape[0],chunksize * visible_num }, rotation.options());
+    at::Tensor compacted_rotation = torch::empty({ tensor_shape[0],chunksize * visible_num }, rotation.options());
 
     tensor_shape = sh_base.sizes();
-    at::Tensor compacted_sh_base = torch::zeros({ tensor_shape[0],tensor_shape[1],chunksize * visible_num }, sh_base.options());
+    at::Tensor compacted_sh_base = torch::empty({ tensor_shape[0],tensor_shape[1],chunksize * visible_num }, sh_base.options());
     tensor_shape = sh_rest.sizes();
-    at::Tensor compacted_sh_rest = torch::zeros({ tensor_shape[0],tensor_shape[1],chunksize * visible_num }, sh_rest.options());
+    at::Tensor compacted_sh_rest = torch::empty({ tensor_shape[0],tensor_shape[1],chunksize * visible_num }, sh_rest.options());
 
     tensor_shape = opacity.sizes();
-    at::Tensor compacted_opacity = torch::zeros({ tensor_shape[0],chunksize * visible_num }, opacity.options());
+    at::Tensor compacted_opacity = torch::empty({ tensor_shape[0],chunksize * visible_num }, opacity.options());
 
-    at::Tensor reverse_map = torch::zeros({ visible_num }, visible_mask_cumsum.options().requires_grad(false));
+    at::Tensor reverse_map = torch::empty({ visible_num }, visible_mask_cumsum.options().requires_grad(false));
 
     //dim3 Block3d(32, 1, 1);
     compact_visible_params_kernel_forward<<<chunknum, 256 >>>(
