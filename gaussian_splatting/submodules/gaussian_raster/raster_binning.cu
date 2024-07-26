@@ -1395,7 +1395,7 @@ at::Tensor createCov2dDirectly_backward(
     int N = view_matrix.size(0);
     int P = transform_matrix.size(2);
     assert(cov2d_grad.size(0) == N);
-    assert(cov2d_grad.size(2) == P);
+    assert(cov2d_grad.size(3) == P);
     at::Tensor transform_matrix_grad = torch::empty({ 3,3,P }, cov2d_grad.options());
 
     int threadsnum = 1024;
