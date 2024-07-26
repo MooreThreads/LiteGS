@@ -1087,9 +1087,10 @@ __global__ void world2ndc_backword_kernel(
                 + (view_project_matrix[batch_id][2][1] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul2) * grad_ndc_pos[batch_id][1][index]
                 + (view_project_matrix[batch_id][2][2] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul3) * grad_ndc_pos[batch_id][2][index];
 
-            grad_position[0][index] += grad_x;
-            grad_position[1][index] += grad_y;
-            grad_position[2][index] += grad_z;
+            grad_position[0][index] = grad_x;
+            grad_position[1][index] = grad_y;
+            grad_position[2][index] = grad_z;
+            grad_position[3][index] = 0;
         }
     }
 }
@@ -1586,9 +1587,9 @@ __global__ void sh2rgb_backward_kernel(
             float3 dL_dRGB{ rgb_grad[batch_id][0][index], rgb_grad[batch_id][1][index], rgb_grad[batch_id][2][index] };
 
             float dRGBdsh0 = SH_C0;
-            SH_base_grad[0][0][index] += dRGBdsh0 * dL_dRGB.x;
-            SH_base_grad[0][1][index] += dRGBdsh0 * dL_dRGB.y;
-            SH_base_grad[0][2][index] += dRGBdsh0 * dL_dRGB.z;
+            SH_base_grad[0][0][index] = dRGBdsh0 * dL_dRGB.x;
+            SH_base_grad[0][1][index] = dRGBdsh0 * dL_dRGB.y;
+            SH_base_grad[0][2][index] = dRGBdsh0 * dL_dRGB.z;
 
             if (degree > 0)
             {
@@ -1599,15 +1600,15 @@ __global__ void sh2rgb_backward_kernel(
                 float dRGBdsh1 = -SH_C1 * y;
                 float dRGBdsh2 = SH_C1 * z;
                 float dRGBdsh3 = -SH_C1 * x;
-                SH_rest_grad[0][0][index] += dRGBdsh1 * dL_dRGB.x;
-                SH_rest_grad[1][0][index] += dRGBdsh2 * dL_dRGB.x;
-                SH_rest_grad[2][0][index] += dRGBdsh3 * dL_dRGB.x;
-                SH_rest_grad[0][1][index] += dRGBdsh1 * dL_dRGB.y;
-                SH_rest_grad[1][1][index] += dRGBdsh2 * dL_dRGB.y;
-                SH_rest_grad[2][1][index] += dRGBdsh3 * dL_dRGB.y;
-                SH_rest_grad[0][2][index] += dRGBdsh1 * dL_dRGB.z;
-                SH_rest_grad[1][2][index] += dRGBdsh2 * dL_dRGB.z;
-                SH_rest_grad[2][2][index] += dRGBdsh3 * dL_dRGB.z;
+                SH_rest_grad[0][0][index] = dRGBdsh1 * dL_dRGB.x;
+                SH_rest_grad[1][0][index] = dRGBdsh2 * dL_dRGB.x;
+                SH_rest_grad[2][0][index] = dRGBdsh3 * dL_dRGB.x;
+                SH_rest_grad[0][1][index] = dRGBdsh1 * dL_dRGB.y;
+                SH_rest_grad[1][1][index] = dRGBdsh2 * dL_dRGB.y;
+                SH_rest_grad[2][1][index] = dRGBdsh3 * dL_dRGB.y;
+                SH_rest_grad[0][2][index] = dRGBdsh1 * dL_dRGB.z;
+                SH_rest_grad[1][2][index] = dRGBdsh2 * dL_dRGB.z;
+                SH_rest_grad[2][2][index] = dRGBdsh3 * dL_dRGB.z;
 
                 if (degree > 1)
                 {
@@ -1620,21 +1621,21 @@ __global__ void sh2rgb_backward_kernel(
                     float dRGBdsh7 = SH_C2[3] * xz;
                     float dRGBdsh8 = SH_C2[4] * (xx - yy);
 
-                    SH_rest_grad[3][0][index] += dRGBdsh4 * dL_dRGB.x;
-                    SH_rest_grad[4][0][index] += dRGBdsh5 * dL_dRGB.x;
-                    SH_rest_grad[5][0][index] += dRGBdsh6 * dL_dRGB.x;
-                    SH_rest_grad[6][0][index] += dRGBdsh7 * dL_dRGB.x;
-                    SH_rest_grad[7][0][index] += dRGBdsh8 * dL_dRGB.x;
-                    SH_rest_grad[3][1][index] += dRGBdsh4 * dL_dRGB.y;
-                    SH_rest_grad[4][1][index] += dRGBdsh5 * dL_dRGB.y;
-                    SH_rest_grad[5][1][index] += dRGBdsh6 * dL_dRGB.y;
-                    SH_rest_grad[6][1][index] += dRGBdsh7 * dL_dRGB.y;
-                    SH_rest_grad[7][1][index] += dRGBdsh8 * dL_dRGB.y;
-                    SH_rest_grad[3][2][index] += dRGBdsh4 * dL_dRGB.z;
-                    SH_rest_grad[4][2][index] += dRGBdsh5 * dL_dRGB.z;
-                    SH_rest_grad[5][2][index] += dRGBdsh6 * dL_dRGB.z;
-                    SH_rest_grad[6][2][index] += dRGBdsh7 * dL_dRGB.z;
-                    SH_rest_grad[7][2][index] += dRGBdsh8 * dL_dRGB.z;
+                    SH_rest_grad[3][0][index] = dRGBdsh4 * dL_dRGB.x;
+                    SH_rest_grad[4][0][index] = dRGBdsh5 * dL_dRGB.x;
+                    SH_rest_grad[5][0][index] = dRGBdsh6 * dL_dRGB.x;
+                    SH_rest_grad[6][0][index] = dRGBdsh7 * dL_dRGB.x;
+                    SH_rest_grad[7][0][index] = dRGBdsh8 * dL_dRGB.x;
+                    SH_rest_grad[3][1][index] = dRGBdsh4 * dL_dRGB.y;
+                    SH_rest_grad[4][1][index] = dRGBdsh5 * dL_dRGB.y;
+                    SH_rest_grad[5][1][index] = dRGBdsh6 * dL_dRGB.y;
+                    SH_rest_grad[6][1][index] = dRGBdsh7 * dL_dRGB.y;
+                    SH_rest_grad[7][1][index] = dRGBdsh8 * dL_dRGB.y;
+                    SH_rest_grad[3][2][index] = dRGBdsh4 * dL_dRGB.z;
+                    SH_rest_grad[4][2][index] = dRGBdsh5 * dL_dRGB.z;
+                    SH_rest_grad[5][2][index] = dRGBdsh6 * dL_dRGB.z;
+                    SH_rest_grad[6][2][index] = dRGBdsh7 * dL_dRGB.z;
+                    SH_rest_grad[7][2][index] = dRGBdsh8 * dL_dRGB.z;
 
                     if (degree > 2)
                     {
@@ -1645,27 +1646,27 @@ __global__ void sh2rgb_backward_kernel(
                         float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
                         float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
                         float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
-                        SH_rest_grad[8][0][index] += dRGBdsh9 * dL_dRGB.x;
-                        SH_rest_grad[9][0][index] += dRGBdsh10 * dL_dRGB.x;
-                        SH_rest_grad[10][0][index] += dRGBdsh11 * dL_dRGB.x;
-                        SH_rest_grad[11][0][index] += dRGBdsh12 * dL_dRGB.x;
-                        SH_rest_grad[12][0][index] += dRGBdsh13 * dL_dRGB.x;
-                        SH_rest_grad[13][0][index] += dRGBdsh14 * dL_dRGB.x;
-                        SH_rest_grad[14][0][index] += dRGBdsh15 * dL_dRGB.x;
-                        SH_rest_grad[8][1][index] += dRGBdsh9 * dL_dRGB.y;
-                        SH_rest_grad[9][1][index] += dRGBdsh10 * dL_dRGB.y;
-                        SH_rest_grad[10][1][index] += dRGBdsh11 * dL_dRGB.y;
-                        SH_rest_grad[11][1][index] += dRGBdsh12 * dL_dRGB.y;
-                        SH_rest_grad[12][1][index] += dRGBdsh13 * dL_dRGB.y;
-                        SH_rest_grad[13][1][index] += dRGBdsh14 * dL_dRGB.y;
-                        SH_rest_grad[14][1][index] += dRGBdsh15 * dL_dRGB.y;
-                        SH_rest_grad[8][2][index] += dRGBdsh9 * dL_dRGB.z;
-                        SH_rest_grad[9][2][index] += dRGBdsh10 * dL_dRGB.z;
-                        SH_rest_grad[10][2][index] += dRGBdsh11 * dL_dRGB.z;
-                        SH_rest_grad[11][2][index] += dRGBdsh12 * dL_dRGB.z;
-                        SH_rest_grad[12][2][index] += dRGBdsh13 * dL_dRGB.z;
-                        SH_rest_grad[13][2][index] += dRGBdsh14 * dL_dRGB.z;
-                        SH_rest_grad[14][2][index] += dRGBdsh15 * dL_dRGB.z;
+                        SH_rest_grad[8][0][index] = dRGBdsh9 * dL_dRGB.x;
+                        SH_rest_grad[9][0][index] = dRGBdsh10 * dL_dRGB.x;
+                        SH_rest_grad[10][0][index] = dRGBdsh11 * dL_dRGB.x;
+                        SH_rest_grad[11][0][index] = dRGBdsh12 * dL_dRGB.x;
+                        SH_rest_grad[12][0][index] = dRGBdsh13 * dL_dRGB.x;
+                        SH_rest_grad[13][0][index] = dRGBdsh14 * dL_dRGB.x;
+                        SH_rest_grad[14][0][index] = dRGBdsh15 * dL_dRGB.x;
+                        SH_rest_grad[8][1][index] = dRGBdsh9 * dL_dRGB.y;
+                        SH_rest_grad[9][1][index] = dRGBdsh10 * dL_dRGB.y;
+                        SH_rest_grad[10][1][index] = dRGBdsh11 * dL_dRGB.y;
+                        SH_rest_grad[11][1][index] = dRGBdsh12 * dL_dRGB.y;
+                        SH_rest_grad[12][1][index] = dRGBdsh13 * dL_dRGB.y;
+                        SH_rest_grad[13][1][index] = dRGBdsh14 * dL_dRGB.y;
+                        SH_rest_grad[14][1][index] = dRGBdsh15 * dL_dRGB.y;
+                        SH_rest_grad[8][2][index] = dRGBdsh9 * dL_dRGB.z;
+                        SH_rest_grad[9][2][index] = dRGBdsh10 * dL_dRGB.z;
+                        SH_rest_grad[10][2][index] = dRGBdsh11 * dL_dRGB.z;
+                        SH_rest_grad[11][2][index] = dRGBdsh12 * dL_dRGB.z;
+                        SH_rest_grad[12][2][index] = dRGBdsh13 * dL_dRGB.z;
+                        SH_rest_grad[13][2][index] = dRGBdsh14 * dL_dRGB.z;
+                        SH_rest_grad[14][2][index] = dRGBdsh15 * dL_dRGB.z;
                     }
                 }
 
