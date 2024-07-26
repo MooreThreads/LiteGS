@@ -296,7 +296,7 @@ class GaussianSplattingModel:
         extension=(axis_length.unsqueeze(-2)*eigen_vec).abs().sum(dim=-3)
 
         screen_coord=((ndc[:,:2]+1.0)*0.5*self.cached_image_size_tensor.unsqueeze(-1)-0.5)
-        b_visible=~((ndc[:,0]<-1.3)|(ndc[:,0]>1.3)|(ndc[:,1]>1.3)|(ndc[:,1]>1.3)|(ndc[:,2]>1)|(ndc[:,2]<0))
+        b_visible=~((ndc[:,0]<-1.3)|(ndc[:,0]>1.3)|(ndc[:,1]<-1.3)|(ndc[:,1]>1.3)|(ndc[:,2]>1)|(ndc[:,2]<0))
         left_up=((screen_coord-extension)/tile_size).int()*b_visible
         right_down=((screen_coord+extension)/tile_size).ceil().int()*b_visible
         left_up[:,0].clamp_(0,tilesX)
