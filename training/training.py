@@ -321,9 +321,11 @@ class GaussianTrain:
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
+        batch_size=1
+
         #self.report_psnr(self.iter_start)
         with torch.no_grad():
-            self.model.update_tiles_coord(self.image_size,self.tile_size)
+            self.model.update_tiles_coord(self.image_size,self.tile_size,batch_size)
             view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
             view_project_matrix=view_matrix@(torch.Tensor(self.view_manager.proj_matrix_tensor).cuda())
             camera_center=torch.Tensor(self.view_manager.camera_center_tensor).cuda()
@@ -333,7 +335,6 @@ class GaussianTrain:
 
         progress_bar = tqdm(range(self.iter_start*self.view_manager.view_matrix_tensor.shape[0], epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
         progress_bar.update(0)
-        batch_size=1
         StatisticsHelperInst.reset(self.model._xyz.shape[-2],self.model._xyz.shape[-1])
         torch.cuda.empty_cache()
         

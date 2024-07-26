@@ -241,13 +241,14 @@ class GaussianSplattingModel:
         cov2d[:,:,1,1]+=0.3
         return cov2d.transpose(1,2).transpose(2,3)
 
-    
-    def update_tiles_coord(self,image_size,tile_size):
+    @torch.no_grad()
+    def update_tiles_coord(self,image_size,tile_size,batch_size=1):
         self.cached_image_size=image_size
         self.cached_image_size_tensor=torch.Tensor(image_size).cuda().int()
         self.cached_tile_size=tile_size
         self.cached_tiles_size=(math.ceil(image_size[0]/tile_size),math.ceil(image_size[1]/tile_size))
         self.cached_tiles_map=torch.arange(0,self.cached_tiles_size[0]*self.cached_tiles_size[1]).int().reshape(self.cached_tiles_size[1],self.cached_tiles_size[0]).cuda()+1#tile_id 0 is invalid
+        self.cached_tiles_map=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
         return
     
     @torch.no_grad()
@@ -343,12 +344,12 @@ class GaussianSplattingModel:
     
     def raster(self,ndc_pos:torch.Tensor,inv_cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
     
-        mean2d=(ndc_pos[:,0:2]+1.0)*0.5*self.cached_image_size_tensor.unsqueeze(-1)-0.5
+        #mean2d=(ndc_pos[:,0:2]+1.0)*0.5*self.cached_image_size_tensor.unsqueeze(-1)-0.5
         if StatisticsHelperInst.bStart and ndc_pos.requires_grad:
             def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
                 return tensor[:,:2].norm(dim=1)
             StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,gradient_wrapper)
-        img,transmitance=wrapper.rasterize_2d_gaussian(sorted_pointId,tile_start_index,mean2d,inv_cov2d,color,opacities,tiles,
+        img,transmitance=wrapper.rasterize_2d_gaussian(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacities,tiles,
                                                self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
 
         return img,transmitance
@@ -387,13 +388,12 @@ class GaussianSplattingModel:
         #### binning ###
         tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)#15ms sort1 0.8ms sort2 2ms
         if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_max_min_compact('radii',radii)
+            #StatisticsHelperInst.update_max_min_compact('radii',radii)
             StatisticsHelperInst.update_visible_count(radii>0)
 
         #### raster ###
         if tiles is None:
-            batch_size=view_matrix.shape[0]
-            tiles=self.cached_tiles_map.reshape(1,-1).repeat((batch_size,1))
+            tiles=self.cached_tiles_map
         tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)#5.7ms
 
         

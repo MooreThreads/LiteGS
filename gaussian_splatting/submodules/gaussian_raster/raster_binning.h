@@ -7,7 +7,7 @@ at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_
 std::vector<at::Tensor> rasterize_forward(
     at::Tensor sorted_points,
     at::Tensor start_index,
-    at::Tensor mean2d,// 
+    at::Tensor ndc,// 
     at::Tensor cov2d_inv,
     at::Tensor color,
     at::Tensor opacity,
@@ -22,7 +22,7 @@ std::vector<at::Tensor> rasterize_forward(
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,
-    at::Tensor mean2d,
+    at::Tensor ndc,
     at::Tensor cov2d_inv,
     at::Tensor color,
     at::Tensor opacity,
