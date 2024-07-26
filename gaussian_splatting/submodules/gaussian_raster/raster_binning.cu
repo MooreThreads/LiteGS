@@ -31,18 +31,21 @@ void cuda_error_check(const char* file, const char* function)
  __global__ void duplicate_with_keys_kernel(
     const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> LU,//viewnum,2,pointnum
     const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> RD,//viewnum,2,pointnum
-    const torch::PackedTensorAccessor32<int64_t, 2,torch::RestrictPtrTraits> prefix_sum,//viewnum,pointnum
+    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> prefix_sum,//viewnum,pointnum
+     const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> depth_sorted_pointid,//viewnum,pointnum
     int TileSizeX,
     torch::PackedTensorAccessor32 < int16_t, 2, torch::RestrictPtrTraits> table_tileId,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
     )
 {
     int view_id = blockIdx.y;
-    int point_id = blockIdx.x*blockDim.x + threadIdx.x;
+    
 
-    if (point_id < prefix_sum.size(1))
+    if (blockIdx.x * blockDim.x + threadIdx.x < prefix_sum.size(1))
     {
-        int end = prefix_sum[view_id][point_id];
+        int point_id = depth_sorted_pointid[view_id][blockIdx.x * blockDim.x + threadIdx.x];
+        int end = prefix_sum[view_id][blockIdx.x * blockDim.x + threadIdx.x];
+
         //int end = prefix_sum[view_id][point_id+1];
         int l = LU[view_id][0][point_id];
         int u = LU[view_id][1][point_id];
@@ -67,7 +70,7 @@ void cuda_error_check(const char* file, const char* function)
 
 
 
-std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tensor prefix_sum, int64_t allocate_size, int64_t TilesSizeX)
+std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tensor prefix_sum, at::Tensor depth_sorted_pointid, int64_t allocate_size, int64_t TilesSizeX)
 {
     at::DeviceGuard guard(LU.device());
     int64_t view_num = LU.sizes()[0];
@@ -86,7 +89,8 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
     duplicate_with_keys_kernel<<<Block3d ,1024>>>(
         LU.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-        prefix_sum.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
+        prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
         TilesSizeX,
         table_tileId.packed_accessor32<int16_t, 2, torch::RestrictPtrTraits>(),
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());

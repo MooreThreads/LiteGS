@@ -323,7 +323,7 @@ class GaussianTrain:
 
         batch_size=1
 
-        #self.report_psnr(self.iter_start)
+        self.report_psnr(self.iter_start)
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size,batch_size)
             view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()

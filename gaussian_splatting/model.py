@@ -282,7 +282,7 @@ class GaussianSplattingModel:
     
     @torch.no_grad()
     def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor):
-        #!!!befor duplicateWithKeys 5.7ms!!!!
+        #!!!befor sort 3.7ms!!!!
         tilesX=self.cached_tiles_size[0]
         tilesY=self.cached_tiles_size[1]
         tiles_num=tilesX*tilesY
@@ -313,19 +313,16 @@ class GaussianSplattingModel:
         values,point_ids=ndc[:,2].sort(dim=-1)#0.8ms
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
-            left_up[i]=left_up[i,:,point_ids[i]]
-            right_down[i]=right_down[i,:,point_ids[i]]
 
         #calc the item num of table and the start index in table of each point
-        prefix_sum=tiles_touched.cumsum(1)#start index of points
+        prefix_sum=tiles_touched.cumsum(1,dtype=torch.int32)#start index of points
         total_tiles_num_batch=prefix_sum[:,-1]
         allocate_size=total_tiles_num_batch.max().cpu()
 
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,int(allocate_size),int(tilesX))#2ms
+        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,int(allocate_size),int(tilesX))#2ms
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
-        pointId_table=point_ids.gather(dim=1,index=pointId_table.long()).int()#!!!!2ms!!!
 
         # sort tile_id with torch.sort
         sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
