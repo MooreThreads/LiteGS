@@ -44,12 +44,12 @@ class GaussianSplattingModel:
     def save_to_scene(self,scene:GaussianScene):
         if self.b_split_into_chunk:
             self.__concate_param_chunks()
-        scene.position=self._xyz[...,:3].cpu().numpy()
-        scene.sh_coefficient_dc=self._features_dc.cpu().numpy()
-        scene.sh_coefficient_rest=self._features_rest.cpu().numpy()
-        scene.rotator=self._rotation.cpu().numpy()
-        scene.scale=self._scaling.cpu().numpy()
-        scene.opacity=self._opacity.cpu().numpy()
+        scene.position=self._xyz.permute(1,0)[...,:3].cpu().numpy()
+        scene.sh_coefficient_dc=self._features_dc.permute(2,0,1).cpu().numpy()
+        scene.sh_coefficient_rest=self._features_rest.permute(2,0,1).cpu().numpy()
+        scene.rotator=self._rotation.permute(1,0).cpu().numpy()
+        scene.scale=self._scaling.permute(1,0).cpu().numpy()
+        scene.opacity=self._opacity.permute(1,0).cpu().numpy()
         scene.sh_degree=0
         return
     
@@ -111,6 +111,7 @@ class GaussianSplattingModel:
         self.b_split_into_chunk=True
         return
     
+    @torch.no_grad()
     def __concate_param_chunks(self):
         assert(self.b_split_into_chunk==True)
         new_xyz=self._xyz.reshape(*self._xyz.shape[:-2],-1)
