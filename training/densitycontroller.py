@@ -175,7 +175,7 @@ class DensityControllerOfficial(DensityControllerBase):
         
         prune_mask=self.prune(gaussian_model).reshape(-1)
         __prune_torch_parameter(gaussian_model._xyz,prune_mask,0.0)
-        __prune_torch_parameter(gaussian_model._scaling,prune_mask,0.0)
+        __prune_torch_parameter(gaussian_model._scaling,prune_mask,-5.0)
         __prune_torch_parameter(gaussian_model._rotation,prune_mask,0.0)
         __prune_torch_parameter(gaussian_model._features_dc,prune_mask,0.0)
         __prune_torch_parameter(gaussian_model._features_rest,prune_mask,0.0)
