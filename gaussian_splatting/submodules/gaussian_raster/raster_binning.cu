@@ -1763,7 +1763,7 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
         vec[batch_id][0][0][index] = square_sum_0_recip; vec[batch_id][0][1][index] = vec_y_0 * square_sum_0_recip;
         vec[batch_id][1][0][index] = square_sum_1_recip; vec[batch_id][1][1][index] = vec_y_1 * square_sum_1_recip;
         
-        float det_recip = 1 / det;
+        float det_recip = 1 / max(det,1e-9f);
         inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
         inv[batch_id][1][0][index] = -input_matrix[1][0] * det_recip;
         inv[batch_id][0][0][index] = input_matrix[1][1] * det_recip;
