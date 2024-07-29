@@ -861,7 +861,7 @@ __global__ void jacobian_rayspace_kernel(
         float focalx = camera_focal[batch_id][0];
         float focaly = camera_focal[batch_id][1];
 
-        float reciprocal_tz = 1.0f/max(translated_position[batch_id][2][index],1e-5f);
+        float reciprocal_tz = 1.0f/max(translated_position[batch_id][2][index],1e-2f);//near plane 0.01
         float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
 
         jacobian[batch_id][0][0][index] = focalx * reciprocal_tz;
@@ -1763,7 +1763,7 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
         vec[batch_id][0][0][index] = square_sum_0_recip; vec[batch_id][0][1][index] = vec_y_0 * square_sum_0_recip;
         vec[batch_id][1][0][index] = square_sum_1_recip; vec[batch_id][1][1][index] = vec_y_1 * square_sum_1_recip;
         
-        float det_recip = 1 / max(det,1e-9f);
+        float det_recip = 1 / det;
         inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
         inv[batch_id][1][0][index] = -input_matrix[1][0] * det_recip;
         inv[batch_id][0][0][index] = input_matrix[1][1] * det_recip;

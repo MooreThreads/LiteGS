@@ -361,7 +361,8 @@ class EighAndInverse2x2Func(torch.autograd.Function):
     @staticmethod
     def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
         (inverse_matrix,)=ctx.saved_tensors
-        matrix_grad=torch.ops.RasterBinning.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+        matrix_grad:torch.Tensor=torch.ops.RasterBinning.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+        matrix_grad.nan_to_num_(0)
         return matrix_grad
     
 def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
