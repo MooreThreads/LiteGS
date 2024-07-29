@@ -861,7 +861,7 @@ __global__ void jacobian_rayspace_kernel(
         float focalx = camera_focal[batch_id][0];
         float focaly = camera_focal[batch_id][1];
 
-        float reciprocal_tz = 1.0f/translated_position[batch_id][2][index];
+        float reciprocal_tz = 1.0f/max(translated_position[batch_id][2][index],1e-5f);
         float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
 
         jacobian[batch_id][0][0][index] = focalx * reciprocal_tz;
