@@ -6,9 +6,9 @@ https://github.com/One-sixth/ms_ssim_pytorch/blob/master/ssim.py
 import torch
 import torch.jit
 import torch.nn.functional as F
+from util.platform import platform_torch_compile
 
 
-@torch.jit.script
 def create_window(window_size: int, sigma: float, channel: int):
     '''
     Create 1-D gauss kernel
@@ -27,26 +27,7 @@ def create_window(window_size: int, sigma: float, channel: int):
     return g
 
 
-@torch.jit.script
-def _gaussian_filter(x, window_1d, use_padding: bool):
-    '''
-    Blur input with 1-D kernel
-    :param x: batch of tensors to be blured
-    :param window_1d: 1-D gauss kernel
-    :param use_padding: padding image before conv
-    :return: blured tensors
-    '''
-    C = x.shape[1]
-    padding = 0
-    if use_padding:
-        window_size = window_1d.shape[3]
-        padding = window_size // 2
-    out = F.conv2d(x, window_1d, stride=1, padding=(0, padding), groups=C)
-    out = F.conv2d(out, window_1d.transpose(2, 3), stride=1, padding=(padding, 0), groups=C)
-    return out
-
-
-@torch.jit.script
+@platform_torch_compile
 def ssim(X, Y, window, data_range: float, use_padding: bool=False):
     '''
     Calculate ssim index for X and Y
@@ -57,6 +38,23 @@ def ssim(X, Y, window, data_range: float, use_padding: bool=False):
     :param use_padding: padding image before conv
     :return:
     '''
+
+    def _gaussian_filter(x, window_1d, use_padding: bool):
+        '''
+        Blur input with 1-D kernel
+        :param x: batch of tensors to be blured
+        :param window_1d: 1-D gauss kernel
+        :param use_padding: padding image before conv
+        :return: blured tensors
+        '''
+        C = x.shape[1]
+        padding = 0
+        if use_padding:
+            window_size = window_1d.shape[3]
+            padding = window_size // 2
+        out = F.conv2d(x, window_1d, stride=1, padding=(0, padding), groups=C)
+        out = F.conv2d(out, window_1d.transpose(2, 3), stride=1, padding=(padding, 0), groups=C)
+        return out
 
     K1 = 0.01
     K2 = 0.03
@@ -103,7 +101,6 @@ class SSIM(torch.jit.ScriptModule):
         self.data_range = data_range
         self.use_padding = use_padding
 
-    @torch.jit.script_method
     def forward(self, X, Y):
         r = ssim(X, Y, window=self.window, data_range=self.data_range, use_padding=self.use_padding)
         return r

@@ -1,17 +1,16 @@
-from gaussian_splatting.scene import GaussianScene
-from util import cg_torch
-from gaussian_splatting import wrapper
-
-
 import torch
 import typing
 import numpy as np
 import math
+
+from gaussian_splatting.scene import GaussianScene
+from util import cg_torch
+from gaussian_splatting import wrapper
 from util.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from util.BVH.Object import GSpointBatch
 from util.BVH.PytorchBVH import BVH
 from util.BVH.visualization import VisualizationHelper
-
+from util.platform import platform_torch_compile
 
 class GaussianSplattingModel:
     @torch.no_grad()
@@ -280,16 +279,8 @@ class GaussianSplattingModel:
 
         return positions,scales,rotators,sh_base,sh_rest,opacities
 
-    
-    @torch.no_grad()
-    def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor):
-        #!!!befor sort 3.7ms!!!!
-        tilesX=self.cached_tiles_size[0]
-        tilesY=self.cached_tiles_size[1]
-        tiles_num=tilesX*tilesY
-        tile_size=self.cached_tile_size
-        image_size=self.cached_image_size
-
+    @platform_torch_compile
+    def __craete_2d_AABB(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,tile_size:int,tilesX:int,tilesY:int):
         # Major and minor axes -> AABB extensions
         opacity_clamped=opacity.unsqueeze(0).clamp_min(1/255)
         coefficient=2*((255*opacity_clamped).log())#-2*(1/(255*opacity.squeeze(-1))).log()
@@ -308,10 +299,23 @@ class GaussianSplattingModel:
         #splatting area of each points
         rect_length=right_down-left_up
         tiles_touched=rect_length[:,0]*rect_length[:,1]
-        radius_pixel=(axis_length.max(-2).values*(tiles_touched!=0))
+        b_visible=(tiles_touched!=0)
+
+        return left_up,right_down,tiles_touched,b_visible
+
+    @torch.no_grad()
+    def binning(self,ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor):
+
+        tilesX=self.cached_tiles_size[0]
+        tilesY=self.cached_tiles_size[1]
+        tiles_num=tilesX*tilesY
+        tile_size=self.cached_tile_size
+        image_size=self.cached_image_size
+
+        left_up,right_down,tiles_touched,b_visible=self.__craete_2d_AABB(ndc,eigen_val,eigen_vec,opacity,tile_size,tilesX,tilesY)
 
         #sort by depth
-        values,point_ids=ndc[:,2].sort(dim=-1)#0.8ms
+        values,point_ids=ndc[:,2].sort(dim=-1)
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
 
@@ -321,24 +325,18 @@ class GaussianSplattingModel:
         allocate_size=total_tiles_num_batch.max().cpu()
 
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,int(allocate_size),int(tilesX))#2ms
+        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,int(allocate_size),int(tilesX))
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
         # sort tile_id with torch.sort
         sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
-        sorted_pointId=pointId_table.gather(dim=1,index=indices)#!!!1.2ms!!!
+        sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
-        #debug:check total_tiles_num_batch
-        #cmp_result=(tileId_table!=0).sum(dim=1)==total_tiles_num_batch[:,0]
-        #print(cmp_result)
-        #cmp_result=(sorted_tileId!=0).sum(dim=1)==total_tiles_num_batch[:,0]
-        #print(cmp_result)
-
-        # range 0.3ms
+        # range
         tile_start_index=torch.ops.RasterBinning.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
-        return tile_start_index,sorted_pointId,sorted_tileId,radius_pixel
+        return tile_start_index,sorted_pointId,sorted_tileId,b_visible
     
     def raster(self,ndc_pos:torch.Tensor,inv_cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
     
@@ -365,34 +363,33 @@ class GaussianSplattingModel:
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.set_compact_mask(chunk_visibility)
 
-        positions,scales,rotators,sh_base,sh_rest,opacities=self.sample_by_visibility(chunk_visibility)#forward 1.5ms(compact 0.7ms)
+        positions,scales,rotators,sh_base,sh_rest,opacities=self.sample_by_visibility(chunk_visibility)
         if prebackward_func is not None:
             prebackward_func(positions,scales,rotators,sh_base,sh_rest,opacities)
 
         ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
         #cov3d,transform_matrix=self.transform_to_cov3d(scales,rotators)
         #cov2d=self.proj_cov3d_to_cov2d(cov3d,positions,view_matrix,camera_focal)
-        cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)#1.46ms
-        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)#0.5ms
+        cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)
+        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)
         
         ### mean of 2d-gaussian ###
-        ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)#1ms
+        ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)
 
         ### color ###
         dirs=positions[:3]-camera_center_batch.unsqueeze(-1)
-        dirs=torch.nn.functional.normalize(dirs,dim=-2)#dir 0.5ms
-        colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)#degree0: 0.1ms
+        dirs=torch.nn.functional.normalize(dirs,dim=-2)
+        colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)
         
         #### binning ###
-        tile_start_index,sorted_pointId,sorted_tileId,radii=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)#15ms sort1 0.8ms sort2 2ms
+        tile_start_index,sorted_pointId,sorted_tileId,b_visible=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)
         if StatisticsHelperInst.bStart:
-            #StatisticsHelperInst.update_max_min_compact('radii',radii)
-            StatisticsHelperInst.update_visible_count(radii>0)
+            StatisticsHelperInst.update_visible_count(b_visible)
 
         #### raster ###
         if tiles is None:
             tiles=self.cached_tiles_map
-        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)#5.7ms
+        tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
 
         
         return tile_img,tile_transmitance.unsqueeze(1)

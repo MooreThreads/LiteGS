@@ -1,14 +1,10 @@
 import torch
 import typing
 import numpy as np
-import platform
+from util.platform import load_dynamic_lib
 from util import spherical_harmonics
 
-plat = platform.system().lower()
-if plat == 'windows':
-    torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
-elif plat == 'linux':
-    torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/libGaussianRaster.so")
+load_dynamic_lib()
 
 ##
 ## Create Transform Matrix from scale and quaternion

@@ -32,7 +32,7 @@ gaussian_model.update_tiles_coord(image_size,8)
 (model_params,op_state_dict, first_iter,actived_sh_degree) = torch.load('output/sh0_4M.pth')
 gaussian_model.load_params(model_params)
 gaussian_model.actived_sh_degree=actived_sh_degree
-gaussian_model.rebuild_AABB()
+gaussian_model.rebuild_BVH(gaussian_model.chunk_size)
 l = [
             {'params': [gaussian_model._xyz], 'lr': args.position_lr_init * 0.1, "name": "xyz"},
             {'params': [gaussian_model._features_dc], 'lr': args.feature_lr, "name": "f_dc"},
