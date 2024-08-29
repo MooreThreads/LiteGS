@@ -1754,14 +1754,22 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
         val[batch_id][0][index] = mid - temp;
         val[batch_id][1][index] = mid + temp;
 
-        float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / (input_matrix[0][1]+1e-9);
-        float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / (input_matrix[0][1]+1e-9);
+        if (input_matrix[0][1] != 0)
+        {
+            float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / input_matrix[0][1] ;
+            float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / input_matrix[0][1] ;
 
-        float square_sum_0_recip = 1/sqrt(1 + vec_y_0 * vec_y_0);
-        float square_sum_1_recip = 1/sqrt(1 + vec_y_1 * vec_y_1);
+            float square_sum_0_recip = 1 / sqrt(1 + vec_y_0 * vec_y_0);
+            float square_sum_1_recip = 1 / sqrt(1 + vec_y_1 * vec_y_1);
 
-        vec[batch_id][0][0][index] = square_sum_0_recip; vec[batch_id][0][1][index] = vec_y_0 * square_sum_0_recip;
-        vec[batch_id][1][0][index] = square_sum_1_recip; vec[batch_id][1][1][index] = vec_y_1 * square_sum_1_recip;
+            vec[batch_id][0][0][index] = square_sum_0_recip; vec[batch_id][0][1][index] = vec_y_0 * square_sum_0_recip;
+            vec[batch_id][1][0][index] = square_sum_1_recip; vec[batch_id][1][1][index] = vec_y_1 * square_sum_1_recip;
+        }
+        else
+        {
+            vec[batch_id][0][0][index] = 0; vec[batch_id][0][1][index] = 1;
+            vec[batch_id][1][0][index] = 1; vec[batch_id][1][1][index] = 0;
+        }
         
         float det_recip = 1 / det;
         inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
