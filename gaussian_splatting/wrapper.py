@@ -369,7 +369,7 @@ def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
             mid=0.5*(cov2d[:,0,0]+cov2d[:,1,1])
             temp=(mid*mid-det).clamp_min(1e-9).sqrt()
             eigen_val=torch.cat(((mid-temp).unsqueeze(1),(mid+temp).unsqueeze(1)),dim=1)
-            eigen_vec_y=((eigen_val-cov2d[:,0,0].unsqueeze(1))/cov2d[:,0,1].unsqueeze(1))
+            eigen_vec_y=((eigen_val-cov2d[:,0,0].unsqueeze(1))/(cov2d[:,0,1].unsqueeze(1)+1e-9))
             eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-2),eigen_vec_y.unsqueeze(-2)),dim=-2)
             eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-2)
         reci_det=1/(det+1e-7)

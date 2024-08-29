@@ -17,13 +17,16 @@ class GaussianSplattingModel:
     def __init__(self,scene:GaussianScene,chunk_size=1024):
         assert(chunk_size>0)
         self.actived_sh_degree=0
-        self.max_sh_degree=scene.sh_degree
         self.chunk_size=chunk_size
         self.chunk_AABB_origin=None
         self.chunk_AABB_extend=None
         self.b_split_into_chunk=False
         
-        self.load_from_scene(scene)
+        if scene is not None:
+            self.load_from_scene(scene)
+            self.max_sh_degree=scene.sh_degree
+        else:
+            self.max_sh_degree=0
         return
     
     @torch.no_grad()

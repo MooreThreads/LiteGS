@@ -1754,8 +1754,8 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
         val[batch_id][0][index] = mid - temp;
         val[batch_id][1][index] = mid + temp;
 
-        float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / input_matrix[0][1];
-        float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / input_matrix[0][1];
+        float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / (input_matrix[0][1]+1e-9);
+        float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / (input_matrix[0][1]+1e-9);
 
         float square_sum_0_recip = 1/sqrt(1 + vec_y_0 * vec_y_0);
         float square_sum_1_recip = 1/sqrt(1 + vec_y_1 * vec_y_1);
