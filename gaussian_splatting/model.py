@@ -149,14 +149,21 @@ class GaussianSplattingModel:
 
         if chunks_num>=1:
             scale=self._scaling[:,-1-chunks_num:-1,:].reshape(3,-1).exp()
-            roator=torch.nn.functional.normalize(self._rotation[:,-1-chunks_num:-1,:],dim=0).reshape(4,-1)
-            cov3d,_=self.transform_to_cov3d(scale,roator)
-            cov3d=cov3d.reshape(3,3,-1,self.chunk_size).permute(2,3,0,1)#[chunks_num,chunk_size,3,3]
+            rotator=torch.nn.functional.normalize(self._rotation[:,-1-chunks_num:-1,:],dim=0).reshape(4,-1)
+            # cov3d,_=self.transform_to_cov3d(scale,rotator)
+            # cov3d=cov3d.reshape(3,3,-1,self.chunk_size).permute(2,3,0,1)#[chunks_num,chunk_size,3,3]
+            # eigen_val,eigen_vec=torch.linalg.eigh(cov3d)
+            # eigen_val=eigen_val.abs()
+            # coefficient=2*math.log(255)
+            # extend_axis=(coefficient*eigen_val.unsqueeze(-2)).sqrt()*eigen_vec
+            # point_extend=extend_axis.abs().sum(dim=-1)
 
-            eigen_val,eigen_vec=torch.linalg.eigh(cov3d)
-            eigen_val=eigen_val.abs()
+            transform_matrix=wrapper.create_transform_matrix(scale,rotator)
             coefficient=2*math.log(255)
-            point_extend=((coefficient*eigen_val.unsqueeze(-1)).sqrt()*eigen_vec).abs().sum(dim=-2)
+            extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
+            point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
+
+
             position=(self._xyz[:3,-1-chunks_num:-1,:]).permute(1,2,0)
             max_xyz=(position+point_extend).max(dim=-2).values
             min_xyz=(position-point_extend).min(dim=-2).values
@@ -170,22 +177,28 @@ class GaussianSplattingModel:
     @torch.no_grad()
     def rebuild_AABB(self):
         scale=self._scaling.exp()
-        roator=torch.nn.functional.normalize(self._rotation,dim=0)
-        cov3d,_=self.transform_to_cov3d(scale.reshape(3,-1),roator.reshape(4,-1))
-        cov3d=cov3d.reshape(3,3,-1,self.chunk_size).permute(2,3,0,1)
+        rotator=torch.nn.functional.normalize(self._rotation,dim=0)
 
-        eigen_val_list=[]
-        eigen_vec_list=[]
-        for start_inedx in range(0,cov3d.shape[0],1024):
-            eigen_val,eigen_vec=torch.linalg.eigh(cov3d[start_inedx:start_inedx+1024])
-            eigen_val_list.append(eigen_val)
-            eigen_vec_list.append(eigen_vec)
-        eigen_val=torch.cat(eigen_val_list)
-        eigen_vec=torch.cat(eigen_vec_list)
+        # cov3d,_=self.transform_to_cov3d(scale.reshape(3,-1),rotator.reshape(4,-1))
+        # cov3d=cov3d.reshape(3,3,-1,self.chunk_size).permute(2,3,0,1)
+        # eigen_val_list=[]
+        # eigen_vec_list=[]
+        # for start_inedx in range(0,cov3d.shape[0],1024):
+        #     eigen_val,eigen_vec=torch.linalg.eigh(cov3d[start_inedx:start_inedx+1024])
+        #     eigen_val_list.append(eigen_val)
+        #     eigen_vec_list.append(eigen_vec)
+        # eigen_val=torch.cat(eigen_val_list)
+        # eigen_vec=torch.cat(eigen_vec_list)
+        # eigen_val=eigen_val.abs()
+        # coefficient=2*math.log(255)
+        # extend_axis=(coefficient*eigen_val.unsqueeze(-2)).sqrt()*eigen_vec
+        # point_extend=extend_axis.abs().sum(dim=-1)
 
-        eigen_val=eigen_val.abs()
+        transform_matrix=wrapper.create_transform_matrix(scale,rotator)
         coefficient=2*math.log(255)
-        point_extend=((coefficient*eigen_val.unsqueeze(-1)).sqrt()*eigen_vec).abs().sum(dim=-2)
+        extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
+        point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
+
         position=self._xyz.permute(1,2,0)[...,:3]
         max_xyz=(position+point_extend).max(dim=-2).values
         min_xyz=(position-point_extend).min(dim=-2).values
