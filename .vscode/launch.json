@@ -9,13 +9,14 @@
             "type": "debugpy",
             "request": "launch",
             "program": "./train.py",
-            "args":["--sh_degree","2","-s","dataset/garden","-i","images","-m","output/garden","--eval"],
+            "args":["--sh_degree","3","-s","/jfs/shengyi.chen/HT/Data/mipnerf360/garden/A100_colmap-default_gaussian-splatting-default","-i","images","-m","output/garden","--eval"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",
-            "preLaunchTask":"BuildAndInstall",
+            //"preLaunchTask":"BuildAndInstall",
             "justMyCode": false,
             "env": {
-                "LD_LIBRARY_PATH": "${env:LD_LIBRARY_PATH};./diff_gaussian_rasterization;./simple_knn" 
+                "LD_LIBRARY_PATH": "${env:LD_LIBRARY_PATH};./diff_gaussian_rasterization;./simple_knn",
+                "CUDA_VISIBLE_DEVICES":"4"
             },
         },
         {

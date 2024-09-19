@@ -8,7 +8,7 @@
             "type":"shell",
             "command":"python",
             "args":["setup.py","build_ext","--inplace","-j8"],
-            "options":{"cwd":"./gaussian_splatting/submodules/simple-knn"},
+            "options":{"cwd":"${workspaceFolder}/gaussian_splatting/submodules/simple-knn"},
             "group": "build"
         },
         {
@@ -16,7 +16,7 @@
             "type":"shell",
             "command":"python",
             "args":["setup.py","develop"],
-            "options":{"cwd":"./gaussian_splatting/submodules/simple-knn"},
+            "options":{"cwd":"${workspaceFolder}/gaussian_splatting/submodules/simple-knn"},
             "group": "none",
             "dependsOn":["BuildSubmodel:simple-knn"]
         },

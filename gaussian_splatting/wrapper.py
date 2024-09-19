@@ -21,38 +21,38 @@ class CreateTransformMatrixFunc(torch.autograd.Function):
         (quaternion,scale)=ctx.saved_tensors
         grad_quaternion,grad_scale=torch.ops.RasterBinning.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
         return grad_quaternion,grad_scale
-    
+
+def create_transform_matrix_internel_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+    '''faster'''
+    transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
+    return transform_matrix
+
+def create_transform_matrix_internel_v1(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+    rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
+
+    r=rotator_vec[0]
+    x=rotator_vec[1]
+    y=rotator_vec[2]
+    z=rotator_vec[3]
+
+
+    rotation_matrix[0,0]=1 - 2 * (y * y + z * z)
+    rotation_matrix[0,1]=2 * (x * y + r * z)
+    rotation_matrix[0,2]=2 * (x * z - r * y)
+
+    rotation_matrix[1,0]=2 * (x * y - r * z)
+    rotation_matrix[1,1]=1 - 2 * (x * x + z * z)
+    rotation_matrix[1,2]=2 * (y * z + r * x)
+
+    rotation_matrix[2,0]=2 * (x * z + r * y)
+    rotation_matrix[2,1]=2 * (y * z - r * x)
+    rotation_matrix[2,2]=1 - 2 * (x * x + y * y)
+
+    transform_matrix=rotation_matrix*scaling_vec.unsqueeze(1)
+    return transform_matrix
+
 def create_transform_matrix(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
 
-    def create_transform_matrix_internel_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-        '''faster'''
-        transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
-        return transform_matrix
-
-    def create_transform_matrix_internel_v1(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
-
-        r=rotator_vec[0]
-        x=rotator_vec[1]
-        y=rotator_vec[2]
-        z=rotator_vec[3]
-
-
-        rotation_matrix[0,0]=1 - 2 * (y * y + z * z)
-        rotation_matrix[0,1]=2 * (x * y + r * z)
-        rotation_matrix[0,2]=2 * (x * z - r * y)
-
-        rotation_matrix[1,0]=2 * (x * y - r * z)
-        rotation_matrix[1,1]=1 - 2 * (x * x + z * z)
-        rotation_matrix[1,2]=2 * (y * z + r * x)
-
-        rotation_matrix[2,0]=2 * (x * z + r * y)
-        rotation_matrix[2,1]=2 * (y * z - r * x)
-        rotation_matrix[2,2]=1 - 2 * (x * x + y * y)
-
-        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(1)
-        return transform_matrix
-    
     return create_transform_matrix_internel_v2(scaling_vec,rotator_vec)
 
 

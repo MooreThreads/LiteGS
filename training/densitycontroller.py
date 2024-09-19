@@ -5,6 +5,7 @@ import numpy as np
 from util.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from util.cg_torch import quaternion_to_rotation_matrix
 from training.arguments import OptimizationParams
+from util.platform import platform_torch_compile
 
 class DensityControllerBase:
     def __init__(self) -> None:

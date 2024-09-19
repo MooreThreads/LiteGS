@@ -9,7 +9,6 @@ from gaussian_splatting import wrapper
 from util.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from util.BVH.Object import GSpointBatch
 from util.BVH.PytorchBVH import BVH
-from util.BVH.visualization import VisualizationHelper
 from util.platform import platform_torch_compile
 
 class GaussianSplattingModel:
@@ -158,7 +157,7 @@ class GaussianSplattingModel:
             # extend_axis=(coefficient*eigen_val.unsqueeze(-2)).sqrt()*eigen_vec
             # point_extend=extend_axis.abs().sum(dim=-1)
 
-            transform_matrix=wrapper.create_transform_matrix(scale,rotator)
+            transform_matrix=wrapper.create_transform_matrix_internel_v1(scale,rotator)
             coefficient=2*math.log(255)
             extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
             point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
