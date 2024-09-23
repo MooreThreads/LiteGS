@@ -71,7 +71,7 @@ class OptimizationParams(ParamGroup):
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
         self.densification_interval = 1
-        self.opacity_reset_interval = 20
+        self.opacity_reset_interval = 10
         self.densify_from_iter = 5
         self.densify_until_iter = 121
         self.densify_grad_threshold = 0.00015

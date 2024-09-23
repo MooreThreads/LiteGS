@@ -270,7 +270,10 @@ class DensityControllerOfficial(DensityControllerBase):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         actived_opacities=gaussian_model._opacity.sigmoid()
-        gaussian_model._opacity.data=inverse_sigmoid(actived_opacities.clamp_max(0.005))
+        decay_rate=0.5
+        decay_mask=(actived_opacities>1/(255*decay_rate-1))
+        decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
+        gaussian_model._opacity.data=inverse_sigmoid(actived_opacities*decay_rate)#(actived_opacities.clamp_max(0.005))
         return
 
     @torch.no_grad()
