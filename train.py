@@ -24,7 +24,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
-    args.save_epochs.append(args.epoch)
     lp:ModelParams=lp.extract(args)
     op:OptimizationParams=op.extract(args)
     pp:PipelineParams=pp.extract(args)

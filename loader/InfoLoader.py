@@ -298,7 +298,7 @@ def load(path:str,image_dir:str,resolution:int)->tuple[dict[int,PinHoleCameraInf
                 assert(H==imgInfo.image.size[0])
                 assert(W==imgInfo.image.size[1])
             ImageInfoList.append(imgInfo)
+    ImageInfoListSorted = sorted(ImageInfoList.copy(), key = lambda x : x.name)
+    NerfNormTrans,NerfNormRadius=getNerfppNorm(ImageInfoListSorted)
 
-    NerfNormTrans,NerfNormRadius=getNerfppNorm(ImageInfoList)
-
-    return (CameraInfoDict,ImageInfoList,NerfNormTrans,NerfNormRadius)
+    return (CameraInfoDict,ImageInfoListSorted,NerfNormTrans,NerfNormRadius)
