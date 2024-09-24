@@ -1,0 +1,177 @@
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  54715
+                                                                                                                                            
+[EPOCH 139] Trainingset Evaluating: PSNR 25.84558868408203
+[EPOCH 139] Testingset Evaluating: PSNR 25.35909080505371                                                                                   
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30082/30082 [19:46<00:00, 25.35it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  40233
+                                                                                                                                            
+[EPOCH 139] Trainingset Evaluating: PSNR 24.015108108520508
+[EPOCH 139] Testingset Evaluating: PSNR 21.95954132080078                                                                                   
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30049/30049 [15:41<00:00, 31.92it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  143314
+                                                                                                                                            
+[EPOCH 139] Trainingset Evaluating: PSNR 29.81308937072754
+[EPOCH 139] Testingset Evaluating: PSNR 27.580175399780273                                                                                  
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30107/30107 [19:34<00:00, 25.63it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  31508
+                                                                                                                                            
+[EPOCH 139] Trainingset Evaluating: PSNR 29.471614837646484
+[EPOCH 139] Testingset Evaluating: PSNR 27.15481948852539                                                                                   
+                                                                                                                                            
+[EPOCH 199] Trainingset Evaluating: PSNR 30.848308563232422
+[EPOCH 199] Testingset Evaluating: PSNR 27.264671325683594                                                                                  
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30084/30084 [19:19<00:00, 25.94it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  53541
+                                                                                                                                            
+[EPOCH 139] Trainingset Evaluating: PSNR 23.970733642578125
+[EPOCH 139] Testingset Evaluating: PSNR 22.884408950805664                                                                                  
+                                                                                                                                            
+[EPOCH 199] Trainingset Evaluating: PSNR 24.68691635131836
+[EPOCH 199] Testingset Evaluating: PSNR 22.86160659790039                                                                                   
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30012/30012 [17:36<00:00, 28.42it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  130351
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30192/30192 [11:26<00:00, 43.98it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  155849
+                                                                                                                                            
+[EPOCH 139] Trainingset Evaluating: PSNR 30.615158081054688
+[EPOCH 139] Testingset Evaluating: PSNR 29.306779861450195                                                                                  
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30030/30030 [11:50<00:00, 42.24it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  235875
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30012/30012 [12:44<00:00, 39.25it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  207876
+Training progress: 100%|██████████████████████████████████████████████████████████████████████████████| 30090/30090 [12:17<00:00, 40.80it/s]
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  54715
+  Scene:./output/bicycle training set
+  SSIM :    0.8391941
+  PSNR :   26.2136879
+  LPIPS:    0.1852380
+
+  Scene:./output/bicycle testing set
+  SSIM :    0.7641165
+  PSNR :   25.4546356
+  LPIPS:    0.2184244
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  40233
+  Scene:./output/flowers training set
+  SSIM :    0.7515934
+  PSNR :   24.3844833
+  LPIPS:    0.2412286
+
+  Scene:./output/flowers testing set
+  SSIM :    0.6121358
+  PSNR :   22.0382786
+  LPIPS:    0.3352436
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  143314
+  Scene:./output/garden training set
+  SSIM :    0.9054171
+  PSNR :   30.0769005
+  LPIPS:    0.0898743
+
+  Scene:./output/garden testing set
+  SSIM :    0.8584897
+  PSNR :   27.6221085
+  LPIPS:    0.1123831
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  31508
+  Scene:./output/stump training set
+  SSIM :    0.9072275
+  PSNR :   31.4131718
+  LPIPS:    0.1513203
+
+  Scene:./output/stump testing set
+  SSIM :    0.7872555
+  PSNR :   27.1747532
+  LPIPS:    0.2186726
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  53541
+  Scene:./output/treehill training set
+  SSIM :    0.7966073
+  PSNR :   24.8763905
+  LPIPS:    0.2318794
+
+  Scene:./output/treehill testing set
+  SSIM :    0.6378496
+  PSNR :   22.7685471
+  LPIPS:    0.3180410
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  130351
+  Scene:./output/room training set
+  SSIM :    0.9353506
+  PSNR :   35.0217171
+  LPIPS:    0.1702003
+
+  Scene:./output/room testing set
+  SSIM :    0.9194311
+  PSNR :   32.1876373
+  LPIPS:    0.1865780
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  155849
+  Scene:./output/counter training set
+  SSIM :    0.9215525
+  PSNR :   30.6415348
+  LPIPS:    0.1621890
+
+  Scene:./output/counter testing set
+  SSIM :    0.9065469
+  PSNR :   29.3078346
+  LPIPS:    0.1789990
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  235875
+  Scene:./output/kitchen training set
+  SSIM :    0.9362037
+  PSNR :   33.7101746
+  LPIPS:    0.1011061
+
+  Scene:./output/kitchen testing set
+  SSIM :    0.9207002
+  PSNR :   32.1004295
+  LPIPS:    0.1137311
+
+[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.
+ If this is not desired, please explicitly specify '--resolution/-r' as 1
+Number of points at initialisation :  207876
+  Scene:./output/bonsai training set
+  SSIM :    0.9471725
+  PSNR :   34.5082321
+  LPIPS:    0.1615980
+
+  Scene:./output/bonsai testing set
+  SSIM :    0.9402410
+  PSNR :   33.2254181
+  LPIPS:    0.1667845
+

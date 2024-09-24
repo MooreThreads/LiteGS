@@ -13,9 +13,9 @@ from util.platform import platform_torch_compile
 
 class GaussianSplattingModel:
     @torch.no_grad()
-    def __init__(self,scene:GaussianScene,chunk_size=1024):
+    def __init__(self,scene:GaussianScene,actived_sh_degree:int,chunk_size=1024):
         assert(chunk_size>0)
-        self.actived_sh_degree=0
+        self.actived_sh_degree=actived_sh_degree
         self.chunk_size=chunk_size
         self.chunk_AABB_origin=None
         self.chunk_AABB_extend=None
@@ -23,7 +23,6 @@ class GaussianSplattingModel:
         
         if scene is not None:
             self.load_from_scene(scene)
-            self.max_sh_degree=scene.sh_degree
         else:
             self.max_sh_degree=0
         return
@@ -36,8 +35,9 @@ class GaussianSplattingModel:
         self._rotation = torch.nn.Parameter(torch.Tensor(scene.rotator).transpose(0,1).cuda())#torch.nn.functional.normalize
         self._scaling = torch.nn.Parameter(torch.Tensor(scene.scale).transpose(0,1).cuda())#.exp 
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).transpose(0,1).cuda())#.sigmoid
-
+        self.max_sh_degree=scene.sh_degree
         self.__split_into_chunk()
+        assert(self.actived_sh_degree<=self.max_sh_degree)#mismatch
         return
     
 
@@ -46,12 +46,14 @@ class GaussianSplattingModel:
         if self.b_split_into_chunk:
             self.__concate_param_chunks()
         scene.position=self._xyz.permute(1,0)[...,:3].cpu().numpy()
-        scene.sh_coefficient_dc=self._features_dc.permute(2,0,1).cpu().numpy()
-        scene.sh_coefficient_rest=self._features_rest.permute(2,0,1).cpu().numpy()
+        scene.sh_coefficient_dc=self._features_dc.permute(2,1,0).cpu().numpy()
+        scene.sh_coefficient_rest=self._features_rest.permute(2,1,0).cpu().numpy()
         scene.rotator=self._rotation.permute(1,0).cpu().numpy()
         scene.scale=self._scaling.permute(1,0).cpu().numpy()
         scene.opacity=self._opacity.permute(1,0).cpu().numpy()
-        scene.sh_degree=0
+        scene.sh_degree=self.max_sh_degree
+        if self.b_split_into_chunk==False:#recover
+            self.__split_into_chunk()
         return
     
     @torch.no_grad()
@@ -149,19 +151,10 @@ class GaussianSplattingModel:
         if chunks_num>=1:
             scale=self._scaling[:,-1-chunks_num:-1,:].reshape(3,-1).exp()
             rotator=torch.nn.functional.normalize(self._rotation[:,-1-chunks_num:-1,:],dim=0).reshape(4,-1)
-            # cov3d,_=self.transform_to_cov3d(scale,rotator)
-            # cov3d=cov3d.reshape(3,3,-1,self.chunk_size).permute(2,3,0,1)#[chunks_num,chunk_size,3,3]
-            # eigen_val,eigen_vec=torch.linalg.eigh(cov3d)
-            # eigen_val=eigen_val.abs()
-            # coefficient=2*math.log(255)
-            # extend_axis=(coefficient*eigen_val.unsqueeze(-2)).sqrt()*eigen_vec
-            # point_extend=extend_axis.abs().sum(dim=-1)
-
             transform_matrix=wrapper.create_transform_matrix_internel_v1(scale,rotator)
             coefficient=2*math.log(255)
             extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
             point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
-
 
             position=(self._xyz[:3,-1-chunks_num:-1,:]).permute(1,2,0)
             max_xyz=(position+point_extend).max(dim=-2).values
@@ -175,24 +168,8 @@ class GaussianSplattingModel:
 
     @torch.no_grad()
     def rebuild_AABB(self):
-        scale=self._scaling.exp()
-        rotator=torch.nn.functional.normalize(self._rotation,dim=0)
-
-        # cov3d,_=self.transform_to_cov3d(scale.reshape(3,-1),rotator.reshape(4,-1))
-        # cov3d=cov3d.reshape(3,3,-1,self.chunk_size).permute(2,3,0,1)
-        # eigen_val_list=[]
-        # eigen_vec_list=[]
-        # for start_inedx in range(0,cov3d.shape[0],1024):
-        #     eigen_val,eigen_vec=torch.linalg.eigh(cov3d[start_inedx:start_inedx+1024])
-        #     eigen_val_list.append(eigen_val)
-        #     eigen_vec_list.append(eigen_vec)
-        # eigen_val=torch.cat(eigen_val_list)
-        # eigen_vec=torch.cat(eigen_vec_list)
-        # eigen_val=eigen_val.abs()
-        # coefficient=2*math.log(255)
-        # extend_axis=(coefficient*eigen_val.unsqueeze(-2)).sqrt()*eigen_vec
-        # point_extend=extend_axis.abs().sum(dim=-1)
-
+        scale=self._scaling.exp().reshape(3,-1)
+        rotator=torch.nn.functional.normalize(self._rotation,dim=0).reshape(4,-1)
         transform_matrix=wrapper.create_transform_matrix(scale,rotator)
         coefficient=2*math.log(255)
         extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
@@ -284,7 +261,7 @@ class GaussianSplattingModel:
 
         return visible_point,visible_points_num
     
-    def sample_by_visibility(self,chunk_visibility):
+    def cluster_compact(self,chunk_visibility):
 
         positions,scales,rotators,sh_base,sh_rest,opacities,_=wrapper.compact_visible_params(chunk_visibility,self._xyz,self._scaling,self._rotation,self._features_dc,self._features_rest,self._opacity)
 
@@ -355,7 +332,6 @@ class GaussianSplattingModel:
     
     def raster(self,ndc_pos:torch.Tensor,inv_cov2d:torch.Tensor,color:torch.Tensor,opacities:torch.Tensor,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor,tiles:torch.Tensor):
     
-        #mean2d=(ndc_pos[:,0:2]+1.0)*0.5*self.cached_image_size_tensor.unsqueeze(-1)-0.5
         if StatisticsHelperInst.bStart and ndc_pos.requires_grad:
             def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
                 return tensor[:,:2].norm(dim=1)
@@ -370,7 +346,7 @@ class GaussianSplattingModel:
         
         assert(self.b_split_into_chunk)
 
-        #compute visibility
+        #cluster culling
         with torch.no_grad():
             frustumplane=cg_torch.viewproj_to_frustumplane(view_project_matrix)
             chunk_visibility=cg_torch.frustum_culling_aabb(frustumplane,self.chunk_AABB_origin,self.chunk_AABB_extend)
@@ -378,33 +354,29 @@ class GaussianSplattingModel:
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.set_compact_mask(chunk_visibility)
 
-        positions,scales,rotators,sh_base,sh_rest,opacities=self.sample_by_visibility(chunk_visibility)
+        #compact
+        positions,scales,rotators,sh_base,sh_rest,opacities=self.cluster_compact(chunk_visibility)
         if prebackward_func is not None:
             prebackward_func(positions,scales,rotators,sh_base,sh_rest,opacities)
 
-        ### (scale,rot)->3d covariance matrix->2d covariance matrix ###
-        #cov3d,transform_matrix=self.transform_to_cov3d(scales,rotators)
-        #cov2d=self.proj_cov3d_to_cov2d(cov3d,positions,view_matrix,camera_focal)
+        #gs projection
         cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)
         eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)
-        
-        ### mean of 2d-gaussian ###
         ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)
 
-        ### color ###
+        #color
         dirs=positions[:3]-camera_center_batch.unsqueeze(-1)
         dirs=torch.nn.functional.normalize(dirs,dim=-2)
         colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)
         
-        #### binning ###
+        #visibility table
         tile_start_index,sorted_pointId,sorted_tileId,b_visible=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_visible_count(b_visible)
 
-        #### raster ###
+        #rasterization
         if tiles is None:
             tiles=self.cached_tiles_map
         tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
 
-        
         return tile_img,tile_transmitance.unsqueeze(1)

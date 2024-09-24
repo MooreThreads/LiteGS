@@ -3,11 +3,9 @@ from training.arguments import OptimizationParams,ModelParams
 from gaussian_splatting.scene import GaussianScene
 from loader.InfoLoader import CameraInfo,ImageInfo,PinHoleCameraInfo
 import training.loss.ssim
-from util.camera import View
-from training import cache
+from training.view_manager import ViewManager
 import training.loss
-from gaussian_splatting.division import GaussianSceneDivision
-from training.densitycontroller import DensityControllerOurs,DensityControllerOfficial
+from training.densitycontroller import DensityControllerOfficial
 from util.statistic_helper import StatisticsHelperInst
 from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
 
@@ -21,65 +19,12 @@ from matplotlib import pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 import os
 import torchvision
-import time
 
-class ViewManager:
-    '''
-    cache visibility of points in views
-    cache tiles info for views
-    '''
-    def __init__(self,image_list:typing.List[ImageInfo],camera_dict:typing.Dict[int,PinHoleCameraInfo]):
-        self.view_list:typing.List[View]=[]
-        self.view_matrix_tensor=None
-        self.proj_matrix_tensor=None
-        self.camera_center_tensor=None
 
-        view_matrix_list=[]
-        proj_matrix_list=[]
-        camera_center_list=[]
-        camera_focal_list=[]
-        gt_list=[]
-        for img in image_list:
-            camera_info=camera_dict[img.camera_id]
-            cur_view=View(img.viewtransform_position,img.viewtransform_rotation,camera_info.fovX,camera_info.fovY,np.array(img.image),img.name)
-            self.view_list.append(cur_view)
-            view_matrix_list.append(np.expand_dims(cur_view.world2view_matrix,0))
-            proj_matrix_list.append(np.expand_dims(cur_view.project_matrix,0))
-            camera_center_list.append(np.expand_dims(cur_view.camera_center,0))
-            camera_focal_list.append(np.expand_dims((cur_view.focal_x,cur_view.focal_y),0))
-            gt_list.append(np.expand_dims(cur_view.image,0))
-        self.view_matrix_tensor=np.concatenate(view_matrix_list)
-        self.proj_matrix_tensor=np.concatenate(proj_matrix_list)
-        self.camera_center_tensor=np.concatenate(camera_center_list)
-        self.camera_focal_tensor=np.concatenate(camera_focal_list)
-        self.view_gt_tensor=np.concatenate(gt_list)/255.0
-        self.view_gt_tensor=self.view_gt_tensor.transpose(0,3,1,2)
-
-        self.cache:typing.Dict[int,cache.CachedData]={}
-        self.cached_view_index=None
-        self.data_generation=0
-        return
-    
-    def update_cached_visibility_info(self,batch_index:int,visible_points_for_views:torch.Tensor,visible_points_num:torch.Tensor):
-        if batch_index not in self.cache.keys():
-            self.cache[batch_index]=cache.CachedData(batch_index,self.data_generation+1)
-        self.cache[batch_index].visible_info=cache.VisibleInfo(batch_index,visible_points_for_views,visible_points_num,self.data_generation+1)
-        return
-    
-    def update_cached_binning_info(self,batch_index:int,tile_start_index:torch.Tensor,sorted_pointId:torch.Tensor,sorted_tileId:torch.Tensor):
-        if batch_index not in self.cache.keys():
-            self.cache[batch_index]=cache.CachedData(batch_index,self.data_generation+1)
-        self.cache[batch_index].binning_info=cache.BinningInfo(batch_index,tile_start_index,sorted_pointId,sorted_tileId,self.data_generation+1)
-        return
-    
-    def update_cache_data_generation(self,cur_view_index:torch.Tensor):
-        self.cached_view_index=cur_view_index
-        self.data_generation+=1
-        return
     
     
 
-class GaussianTrain:
+class GaussianTrainer:
 
     def __init__(self,gaussian_model:GaussianSplattingModel,lp:ModelParams,op:OptimizationParams,NerfNormRadius:int,image_list:list[ImageInfo],camera_dict:dict[int,PinHoleCameraInfo]):
         self.spatial_lr_scale=NerfNormRadius
@@ -176,7 +121,7 @@ class GaussianTrain:
                                                     lr_delay_mult=args.position_lr_delay_mult,
                                                     max_steps=args.position_lr_max_steps)
         
-        self.tb_writer = SummaryWriter(self.output_path)
+        #self.tb_writer = SummaryWriter(self.output_path)
         return
     
     def __update_learning_rate(self, iteration):
@@ -201,8 +146,6 @@ class GaussianTrain:
         
         with torch.no_grad():
             total_views_num=view_matrix.shape[0]
-            #iter_batch_num=1024
-            #tiles=torch.randint(1,self.model.cached_tiles_size[0]*self.model.cached_tiles_size[1],(iter_batch_num,)).int().cuda()
         
         log_loss=0
         counter=0
@@ -242,28 +185,17 @@ class GaussianTrain:
                 StatisticsHelperInst.backward_callback()
             self.optimizer.zero_grad(set_to_none = True)
 
-        ### log ###
-        # log_loss/=counter
-        # self.tb_writer.add_scalar('loss',log_loss.cpu(),epoch_i)
-        # if epoch_i%10==1:
-        #     with torch.no_grad():
-        #         log_img_batch=img[0]
-        #         log_transmitance=transmitance[0]
-        #         log_groundtruth=ground_truth_batch[0]
-        #     self.tb_writer.add_image('render/image',log_img_batch,epoch_i,dataformats="CHW")
-        #     self.tb_writer.add_image('render/transmitance',log_transmitance,epoch_i,dataformats="CHW")
-        #     self.tb_writer.add_image('render/gt',log_groundtruth,epoch_i,dataformats="CHW")
         return
 
     @torch.no_grad()
-    def interface(self,view_manager:ViewManager=None,bLog:bool=False,iter_callback:typing.Callable[[int,torch.Tensor],typing.Any]=None):
-        if view_manager is None:
-            view_manager=self.view_manager
-        self.model.update_tiles_coord(self.image_size,self.tile_size)
+    def inference(gs_model:GaussianSplattingModel,view_manager:ViewManager=None,bLog:bool=False,
+                  iter_callback:typing.Callable[[int,str,torch.Tensor,torch.Tensor],typing.Any]=None):
+        
         view_matrix=torch.Tensor(view_manager.view_matrix_tensor).cuda()
         view_project_matrix=view_matrix@(torch.Tensor(view_manager.proj_matrix_tensor).cuda())
         camera_center=torch.Tensor(view_manager.camera_center_tensor).cuda()
         camera_focal=torch.Tensor(view_manager.camera_focal_tensor).cuda()
+        ground_truth=torch.Tensor(view_manager.view_gt_tensor).cuda()
         total_views_num=view_matrix.shape[0]
 
         callback_result_list=[]
@@ -277,46 +209,40 @@ class GaussianTrain:
                 view_project_matrix_batch=view_project_matrix[i:i+1]
                 camera_focal_batch=camera_focal[i:i+1]
                 camera_center_batch=camera_center[i:i+1]
+                ground_truth_bath=ground_truth[i:i+1]
+                img_name=view_manager.view_list[i].image_name
 
             ### render ###
-            tile_img,tile_transmitance=self.model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
-            img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
+            tile_img,tile_transmitance=gs_model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
+            img=tiles2img_torch(tile_img,gs_model.cached_tiles_size[0],gs_model.cached_tiles_size[1])[...,:view_manager.image_size[1],:view_manager.image_size[0]]
             #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
-            callback_result_list.append(iter_callback(i,img))
+            callback_result_list.append(iter_callback(i,img_name,img,ground_truth_bath))
 
         return callback_result_list
 
     @torch.no_grad()
-    def report_psnr(self,epoch_i):
-        def get_training_psnr_internel(iter_i:int,out_img:torch.Tensor)->torch.Tensor:
-            ground_truth=torch.Tensor(self.view_manager.view_gt_tensor[iter_i:iter_i+1]).cuda()
+    def report_psnr(self,epoch_i:int):
+        def get_psnr_internel(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
             psnr=image_utils.psnr(out_img,ground_truth)
             return psnr
-        psnr_list=self.interface(self.view_manager,False,get_training_psnr_internel)
+        psnr_list=GaussianTrainer.inference(self.model,self.view_manager,False,get_psnr_internel)
         psnr=torch.concat(psnr_list,dim=0)
-        print("\n[EPOCH {}] Trainingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+        tqdm.write("\n[EPOCH {}] Trainingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
         torch.cuda.empty_cache()
 
         if self.view_manager_testset is not None:
-            def get_testing_psnr_internel(iter_i:int,out_img:torch.Tensor)->torch.Tensor:
-                ground_truth=torch.Tensor(self.view_manager_testset.view_gt_tensor[iter_i:iter_i+1]).cuda()
-                #torchvision.utils.save_image(ground_truth[0],os.path.join(self.output_path,'{:0>3d}_{:0>3d}_gt.png'.format(epoch_i,iter_i)))
-                #torchvision.utils.save_image(out_img[0],os.path.join(self.output_path,'{:0>3d}_{:0>3d}.png'.format(epoch_i,iter_i)))
-                psnr=image_utils.psnr(out_img,ground_truth)
-                return psnr
-            psnr_list=self.interface(self.view_manager_testset,False,get_testing_psnr_internel)
+            psnr_list=GaussianTrainer.inference(self.model,self.view_manager_testset,False,get_psnr_internel)
             psnr=torch.concat(psnr_list,dim=0)
-            print("[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
+            tqdm.write("[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
             torch.cuda.empty_cache()
         return
 
-    def start(self,epoch:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[],test_epochs:typing.List=[]):
+    def start(self,iterations:int,load_checkpoint:str=None,checkpoint_epochs:typing.List=[],saving_epochs:typing.List=[],test_epochs:typing.List=[]):
         if load_checkpoint is not None:
             self.restore(load_checkpoint)
 
         batch_size=1
 
-        #self.report_psnr(self.iter_start)
         with torch.no_grad():
             self.model.update_tiles_coord(self.image_size,self.tile_size,batch_size)
             view_matrix=torch.Tensor(self.view_manager.view_matrix_tensor).cuda()
@@ -326,12 +252,14 @@ class GaussianTrain:
             ground_truth=torch.Tensor(self.view_manager.view_gt_tensor).cuda()
             total_views_num=view_matrix.shape[0]
 
-        progress_bar = tqdm(range(self.iter_start*self.view_manager.view_matrix_tensor.shape[0], epoch*self.view_manager.view_matrix_tensor.shape[0]), desc="Training progress")
-        progress_bar.update(0)
         StatisticsHelperInst.reset(self.model._xyz.shape[-2],self.model._xyz.shape[-1])
         torch.cuda.empty_cache()
+        sample_num=len(self.view_manager.view_list)
+        epoch=int(math.ceil(iterations/sample_num))
+        progress_bar = tqdm(range(self.iter_start*sample_num, epoch*sample_num), desc="Training progress")
+        progress_bar.update(0)
         
-        for epoch_i in range(self.iter_start,epoch+1):
+        for epoch_i in range(self.iter_start,epoch):
             if (epoch_i+1)%5==0:
                 self.model.oneupSHdegree()
 
@@ -342,14 +270,14 @@ class GaussianTrain:
             progress_bar.update(total_views_num)
             
             if epoch_i in checkpoint_epochs:
-                print("\n[ITER {}] Saving Checkpoint".format(epoch_i))
+                tqdm.write("\n[EPOCH {}] Saving Checkpoint".format(epoch_i))
                 self.save(epoch_i)
 
             if epoch_i in test_epochs:
                 self.report_psnr(epoch_i)
             
             if epoch_i in saving_epochs:
-                print("\n[ITER {}] Saving Gaussians".format(epoch_i))
+                tqdm.write("\n[EPOCH {}] Saving Gaussians".format(epoch_i))
                 scene=GaussianScene()
                 self.model.save_to_scene(scene)
                 dir=os.path.join(self.output_path,"point_cloud/iteration_{}".format(epoch_i))
@@ -360,8 +288,9 @@ class GaussianTrain:
         #finish
         progress_bar.close()
         scene=GaussianScene()
+        self.save(epoch)
         self.model.save_to_scene(scene)
-        dir=os.path.join(self.output_path,"point_cloud/iteration_{}".format(epoch))
+        dir=os.path.join(self.output_path,"point_cloud/finish")
         scene.save_ply(os.path.join(dir,"point_cloud.ply"))
 
         return

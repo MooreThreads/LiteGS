@@ -27,7 +27,7 @@ image_size=images_info[0].image.size
 args = OptimizationParams(ArgumentParser(description="Training script parameters"))
 
 
-gaussian_model=GaussianSplattingModel(scene)
+gaussian_model=GaussianSplattingModel(scene,0)
 gaussian_model.update_tiles_coord(image_size,8)
 (model_params,op_state_dict, first_iter,actived_sh_degree) = torch.load('output/sh0_4M.pth')
 gaussian_model.load_params(model_params)

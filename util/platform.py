@@ -3,14 +3,14 @@ import torch
 plat = platform.system().lower()
 
 #torch.compile
+def __empty_compile(model,*args,**kwargs):
+    if model is None:
+        def empty_decorator(func):
+            return func
+        return empty_decorator
+    return model
 if plat == 'windows':
-    def empty_compile(model,*args,**kwargs):
-        if model is None:
-            def empty_decorator(func):
-                return func
-            return empty_decorator
-        return model
-    platform_torch_compile=empty_compile
+    platform_torch_compile=__empty_compile
 elif plat == 'linux':
     platform_torch_compile=torch.compile
 
