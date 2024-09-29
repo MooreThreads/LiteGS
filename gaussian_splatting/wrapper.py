@@ -22,12 +22,12 @@ class CreateTransformMatrixFunc(torch.autograd.Function):
         grad_quaternion,grad_scale=torch.ops.RasterBinning.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
         return grad_quaternion,grad_scale
 
-def create_transform_matrix_internel_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+def create_transform_matrix_internal_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
     '''faster'''
     transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
     return transform_matrix
 
-def create_transform_matrix_internel_v1(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+def create_transform_matrix_internal_v1(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
     rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
 
     r=rotator_vec[0]
@@ -53,7 +53,7 @@ def create_transform_matrix_internel_v1(scaling_vec:torch.Tensor,rotator_vec:tor
 
 def create_transform_matrix(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
 
-    return create_transform_matrix_internel_v2(scaling_vec,rotator_vec)
+    return create_transform_matrix_internal_v2(scaling_vec,rotator_vec)
 
 
 ##
@@ -107,16 +107,16 @@ def create_cov3d(transform_matrix:torch.Tensor)->torch.Tensor:
         transform_matrix:[P,3,3]
         trans^t @ trans
     '''
-    def create_cov3d_internel_v1(transform_matrix:torch.Tensor)->torch.Tensor:
+    def create_cov3d_internal_v1(transform_matrix:torch.Tensor)->torch.Tensor:
         cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
         return cov3d
     
-    def create_cov3d_internel_v2(transform_matrix:torch.Tensor)->torch.Tensor:
+    def create_cov3d_internal_v2(transform_matrix:torch.Tensor)->torch.Tensor:
         '''simplify the calculations in the backward phase.(The grad of Cov3d will be symmetric)'''
         cov3d=CreateCovarianceMatrixFunc.apply(transform_matrix)
         return cov3d
 
-    return create_cov3d_internel_v2(transform_matrix)
+    return create_cov3d_internal_v2(transform_matrix)
 
 ###
 ### world position to ndc position
@@ -171,14 +171,14 @@ class ProjCov3dTo2dFunc(torch.autograd.Function):
         return cov3d_gradient,None
     
 def project_3dcov_to_2d(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
-    def project_3dcov_to_2d_internel_v1(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
+    def project_3dcov_to_2d_internal_v1(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
         cov2d=(transforms_t@cov3d@transforms_t.transpose(-1,-2))
         return cov2d
-    def project_3dcov_to_2d_internel_v2(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
+    def project_3dcov_to_2d_internal_v2(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
         '''simplify the calculations in the backward phase.'''
         return ProjCov3dTo2dFunc.apply(cov3d,transforms_t)
     
-    return project_3dcov_to_2d_internel_v2(cov3d,transforms_t)
+    return project_3dcov_to_2d_internal_v2(cov3d,transforms_t)
 
 ###
 ### The fastest version of Create cov2d. 
@@ -335,13 +335,13 @@ class SphericalHarmonicFunc(torch.autograd.Function):
 
 def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
 
-    def sh2rgb_internel_v1(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+    def sh2rgb_internal_v1(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
         return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
     
-    def sh2rgb_internel_v2(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+    def sh2rgb_internal_v2(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
         return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
     
-    return sh2rgb_internel_v2(deg,sh_base,sh_rest,dirs)
+    return sh2rgb_internal_v2(deg,sh_base,sh_rest,dirs)
 
 
 ###
@@ -363,7 +363,7 @@ class EighAndInverse2x2Func(torch.autograd.Function):
     
 def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
 
-    def eigh_and_inverse_cov2d_internel_v1(cov2d:torch.Tensor):
+    def eigh_and_inverse_cov2d_internal_v1(cov2d:torch.Tensor):
         det=cov2d[:,0,0]*cov2d[:,1,1]-cov2d[:,0,1]*cov2d[:,1,0]
         with torch.no_grad():
             mid=0.5*(cov2d[:,0,0]+cov2d[:,1,1])
@@ -380,10 +380,10 @@ def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
         cov2d_inv[:,1,1]=cov2d[:,0,0]*reci_det
         return eigen_val,eigen_vec,cov2d_inv
     
-    def eigh_and_inverse_cov2d_internel_v2(cov2d:torch.Tensor):
+    def eigh_and_inverse_cov2d_internal_v2(cov2d:torch.Tensor):
         return EighAndInverse2x2Func.apply(cov2d)
 
-    return eigh_and_inverse_cov2d_internel_v2(cov2d)
+    return eigh_and_inverse_cov2d_internal_v2(cov2d)
 
 ###
 ### compact params

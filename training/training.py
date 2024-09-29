@@ -222,16 +222,16 @@ class GaussianTrainer:
 
     @torch.no_grad()
     def report_psnr(self,epoch_i:int):
-        def get_psnr_internel(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
+        def get_psnr_internal(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
             psnr=image_utils.psnr(out_img,ground_truth)
             return psnr
-        psnr_list=GaussianTrainer.inference(self.model,self.view_manager,False,get_psnr_internel)
+        psnr_list=GaussianTrainer.inference(self.model,self.view_manager,False,get_psnr_internal)
         psnr=torch.concat(psnr_list,dim=0)
         tqdm.write("\n[EPOCH {}] Trainingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
         torch.cuda.empty_cache()
 
         if self.view_manager_testset is not None:
-            psnr_list=GaussianTrainer.inference(self.model,self.view_manager_testset,False,get_psnr_internel)
+            psnr_list=GaussianTrainer.inference(self.model,self.view_manager_testset,False,get_psnr_internal)
             psnr=torch.concat(psnr_list,dim=0)
             tqdm.write("[EPOCH {}] Testingset Evaluating: PSNR {}".format(epoch_i, psnr.mean()))
             torch.cuda.empty_cache()

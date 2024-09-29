@@ -151,7 +151,7 @@ class GaussianSplattingModel:
         if chunks_num>=1:
             scale=self._scaling[:,-1-chunks_num:-1,:].reshape(3,-1).exp()
             rotator=torch.nn.functional.normalize(self._rotation[:,-1-chunks_num:-1,:],dim=0).reshape(4,-1)
-            transform_matrix=wrapper.create_transform_matrix_internel_v1(scale,rotator)
+            transform_matrix=wrapper.create_transform_matrix_internal_v1(scale,rotator)
             coefficient=2*math.log(255)
             extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
             point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
