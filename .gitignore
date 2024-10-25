@@ -6,3 +6,4 @@ trace_*.json
 debug_gradient*
 profiler_input_data
 dataset/*
+gaussian_splatting/submodules/simple-knn

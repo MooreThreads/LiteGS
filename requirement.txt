@@ -1,0 +1,5 @@
+numpy
+plyfile
+tqdm
+matplotlib
+tensorboard

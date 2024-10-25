@@ -56,6 +56,7 @@ class GaussianTrainer:
     
     def save(self,iteration):
         model_params=self.model.get_params()
+        os.makedirs(self.output_path, exist_ok = True) 
         torch.save((model_params,self.optimizer.state_dict(), iteration,self.model.actived_sh_degree), self.output_path + "/chkpnt" + str(iteration) + ".pth")
         return
     
