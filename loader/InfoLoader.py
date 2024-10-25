@@ -269,13 +269,13 @@ def getNerfppNorm(image_info_list:typing.List[ImageInfo]):
 
 def load(path:str,image_dir:str,resolution:int)->tuple[dict[int,PinHoleCameraInfo],list[ImageInfo]]:
     try:
-        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
-        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
+        cameras_extrinsic_file = os.path.join(path, "sparse","0", "images.bin")
+        cameras_intrinsic_file = os.path.join(path, "sparse","0", "cameras.bin")
         cam_extrinsics = __read_extrinsics_binary(cameras_extrinsic_file)
         cam_intrinsics = __read_intrinsics_binary(cameras_intrinsic_file)
     except:
-        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
-        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
+        cameras_extrinsic_file = os.path.join(path, "sparse","0", "images.txt")
+        cameras_intrinsic_file = os.path.join(path, "sparse","0", "cameras.txt")
         cam_extrinsics = __read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = __read_intrinsics_text(cameras_intrinsic_file)
 

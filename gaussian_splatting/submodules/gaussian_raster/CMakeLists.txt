@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.9)
 
-project(gaussian_splatting_pytorch_lib LANGUAGES CXX CUDA)
+project(gs_raster_pytorch_lib LANGUAGES CXX CUDA)
 
 set( CMAKE_CXX_STANDARD 17)
 set( CMAKE_CUDA_STANDARD 17 )
@@ -23,7 +23,11 @@ set( INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include" )
 
 add_library(GaussianRaster SHARED
   ext_cuda.cpp
-  raster_binning.cu
+  cuda_errchk.cpp
+  compact.cu
+  transform.cu
+  binning.cu
+  raster.cu
 )
 
 target_include_directories(GaussianRaster PRIVATE "${INCLUDE_DIR}")

@@ -1,5 +1,8 @@
 #include <torch/extension.h>
-#include "raster_binning.h"
+#include "binning.h"
+#include "raster.h"
+#include "compact.h"
+#include "transform.h"
 
 
 TORCH_LIBRARY(RasterBinning, m) {
