@@ -242,7 +242,7 @@ __global__ void raster_backward_kernel_8x8(
     auto warp = cg::tiled_partition<32>(block);
 
     const int batch_id = blockIdx.y;
-    const int tile_index = block.group_index().x * warp.meta_group_size() + warp.meta_group_rank();
+    const int tile_index = blockIdx.x * (blockDim.x / (tilesize * tilesize)) + threadIdx.x / (tilesize * tilesize);
     int tile_id = 0;
     if (tile_index < tiles.size(1))
         tile_id = tiles[batch_id][tile_index];
@@ -253,123 +253,122 @@ __global__ void raster_backward_kernel_8x8(
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
         if (start_index_in_tile != -1)
-        {//loop pixels in tile
-            for (int pixel_id = warp.thread_rank(); pixel_id < tilesize * tilesize; pixel_id += 32)
+        {
+            int pixel_id= threadIdx.x % (tilesize * tilesize);
+            float transmittance = final_transmitance[batch_id][tile_index][pixel_id / tilesize][pixel_id % tilesize];//todo
+            int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + pixel_id % tilesize;
+            int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + pixel_id / tilesize;
+            int pixel_lst_index = last_contributor[batch_id][tile_index][pixel_id / tilesize][pixel_id % tilesize];
+
+            float3 d_pixel{ 0,0,0 };
+            if (pixel_x < img_w && pixel_y < img_h)
             {
-                float transmittance = final_transmitance[batch_id][tile_index][pixel_id / tilesize][pixel_id % tilesize];//todo
-                int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + pixel_id % tilesize;
-                int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + pixel_id / tilesize;
-                int pixel_lst_index = last_contributor[batch_id][tile_index][pixel_id / tilesize][pixel_id % tilesize];
+                d_pixel.x = d_img[batch_id][0][tile_index][pixel_id / tilesize][pixel_id % tilesize];
+                d_pixel.y = d_img[batch_id][1][tile_index][pixel_id / tilesize][pixel_id % tilesize];
+                d_pixel.z = d_img[batch_id][2][tile_index][pixel_id / tilesize][pixel_id % tilesize];
+            }
+            //loop points
+            float3 accum_rec{ 0,0,0 };
+            for (int point_index = end_index_in_tile - 1; point_index >= start_index_in_tile; point_index--)
+            {
+                bool skip = point_index > pixel_lst_index;
+                int point_id = sorted_points[batch_id][point_index];
+                float3 grad_color{ 0,0,0 };
+                float3 grad_invcov{ 0,0,0 };
+                float2 grad_mean{ 0,0 };
+                float grad_opacity{ 0 };
 
-                float3 d_pixel{ 0,0,0 };
-                if (pixel_x < img_w && pixel_y < img_h)
+                if (skip == false)
                 {
-                    d_pixel.x = d_img[batch_id][0][tile_index][pixel_id / tilesize][pixel_id % tilesize];
-                    d_pixel.y = d_img[batch_id][1][tile_index][pixel_id / tilesize][pixel_id % tilesize];
-                    d_pixel.z = d_img[batch_id][2][tile_index][pixel_id / tilesize][pixel_id % tilesize];
-                }
-                //loop points
-                float3 accum_rec{ 0,0,0 };
-                for (int point_index = end_index_in_tile - 1; point_index >= start_index_in_tile; point_index--)
-                {
-                    bool skip = point_index > pixel_lst_index;
-                    int point_id = sorted_points[batch_id][point_index];
-                    float3 grad_color{ 0,0,0 };
-                    float3 grad_invcov{ 0,0,0 };
-                    float2 grad_mean{ 0,0 };
-                    float grad_opacity{ 0 };
+                    float2 xy;
+                    xy.x = (ndc[batch_id][0][point_id] + 1.0f) * 0.5f * img_w - 0.5f;
+                    xy.y = (ndc[batch_id][1][point_id] + 1.0f) * 0.5f * img_h - 0.5f;
+                    float2 d{ xy.x - pixel_x,xy.y - pixel_y };
+                    float4 cur_color{ color[batch_id][0][point_id],color[batch_id][1][point_id],color[batch_id][2][point_id],opacity[0][point_id] };
+                    float3 cur_cov2d_inv{ cov2d_inv[batch_id][0][0][point_id],cov2d_inv[batch_id][0][1][point_id],cov2d_inv[batch_id][1][1][point_id] };
 
+
+                    float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
+                    skip |= power > 0.0f;
+
+                    float G = exp(power);
+                    float alpha = min(0.99f, cur_color.w * G);
+                    skip |= (alpha < 1.0f / 255.0f);
                     if (skip == false)
                     {
-                        float2 xy;
-                        xy.x = (ndc[batch_id][0][point_id] + 1.0f) * 0.5f * img_w - 0.5f;
-                        xy.y = (ndc[batch_id][1][point_id] + 1.0f) * 0.5f * img_h - 0.5f;
-                        float2 d{ xy.x - pixel_x,xy.y - pixel_y };
-                        float4 cur_color{ color[batch_id][0][point_id],color[batch_id][1][point_id],color[batch_id][2][point_id],opacity[0][point_id] };
-                        float3 cur_cov2d_inv{ cov2d_inv[batch_id][0][0][point_id],cov2d_inv[batch_id][0][1][point_id],cov2d_inv[batch_id][1][1][point_id] };
+                        transmittance /= (1 - alpha);
+                        //color
+                        grad_color.x = alpha * transmittance * d_pixel.x;
+                        grad_color.y = alpha * transmittance * d_pixel.y;
+                        grad_color.z = alpha * transmittance * d_pixel.z;
 
 
-                        float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
-                        skip |= power > 0.0f;
+                        //alpha
+                        float d_alpha = 0;
+                        d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
+                        d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
+                        d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
+                        accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
+                        accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
+                        accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
 
-                        float G = exp(power);
-                        float alpha = min(0.99f, cur_color.w * G);
-                        skip |= (alpha < 1.0f / 255.0f);
-                        if (skip == false)
-                        {
-                            transmittance /= (1 - alpha);
-                            //color
-                            grad_color.x = alpha * transmittance * d_pixel.x;
-                            grad_color.y = alpha * transmittance * d_pixel.y;
-                            grad_color.z = alpha * transmittance * d_pixel.z;
+                        //opacity
+                        grad_opacity = G * d_alpha;
 
+                        //cov2d_inv
+                        float d_G = cur_color.w * d_alpha;
+                        float d_power = G * d_G;
+                        grad_invcov.x = -0.5f * d.x * d.x * d_power;
+                        grad_invcov.y = -0.5f * d.x * d.y * d_power;
+                        grad_invcov.z = -0.5f * d.y * d.y * d_power;
 
-                            //alpha
-                            float d_alpha = 0;
-                            d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
-                            d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
-                            d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
-                            accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
-                            accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
-                            accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
-
-                            //opacity
-                            grad_opacity = G * d_alpha;
-
-                            //cov2d_inv
-                            float d_G = cur_color.w * d_alpha;
-                            float d_power = G * d_G;
-                            grad_invcov.x = -0.5f * d.x * d.x * d_power;
-                            grad_invcov.y = -0.5f * d.x * d.y * d_power;
-                            grad_invcov.z = -0.5f * d.y * d.y * d_power;
-
-                            //mean2d
-                            float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
-                            float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
-                            grad_mean.x = d_deltax;
-                            grad_mean.y = d_deltay;
-                        }
-
+                        //mean2d
+                        float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
+                        float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
+                        grad_mean.x = d_deltax;
+                        grad_mean.y = d_deltay;
                     }
 
-
-                    if (warp.all(skip) == false)
-                    {
-                        for (int offset = 16; offset > 0; offset /= 2)
-                        {
-                            grad_color.x += __shfl_down_sync(0xffffffff, grad_color.x, offset);
-                            grad_color.y += __shfl_down_sync(0xffffffff, grad_color.y, offset);
-                            grad_color.z += __shfl_down_sync(0xffffffff, grad_color.z, offset);
-
-                            grad_invcov.x += __shfl_down_sync(0xffffffff, grad_invcov.x, offset);
-                            grad_invcov.y += __shfl_down_sync(0xffffffff, grad_invcov.y, offset);
-                            grad_invcov.z += __shfl_down_sync(0xffffffff, grad_invcov.z, offset);
-
-                            grad_mean.x += __shfl_down_sync(0xffffffff, grad_mean.x, offset);
-                            grad_mean.y += __shfl_down_sync(0xffffffff, grad_mean.y, offset);
-
-                            grad_opacity += __shfl_down_sync(0xffffffff, grad_opacity, offset);
-                        }
-                        if (warp.thread_rank() == 0)
-                        {
-                            atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
-                            atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
-                            atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
-
-                            atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
-                            atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
-                            atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
-                            atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
-
-                            atomicAdd(&d_ndc[batch_id][0][point_id], grad_mean.x * 0.5f * img_w);
-                            atomicAdd(&d_ndc[batch_id][1][point_id], grad_mean.y * 0.5f * img_h);
-
-                            atomicAdd(&d_opacity[0][point_id], grad_opacity);
-                        }
-                    }
                 }
 
+
+                if (warp.all(skip) == false)
+                {
+                    for (int offset = 16; offset > 0; offset /= 2)
+                    {
+                        grad_color.x += __shfl_down_sync(0xffffffff, grad_color.x, offset);
+                        grad_color.y += __shfl_down_sync(0xffffffff, grad_color.y, offset);
+                        grad_color.z += __shfl_down_sync(0xffffffff, grad_color.z, offset);
+
+                        grad_invcov.x += __shfl_down_sync(0xffffffff, grad_invcov.x, offset);
+                        grad_invcov.y += __shfl_down_sync(0xffffffff, grad_invcov.y, offset);
+                        grad_invcov.z += __shfl_down_sync(0xffffffff, grad_invcov.z, offset);
+
+                        grad_mean.x += __shfl_down_sync(0xffffffff, grad_mean.x, offset);
+                        grad_mean.y += __shfl_down_sync(0xffffffff, grad_mean.y, offset);
+
+                        grad_opacity += __shfl_down_sync(0xffffffff, grad_opacity, offset);
+                    }
+                    if (warp.thread_rank() == 0)
+                    {
+                        atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
+                        atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
+                        atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
+
+                        atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
+                        atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
+                        atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
+                        atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
+
+                        atomicAdd(&d_ndc[batch_id][0][point_id], grad_mean.x * 0.5f * img_w);
+                        atomicAdd(&d_ndc[batch_id][1][point_id], grad_mean.y * 0.5f * img_h);
+
+                        atomicAdd(&d_opacity[0][point_id], grad_opacity);
+                    }
+                }
             }
+
+            
         }
     }
 }
@@ -630,9 +629,9 @@ std::vector<at::Tensor> rasterize_backward(
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(tilesize, tilesize, 1);
 
-    int TilesNumInBlock = 4;
+    int TilesNumInBlock = 1;
     dim3 Block3d8x8((tilesnum + TilesNumInBlock - 1) / TilesNumInBlock, viewsnum, 1);
-    int ThreadsNum8x8 = 32 * TilesNumInBlock;
+    int ThreadsNum8x8 = 64 * TilesNumInBlock;
     
     switch (tilesize)
     {
