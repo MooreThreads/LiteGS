@@ -408,7 +408,7 @@ __global__ void raster_backward_kernel(
     float* const grad_mean_x = gradient_buffer + 6 * tilesize * tilesize;
     float* const grad_mean_y = gradient_buffer + 7 * tilesize * tilesize;
     float* const grad_opacity = gradient_buffer + 8 * tilesize * tilesize;
-    __shared__ float shared_gradient_sum[9];
+    __shared__ float* global_grad_addr[9];
 
     const int batch_id = blockIdx.y;
     int tile_id = tiles[batch_id][blockIdx.x];
@@ -420,6 +420,23 @@ __global__ void raster_backward_kernel(
 
     int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
     int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
+
+    if (threadIdx.x == 0 && threadIdx.y == 0)
+    {
+        global_grad_addr[0] = &d_color[batch_id][0][0];
+        global_grad_addr[1] = &d_color[batch_id][1][0];
+        global_grad_addr[2] = &d_color[batch_id][2][0];
+
+        global_grad_addr[3] = &d_cov2d_inv[batch_id][0][0][0];
+        global_grad_addr[4] = &d_cov2d_inv[batch_id][0][1][0];
+        global_grad_addr[5] = &d_cov2d_inv[batch_id][1][1][0];
+
+        global_grad_addr[6] = &d_ndc[batch_id][0][0];
+        global_grad_addr[7] = &d_ndc[batch_id][1][0];
+
+        global_grad_addr[8] = &d_opacity[0][0];
+    }
+    __syncthreads();
 
     if (tile_id!=0 && tile_id < start_index.size(1) - 1)
     {
@@ -525,8 +542,8 @@ __global__ void raster_backward_kernel(
                         //mean2d
                         float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
                         float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
-                        grad_mean_x[threadidx] = d_deltax;
-                        grad_mean_y[threadidx] = d_deltay;
+                        grad_mean_x[threadidx] = d_deltax * 0.5f * img_w;
+                        grad_mean_y[threadidx] = d_deltay * 0.5f * img_h;
                     }
                 }
 
@@ -544,10 +561,9 @@ __global__ void raster_backward_kernel(
                     grad_opacity[threadidx] = 0;
                 }
 
-                //__syncthreads();
+                //reduction
                 bool block_skip=__syncthreads_and(bSkip);
                 int point_id = collected_point_id[i];
-                //reduction
                 if (block_skip==false)
                 {
                     
@@ -566,28 +582,15 @@ __global__ void raster_backward_kernel(
                         }
                         if (threadid_in_warp == 0)
                         {
-                            shared_gradient_sum[property_id] = gradient_sum;
+                            atomicAdd(global_grad_addr[property_id] + point_id, gradient_sum);
+                            if (property_id == 4)
+                            {
+                                atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], gradient_sum);
+                            }
                         }
-                    }
-                    __syncthreads();
-                    if (threadidx == 0)
-                    {
-                        atomicAdd(&d_color[batch_id][0][point_id], shared_gradient_sum[0]);
-                        atomicAdd(&d_color[batch_id][1][point_id], shared_gradient_sum[1]);
-                        atomicAdd(&d_color[batch_id][2][point_id], shared_gradient_sum[2]);
-                                
-                        atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], shared_gradient_sum[3]);
-                        atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], shared_gradient_sum[4]);
-                        atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], shared_gradient_sum[4]);
-                        atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], shared_gradient_sum[5]);
-
-                        atomicAdd(&d_ndc[batch_id][0][point_id], shared_gradient_sum[6] * 0.5f * img_w);
-                        atomicAdd(&d_ndc[batch_id][1][point_id], shared_gradient_sum[7] * 0.5f * img_h);
-
-                        atomicAdd(&d_opacity[0][point_id], shared_gradient_sum[8]);
-                    }
-                    
+                    } 
                 }
+                __syncthreads();
 
             }
             
@@ -637,7 +640,8 @@ std::vector<at::Tensor> rasterize_backward(
     {
     case 8:
         //todo cuda perfer shared
-        raster_backward_kernel_8x8 << <Block3d8x8, ThreadsNum8x8 >> > (
+        //raster_backward_kernel_8x8 << <Block3d8x8, ThreadsNum8x8 >> > (
+        raster_backward_kernel<8> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
