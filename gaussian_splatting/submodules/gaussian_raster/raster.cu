@@ -393,12 +393,8 @@ __global__ void raster_backward_kernel(
     int tiles_num_x, int img_h, int img_w
 )
 {
-    __shared__ int collected_point_id[tilesize * tilesize / 4];
-    __shared__ float4 collected_color[tilesize * tilesize / 4];
-    __shared__ float3 collected_invcov[tilesize * tilesize / 4];
-    __shared__ float2 collected_mean[tilesize * tilesize / 4];
-
-    __shared__ float gradient_buffer[tilesize * tilesize * 9];
+    const int property_num = 9;
+    __shared__ float gradient_buffer[tilesize * tilesize * property_num];
     float* const grad_color_x = gradient_buffer;
     float* const grad_color_y = gradient_buffer + 1 * tilesize * tilesize;
     float* const grad_color_z = gradient_buffer + 2 * tilesize * tilesize;
@@ -408,7 +404,7 @@ __global__ void raster_backward_kernel(
     float* const grad_mean_x = gradient_buffer + 6 * tilesize * tilesize;
     float* const grad_mean_y = gradient_buffer + 7 * tilesize * tilesize;
     float* const grad_opacity = gradient_buffer + 8 * tilesize * tilesize;
-    __shared__ float* global_grad_addr[9];
+    __shared__ float* global_grad_addr[property_num];
 
     const int batch_id = blockIdx.y;
     int tile_id = tiles[batch_id][blockIdx.x];
@@ -459,128 +455,101 @@ __global__ void raster_backward_kernel(
         }
 
         float3 accum_rec{ 0,0,0 };
-        for (int offset = end_index_in_tile-1; offset >= start_index_in_tile; offset -= (tilesize * tilesize / 4))
+        for (int index = end_index_in_tile-1; index >= start_index_in_tile; index --)
         {
-
-            int valid_num = min(tilesize * tilesize / 4, offset- start_index_in_tile+1);
-            //load to shared memory
-            __syncthreads();
-            if (threadIdx.y * blockDim.x + threadIdx.x < valid_num)
+            bool bSkip = false;
+            int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
+            int point_id= sorted_points[batch_id][index];
+            if (index > pixel_lst_index)
             {
-                int i = threadIdx.y * blockDim.x + threadIdx.x;
-                int index = offset - i;
-                int point_id = sorted_points[batch_id][index];
-                collected_point_id[i] = point_id;
-
-                collected_mean[i].x = (ndc[batch_id][0][point_id] + 1.0f) * 0.5f * img_w - 0.5f;
-                collected_mean[i].y = (ndc[batch_id][1][point_id] + 1.0f) * 0.5f * img_h - 0.5f;
-                collected_invcov[i].x = cov2d_inv[batch_id][0][0][point_id];
-                collected_invcov[i].y = cov2d_inv[batch_id][0][1][point_id];
-                collected_invcov[i].z = cov2d_inv[batch_id][1][1][point_id];
-                collected_color[i].x = color[batch_id][0][point_id];
-                collected_color[i].y = color[batch_id][1][point_id];
-                collected_color[i].z = color[batch_id][2][point_id];
-                collected_color[i].w = opacity[0][point_id];
+                bSkip = true;
             }
-            __syncthreads();
-
-
-            //process
-            
-            for (int i = 0; i < valid_num; i++)
+            else
             {
-                int index = offset - i;
-                bool bSkip = false;
-                int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
-                if (index > pixel_lst_index)
+
+                float2 xy{ (ndc[batch_id][0][point_id] + 1.0f) * 0.5f * img_w - 0.5f ,(ndc[batch_id][1][point_id] + 1.0f) * 0.5f * img_h - 0.5f };
+                float2 d{ xy.x - pixel_x,xy.y - pixel_y };
+                float4 cur_color{ color[batch_id][0][point_id],color[batch_id][1][point_id],color[batch_id][2][point_id],opacity[0][point_id] };
+                float3 cur_cov2d_inv{ cov2d_inv[batch_id][0][0][point_id] ,cov2d_inv[batch_id][0][1][point_id],cov2d_inv[batch_id][1][1][point_id] };
+
+                float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
+                bSkip |= power > 0.0f;
+
+                float G = exp(power);
+                float alpha = min(0.99f, cur_color.w * G);
+                bSkip |= alpha < 1.0f / 255.0f;
+
+                if (bSkip == false)
                 {
-                    bSkip = true;
+                    transmittance /= (1 - alpha);
+                    //color
+                    grad_color_x[threadidx] = alpha * transmittance * d_pixel.x;
+                    grad_color_y[threadidx] = alpha * transmittance * d_pixel.y;
+                    grad_color_z[threadidx] = alpha * transmittance * d_pixel.z;
+
+
+                    //alpha
+                    float d_alpha = 0;
+                    d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
+                    d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
+                    d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
+                    accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
+                    accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
+                    accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
+
+                    //opacity
+                    grad_opacity[threadidx] = G * d_alpha;
+
+                    //cov2d_inv
+                    float d_G = cur_color.w * d_alpha;
+                    float d_power = G * d_G;
+                    grad_invcov_x[threadidx] = -0.5f * d.x * d.x * d_power;
+                    grad_invcov_y[threadidx] = -0.5f * d.x * d.y * d_power;
+                    grad_invcov_z[threadidx] = -0.5f * d.y * d.y * d_power;
+
+                    //mean2d
+                    float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
+                    float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
+                    grad_mean_x[threadidx] = d_deltax * 0.5f * img_w;
+                    grad_mean_y[threadidx] = d_deltay * 0.5f * img_h;
                 }
-                else
-                {
-
-                    float2 xy = collected_mean[i];
-                    float2 d{ xy.x - pixel_x,xy.y - pixel_y };
-                    float4 cur_color = collected_color[i];
-                    float3 cur_cov2d_inv = collected_invcov[i];
-
-                    float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
-                    bSkip |= power > 0.0f;
-
-                    float G = exp(power);
-                    float alpha = min(0.99f, cur_color.w * G);
-                    bSkip |= alpha < 1.0f / 255.0f;
-
-                    if (bSkip == false)
-                    {
-                        transmittance /= (1 - alpha);
-                        //color
-                        grad_color_x[threadidx] = alpha * transmittance * d_pixel.x;
-                        grad_color_y[threadidx] = alpha * transmittance * d_pixel.y;
-                        grad_color_z[threadidx] = alpha * transmittance * d_pixel.z;
-
-
-                        //alpha
-                        float d_alpha = 0;
-                        d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_pixel.x;
-                        d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_pixel.y;
-                        d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_pixel.z;
-                        accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
-                        accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
-                        accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
-
-                        //opacity
-                        grad_opacity[threadidx] = G * d_alpha;
-
-                        //cov2d_inv
-                        float d_G = cur_color.w * d_alpha;
-                        float d_power = G * d_G;
-                        grad_invcov_x[threadidx] = -0.5f * d.x * d.x * d_power;
-                        grad_invcov_y[threadidx] = -0.5f * d.x * d.y * d_power;
-                        grad_invcov_z[threadidx] = -0.5f * d.y * d.y * d_power;
-
-                        //mean2d
-                        float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
-                        float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
-                        grad_mean_x[threadidx] = d_deltax * 0.5f * img_w;
-                        grad_mean_y[threadidx] = d_deltay * 0.5f * img_h;
-                    }
-                }
+            }
 
                 
-                if (bSkip == true )
-                {
-                    grad_color_x[threadidx] = 0;
-                    grad_color_y[threadidx] = 0;
-                    grad_color_z[threadidx] = 0;
-                    grad_invcov_x[threadidx] = 0;
-                    grad_invcov_y[threadidx] = 0;
-                    grad_invcov_z[threadidx] = 0;
-                    grad_mean_x[threadidx] = 0;
-                    grad_mean_y[threadidx] = 0;
-                    grad_opacity[threadidx] = 0;
-                }
+            if (bSkip == true )
+            {
+                grad_color_x[threadidx] = 0;
+                grad_color_y[threadidx] = 0;
+                grad_color_z[threadidx] = 0;
+                grad_invcov_x[threadidx] = 0;
+                grad_invcov_y[threadidx] = 0;
+                grad_invcov_z[threadidx] = 0;
+                grad_mean_x[threadidx] = 0;
+                grad_mean_y[threadidx] = 0;
+                grad_opacity[threadidx] = 0;
+            }
 
-                //reduction
-                bool block_skip=__syncthreads_and(bSkip);
-                int point_id = collected_point_id[i];
-                if (block_skip==false)
+            //reduction
+            bool block_skip=__syncthreads_and(bSkip);
+            if (block_skip==false)
+            {
+                int warps_num = cuda_tile.meta_group_size();
+                if (warps_num > property_num)
                 {
-                    
-                    int threadid_in_warp = threadidx % 32;
-                    int wraps_num = tilesize * tilesize / 32;
-                    for (int property_id = threadidx / 32; property_id < 9; property_id+= wraps_num)//9 property num
+                    int property_id = cuda_tile.meta_group_rank();
+                    if (property_id < property_num)
                     {
                         float gradient_sum = 0;
-                        for (int reduction_i = threadid_in_warp; reduction_i < tilesize * tilesize; reduction_i+=32)
+                        for (int reduction_i = 0; reduction_i < tilesize * tilesize; reduction_i += cuda_tile.num_threads())
                         {
-                            gradient_sum += gradient_buffer[property_id * tilesize * tilesize + reduction_i];
+                            gradient_sum += gradient_buffer[property_id * tilesize * tilesize + reduction_i + cuda_tile.thread_rank()];
                         }
-                        for (int offset = 16; offset > 0; offset /= 2)
-                        {
-                            gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, offset);
-                        }
-                        if (threadid_in_warp == 0)
+                        gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, 16);
+                        gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, 8);
+                        gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, 4);
+                        gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, 2);
+                        gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, 1);
+                        if (cuda_tile.thread_rank() == 0)
                         {
                             atomicAdd(global_grad_addr[property_id] + point_id, gradient_sum);
                             if (property_id == 4)
@@ -588,15 +557,62 @@ __global__ void raster_backward_kernel(
                                 atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], gradient_sum);
                             }
                         }
-                    } 
+                    }
                 }
-                __syncthreads();
+                else
+                {
+                    int property_offset = 0;
+                    for (; property_offset+8 < property_num; property_offset += 8)
+                    {
+                        int property_per_warp=8 / cuda_tile.meta_group_size();
+                        int threads_per_property = cuda_tile.num_threads() / property_per_warp;
+                        int property_id = threadidx / threads_per_property + property_offset;
+                        int pixel_offset = threadidx % threads_per_property;
+                        if (property_id < property_num)
+                        {
+                            float gradient_sum = 0;
+                            for (int i = 0; i < tilesize * tilesize; i += threads_per_property)
+                            {
+                                gradient_sum += gradient_buffer[property_id * tilesize * tilesize + i + pixel_offset];
+                            }
+                            for (int i = threads_per_property/2; i >= 1; i /= 2)
+                            {
+                                gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, i); 
+                            }
+                            if (pixel_offset == 0)
+                            {
+                                atomicAdd(global_grad_addr[property_id] + point_id, gradient_sum);
+                                if (property_id == 4)
+                                {
+                                    atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], gradient_sum);
+                                }
+                            }
+                        }
+                    }
 
+                    if (threadidx < tilesize * tilesize)
+                    {
+                        for (; property_offset < property_num; property_offset++)
+                        {
+                            float gradient_sum = gradient_buffer[property_offset * tilesize * tilesize + threadidx];
+                            for (int i = cuda_tile.num_threads() / 2; i >= 1; i /= 2)
+                            {
+                                gradient_sum += __shfl_down_sync(0xffffffff, gradient_sum, i);
+                            }
+                            if (cuda_tile.thread_rank()==0)
+                            {
+                                atomicAdd(global_grad_addr[property_offset] + point_id, gradient_sum);
+                            }
+                        }
+                    }
+
+                }
+                
             }
-            
+            __syncthreads();
+
         }
         
-
     }
 }
 
