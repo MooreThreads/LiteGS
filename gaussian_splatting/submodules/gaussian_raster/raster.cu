@@ -204,8 +204,8 @@ std::vector<at::Tensor> rasterize_forward(
     return { output_img ,output_transmitance ,output_last_contributor };
 }
 
-
-__global__ void raster_backward_kernel_8x8(
+template <int tilesize>
+__global__ void raster_backward_kernel_warp_reduction(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc,         //[batch,2,point_num]
@@ -223,7 +223,6 @@ __global__ void raster_backward_kernel_8x8(
     int tiles_num_x, int img_h, int img_w
 )
 {
-    const int tilesize = 8;
     extern __shared__ float shared_buffer[];
     auto block = cg::this_thread_block();
     auto warp = cg::tiled_partition<32>(block);
@@ -377,7 +376,7 @@ __device__ int atomicAggInc(int* ptr)
 }
 
 template <int tilesize>
-__global__ void raster_backward_kernel(
+__global__ void raster_backward_kernel_multibatch_reduction(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc,         //[batch,2,point_num]
@@ -406,13 +405,13 @@ __global__ void raster_backward_kernel(
     float* const grad_mean_x = gradient_buffer + 6 * tilesize * tilesize;
     float* const grad_mean_y = gradient_buffer + 7 * tilesize * tilesize;
     float* const grad_opacity = gradient_buffer + 8 * tilesize * tilesize;
-    __shared__ float* global_grad_addr[property_num];
     __shared__ int valid_pix_num;
 
     const int batch_id = blockIdx.y;
     int tile_id = tiles[batch_id][blockIdx.x];
     auto block = cg::this_thread_block();
     auto cuda_tile = cg::tiled_partition<32>(block);
+    int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
     constexpr int threadsnum_per_property = tilesize * tilesize / property_num;
 
     const int x_in_tile = threadIdx.x;
@@ -421,20 +420,40 @@ __global__ void raster_backward_kernel(
     int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
     int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
 
+    float* global_grad_addr = nullptr;
+    switch (threadidx) {
+    case 0:
+        global_grad_addr = &d_color[batch_id][0][0];
+        break;
+    case 1:
+        global_grad_addr = &d_color[batch_id][1][0];
+        break;
+    case 2:
+        global_grad_addr = &d_color[batch_id][2][0];
+        break;
+    case 3:
+        global_grad_addr = &d_cov2d_inv[batch_id][0][0][0];
+        break;
+    case 4:
+        global_grad_addr = &d_cov2d_inv[batch_id][0][1][0];
+        break;
+    case 5:
+        global_grad_addr = &d_cov2d_inv[batch_id][1][1][0];
+        break;
+    case 6:
+        global_grad_addr = &d_ndc[batch_id][0][0];
+        break;
+    case 7:
+        global_grad_addr = &d_ndc[batch_id][1][0];
+        break;
+    case 8:
+        global_grad_addr = &d_opacity[0][0];
+        break;
+    default:
+        break;
+    }
     if (threadIdx.x == 0 && threadIdx.y == 0)
     {
-        global_grad_addr[0] = &d_color[batch_id][0][0];
-        global_grad_addr[1] = &d_color[batch_id][1][0];
-        global_grad_addr[2] = &d_color[batch_id][2][0];
-
-        global_grad_addr[3] = &d_cov2d_inv[batch_id][0][0][0];
-        global_grad_addr[4] = &d_cov2d_inv[batch_id][0][1][0];
-        global_grad_addr[5] = &d_cov2d_inv[batch_id][1][1][0];
-
-        global_grad_addr[6] = &d_ndc[batch_id][0][0];
-        global_grad_addr[7] = &d_ndc[batch_id][1][0];
-
-        global_grad_addr[8] = &d_opacity[0][0];
         valid_pix_num = 0;
     }
     __syncthreads();
@@ -450,7 +469,6 @@ __global__ void raster_backward_kernel(
 
         float transmittance = final_transmitance[batch_id][blockIdx.x][y_in_tile][x_in_tile];
         int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile];
-        int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
         float3 d_pixel{ 0,0,0 };
         if (pixel_x < img_w && pixel_y < img_h)
         {
@@ -537,7 +555,7 @@ __global__ void raster_backward_kernel(
                     {
                         sum += gradient_buffer[threadidx * tilesize * tilesize + i];
                     }
-                    atomicAdd(global_grad_addr[threadidx] + point_id, sum);
+                    atomicAdd(global_grad_addr + point_id, sum);
                     if (threadidx == 4)
                     {
                         atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], sum);
@@ -588,14 +606,14 @@ std::vector<at::Tensor> rasterize_backward(
 
     int TilesNumInBlock = 1;
     dim3 Block3d8x8((tilesnum + TilesNumInBlock - 1) / TilesNumInBlock, viewsnum, 1);
-    int ThreadsNum8x8 = 64 * TilesNumInBlock;
+    int ThreadsNum8x8 = tilesize* tilesize * TilesNumInBlock;
     
     switch (tilesize)
     {
     case 8:
         //todo cuda perfer shared
-        //raster_backward_kernel_8x8 << <Block3d8x8, ThreadsNum8x8 >> > (
-        raster_backward_kernel<8> << <Block3d, Thread3d >> > (
+        //raster_backward_kernel_warp_reudction<8> << <Block3d8x8, ThreadsNum8x8 >> > (
+        raster_backward_kernel_multibatch_reduction<8> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -613,7 +631,8 @@ std::vector<at::Tensor> rasterize_backward(
             tilesnum_x, img_h, img_w);
         break;
     case 16:
-        raster_backward_kernel<16> << <Block3d, Thread3d >> >(
+        //raster_backward_kernel_warp_reudction<8> << <Block3d8x8, ThreadsNum8x8 >> > (
+        raster_backward_kernel_multibatch_reduction<16> << <Block3d, Thread3d >> >(
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
