@@ -204,6 +204,184 @@ std::vector<at::Tensor> rasterize_forward(
     return { output_img ,output_transmitance ,output_last_contributor };
 }
 
+
+template <int tilesize>
+__global__ void raster_backward_kernel_per_gaussian(
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc,         //[batch,2,point_num]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,2,2,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,3,point_num]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[1,point_num]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tiles,          //[batch,tiles_num]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> final_transmitance,    //[batch,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,2,point_num]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
+    int tiles_num_x, int img_h, int img_w
+)
+{
+    //todo fix size
+    __shared__ int shared_last_contributor[2][tilesize][tilesize];
+    __shared__ float shared_final_transmitance[2][tilesize][tilesize];
+    __shared__ float3 shared_d_pixel[2][tilesize][tilesize];
+
+    auto block = cg::this_thread_block();
+    auto warp = cg::tiled_partition<32>(block);
+
+    const int batch_id = blockIdx.y;
+    const int tile_index = block.group_index().x * warp.meta_group_size() + warp.meta_group_rank();
+    int tile_id = 0;
+    if (tile_index < tiles.size(1))
+    {
+        tile_id = tiles[batch_id][tile_index];
+    }
+
+    //todo fix
+    if (tile_id != 0 && tile_id < start_index.size(1) - 1)
+    {
+        int pixel_in_tile = warp.thread_rank();
+        int x_in_tile = pixel_in_tile % tilesize;
+        int y_in_tile = pixel_in_tile / tilesize;
+        int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
+        int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
+        shared_last_contributor[warp.meta_group_rank()][y_in_tile][x_in_tile] = last_contributor[batch_id][tile_index][y_in_tile][x_in_tile];
+        shared_final_transmitance[warp.meta_group_rank()][y_in_tile][x_in_tile] = final_transmitance[batch_id][tile_index][y_in_tile][x_in_tile];
+        shared_d_pixel[warp.meta_group_rank()][y_in_tile][x_in_tile] = float3{
+            d_img[batch_id][0][tile_index][y_in_tile][x_in_tile],
+            d_img[batch_id][1][tile_index][y_in_tile][x_in_tile],
+            d_img[batch_id][2][tile_index][y_in_tile][x_in_tile] };
+
+        pixel_in_tile = warp.thread_rank() + warp.size();
+        x_in_tile = pixel_in_tile % tilesize;
+        y_in_tile = pixel_in_tile / tilesize;
+        pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
+        pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
+        shared_last_contributor[warp.meta_group_rank()][y_in_tile][x_in_tile] = last_contributor[batch_id][tile_index][y_in_tile][x_in_tile];
+        shared_final_transmitance[warp.meta_group_rank()][y_in_tile][x_in_tile] = final_transmitance[batch_id][tile_index][y_in_tile][x_in_tile];
+        shared_d_pixel[warp.meta_group_rank()][y_in_tile][x_in_tile] = float3{
+            d_img[batch_id][0][tile_index][y_in_tile][x_in_tile],
+            d_img[batch_id][1][tile_index][y_in_tile][x_in_tile],
+            d_img[batch_id][2][tile_index][y_in_tile][x_in_tile] };
+    }
+    warp.sync();
+
+
+    if (tile_id != 0 && tile_id < start_index.size(1) - 1)
+    {
+        int start_index_in_tile = start_index[batch_id][tile_id];
+        int end_index_in_tile = start_index[batch_id][tile_id + 1];
+        float prefix_mul_value = 0;
+        if (start_index_in_tile == -1)
+        {
+            return;
+        }
+        for (int offset = end_index_in_tile - 1; offset >= start_index_in_tile; offset -= warp.size())
+        {
+            int index = offset - warp.thread_rank();
+            if (index >= start_index_in_tile)
+            {
+                int point_id = sorted_points[batch_id][index];
+                float2 xy{ (ndc[batch_id][0][point_id] + 1.0f) * 0.5f * img_w - 0.5f ,(ndc[batch_id][1][point_id] + 1.0f) * 0.5f * img_h - 0.5f };
+                float4 cur_color{ color[batch_id][0][point_id] ,color[batch_id][1][point_id] ,color[batch_id][2][point_id],opacity[0][point_id] };
+                float3 cur_cov2d_inv{ cov2d_inv[batch_id][0][0][point_id] ,cov2d_inv[batch_id][0][1][point_id] ,cov2d_inv[batch_id][1][1][point_id] };
+
+                float3 grad_color{ 0,0,0 };
+                float3 grad_invcov{ 0,0,0 };
+                float2 grad_mean{ 0,0 };
+                float grad_opacity{ 0 };
+
+                //loop pixel
+                for (int y_in_tile = 0; y_in_tile < tilesize; y_in_tile++)
+                {
+                    for (int x_in_tile = 0; x_in_tile < tilesize; x_in_tile++)
+                    {
+                        int pixel_x = ((tile_id - 1) % tiles_num_x) * tilesize + x_in_tile;
+                        int pixel_y = ((tile_id - 1) / tiles_num_x) * tilesize + y_in_tile;
+                        if (pixel_x >= img_w || pixel_y >= img_h)
+                        {
+                            continue;
+                        }
+                        int pixel_lst_index = shared_last_contributor[warp.meta_group_rank()][y_in_tile][x_in_tile];
+                        float alpha = 0.0f;
+                        float G = 0.0f;
+                        if (index <= pixel_lst_index)
+                        {
+                            float2 d{ xy.x - pixel_x,xy.y - pixel_y };
+                            float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
+                            if (power > 0.0f)
+                            {
+                                G = exp(power);
+                                alpha = min(0.99f, cur_color.w * G);
+                            }
+                            if (alpha < 1.0f / 255.0f)
+                            {
+                                continue;
+                            }
+                         
+                            //prefix_mul(1-alpha);
+                            prefix_mul_value = 1 - alpha;
+                            float transmittance = shared_final_transmitance[warp.meta_group_rank()][y_in_tile][x_in_tile];
+                            transmittance /= prefix_mul_value;
+                            //prefix_add(transmittance*alpha*color.x)
+                            //prefix_add(transmittance*alpha*color.y)
+                            //prefix_add(transmittance*alpha*color.z)
+                            float3 ar{ 0,0,0 };//todo
+
+                            float3 d_pixel=shared_d_pixel[warp.meta_group_rank()][y_in_tile][x_in_tile];
+                            grad_color.x += alpha * transmittance * d_pixel.x;
+                            grad_color.y += alpha * transmittance * d_pixel.y;
+                            grad_color.z += alpha * transmittance * d_pixel.z;
+
+                            //alpha
+                            float d_alpha = 0;
+                            d_alpha += (cur_color.x * transmittance + ar.x / (1.0f - alpha)) * d_pixel.x;
+                            d_alpha += (cur_color.y * transmittance + ar.y / (1.0f - alpha)) * d_pixel.y;
+                            d_alpha += (cur_color.z * transmittance + ar.z / (1.0f - alpha)) * d_pixel.z;
+
+                            //opacity
+                            grad_opacity += G * d_alpha;
+
+                            //cov2d_inv
+                            float d_G = cur_color.w * d_alpha;
+                            float d_power = G * d_G;
+                            grad_invcov.x += -0.5f * d.x * d.x * d_power;
+                            grad_invcov.y += -0.5f * d.x * d.y * d_power;
+                            grad_invcov.z += -0.5f * d.y * d.y * d_power;
+
+                            //mean2d
+                            float d_deltax = (-cur_cov2d_inv.x * d.x - cur_cov2d_inv.y * d.y) * d_power;
+                            float d_deltay = (-cur_cov2d_inv.z * d.y - cur_cov2d_inv.y * d.x) * d_power;
+                            grad_mean.x += d_deltax;
+                            grad_mean.y += d_deltay;
+
+
+                        }
+                    }
+                }
+
+                atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
+                atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
+                atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
+
+                atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
+                atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
+                atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
+                atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
+
+                atomicAdd(&d_ndc[batch_id][0][point_id], grad_mean.x * 0.5f * img_w);
+                atomicAdd(&d_ndc[batch_id][1][point_id], grad_mean.y * 0.5f * img_h);
+
+                atomicAdd(&d_opacity[0][point_id], grad_opacity);
+
+            }
+        }
+    }
+}
+
 template <int tilesize>
 __global__ void raster_backward_kernel_warp_reduction(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
@@ -230,8 +408,10 @@ __global__ void raster_backward_kernel_warp_reduction(
     auto block = cg::this_thread_block();
     auto warp = cg::tiled_partition<32>(block);
     int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
+    //const int x_in_tile = (warp.meta_group_rank() % (tilesize / 8)) * 8 + warp.thread_rank() % 8;
+    //const int y_in_tile = (warp.meta_group_rank() / (tilesize / 8)) * 4 + warp.thread_rank() / 8;
     const int x_in_tile = threadIdx.x;
-    const int y_in_tile = threadIdx.y;
+    const int y_in_tile = threadIdx.x;
 
     const int batch_id = blockIdx.y;
     const int tile_index = blockIdx.x;
@@ -652,6 +832,8 @@ std::vector<at::Tensor> rasterize_backward(
 
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(tilesize, tilesize, 1);
+    int warp_num = 2;
+    dim3 BlockPerGs((tilesnum + warp_num - 1) / warp_num, viewsnum, 1);
 
     cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8>, cudaFuncCachePreferShared);
     cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<16>, cudaFuncCachePreferShared);
@@ -660,8 +842,9 @@ std::vector<at::Tensor> rasterize_backward(
     {
     case 8:
         //todo cuda perfer shared
+        raster_backward_kernel_per_gaussian<8><<<BlockPerGs, warp_num *32>>>(
         //raster_backward_kernel_warp_reduction<8> << <Block3d, Thread3d >> > (
-        raster_backward_kernel_multibatch_reduction<8> << <Block3d, Thread3d >> > (
+        //raster_backward_kernel_multibatch_reduction<8> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -679,8 +862,8 @@ std::vector<at::Tensor> rasterize_backward(
             tilesnum_x, img_h, img_w);
         break;
     case 16:
-        //raster_backward_kernel_warp_reduction<16> << <Block3d, Thread3d >> > (
-        raster_backward_kernel_multibatch_reduction<16> << <Block3d, Thread3d >> >(
+        raster_backward_kernel_warp_reduction<16> << <Block3d, Thread3d >> > (
+        //raster_backward_kernel_multibatch_reduction<16> << <Block3d, Thread3d >> >(
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
