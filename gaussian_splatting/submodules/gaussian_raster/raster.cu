@@ -408,10 +408,8 @@ __global__ void raster_backward_kernel_warp_reduction(
     auto block = cg::this_thread_block();
     auto warp = cg::tiled_partition<32>(block);
     int threadidx = threadIdx.y * blockDim.x + threadIdx.x;
-    //const int x_in_tile = (warp.meta_group_rank() % (tilesize / 8)) * 8 + warp.thread_rank() % 8;
-    //const int y_in_tile = (warp.meta_group_rank() / (tilesize / 8)) * 4 + warp.thread_rank() / 8;
-    const int x_in_tile = threadIdx.x;
-    const int y_in_tile = threadIdx.x;
+    const int x_in_tile = (warp.meta_group_rank() % (tilesize / 8)) * 8 + warp.thread_rank() % 8;
+    const int y_in_tile = (warp.meta_group_rank() / (tilesize / 8)) * 4 + warp.thread_rank() / 8;
 
     const int batch_id = blockIdx.y;
     const int tile_index = blockIdx.x;
