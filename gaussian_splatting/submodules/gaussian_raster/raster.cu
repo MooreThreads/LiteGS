@@ -840,9 +840,9 @@ std::vector<at::Tensor> rasterize_backward(
     {
     case 8:
         //todo cuda perfer shared
-        raster_backward_kernel_per_gaussian<8><<<BlockPerGs, warp_num *32>>>(
+        //raster_backward_kernel_per_gaussian<8><<<BlockPerGs, warp_num *32>>>(
         //raster_backward_kernel_warp_reduction<8> << <Block3d, Thread3d >> > (
-        //raster_backward_kernel_multibatch_reduction<8> << <Block3d, Thread3d >> > (
+        raster_backward_kernel_multibatch_reduction<8> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
