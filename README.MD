@@ -1,6 +1,6 @@
 # LiteGS
 
-**50% Faster!!  Modular!!  Pure Python or CUDA Extension**
+**80% Faster!!  Modular!!  Pure Python or CUDA Extension**
 
 Welcome to this repository, which houses a refactored codebase designed to enhance the flexibility and performance of Gaussian splatting.
 
@@ -62,7 +62,7 @@ The traininig result of LiteGS with mipnerf360 datasets in NVIDIA A100 is shown 
 |  metric\|scene    |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
 |SSIM(Test)  | 0.764   | 0.612   | 0.858   | 0.787   | 0.637   | 0.919   | 0.906   | 0.920   | 0.940   |
-|PSNR(Test)  | 25.454  | 22.038  | 27.622  | 27.174  | 22.768  | 32.187  | 29.307  | 32.100  | 33.225  |
+|PSNR(Test)  | 25.454  | 22.038  | 27.622  | 27.174  | 22.768  | 32.027  | 29.307  | 32.100  | 33.073  |
 |LPIPS(Test) | 0.218   | 0.335   | 0.112   | 0.218   | 0.318   | 0.186   | 0.179   | 0.113   | 0.166   |
 
 
@@ -75,12 +75,12 @@ The metrics of original 3DGS is shown as below for comparison. The metrics demon
 |LPIPS(Test) | 0.200   | 0.320   | 0.107   | 0.223   | 0.317   | 0.220   | 0.204   | 0.129   | 0.205   |
 
 
-The cost of training on NVIDIA A100 is shown as below, illustrating the approximately **50% speedup** achieved by LiteGS.
+The cost of training on NVIDIA A100 is shown as below, illustrating the approximately **80% speedup** achieved by LiteGS.
 
 | repo\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
 | Original(d9fad7b) | 32:09   | 24:37   | 31:34   | 25:58   | 24:08   | 21:59   | 21:45   | 25:41   | 19:10   |
-| LiteGS | 19:46   | 15:41   | 19:34   | 19:19   | 17:36   | 11:26   | 11:50   | 12:44   | 12:17   |
+| LiteGS | 17:19   | 13:45   | 17:24   | 16:56   | 15:26   | 9:31   | 9:40   | 10:34   | 10:02   |
 
 ![image](doc_img/takes_time.png)
 
@@ -184,9 +184,9 @@ We have to trade off the accuracy for speed. The bounding box composed of long-a
 
 ### Rasterization
 
-There is a large efficiency problem in original implement. In the backward of rasterization, the gradient of properties is calculated in each pixel. These gradient need a summation. The original implement directly use AtomicAdd.
+There is a large efficiency problem in original implementation. During the backward pass of rasterization, the gradient of properties is calculated for each pixel and these gradient need to be summed. The original implementation directly uses AtomicAdd.
 
-A better implement is the reduction algorithm and many repo has already used this method. The code is followed.
+A more efficient implementation is the reduction algorithm, which many repositories have already adopted. Here is an example of the code:
 
 ```
 for(int i=element_num;i > 16;i/=2)
@@ -211,7 +211,15 @@ for(int i=16;i > 0;i/=2)
 } 
 ```
 
-It is not a best implement. The warp stall is serious. From data-oriented perspective, we need a multibatch reduction. The code is followed.
+The backward pass of rasterizing the 2D Gaussian plane is the most time-consuming step in the entire training process, and it is necessary to pay more attention to it.
+
+#### Warp-level reduction
+In some situations, skipping the reduction in shared memory and directly using Warp-level reduction followed by atomicadd is the best implementation. Specifically, if we have enough ROP units on device, the reduction on shared memory is not necessary. ROP unit is a haredware architecture in L2 cache to accelerate the atomic operation in NVIDIA gpu(Maybe some prue compute card will not have rop unit, but there must be some haredware unit resbonsible for global atomic operation. For brevity, we still use ROP units to refer to these hardware units). If there are enough ROP units, the atomicadd operation will not be the bottleneck. The key is the ratio between the compute units and ROP units. For example, Nvidia Turing architecture containing 36 SMs and 96 ROP units while Nvidia Ampere architecture containing 84 SMs and 112 ROP units.
+
+In a word, warp-level reduction is a simple implementation and takes good performance. For some devices, it is the best choice.
+
+#### multibatch reduction
+For the reduction in shared memory, there are many optimizations. Each pixel contain 9 float type variable as gradient which means that we are not doing a simple reduction but a multibatch reduction. Assigning threads to multiple batches instead of for-loop batches can greatly speed up reudction.
 ```
 for (int property_id = threadidx / 32; property_id < property_num ; property_id+= wraps_num_in_block)
 {
@@ -231,3 +239,21 @@ for (int property_id = threadidx / 32; property_id < property_num ; property_id+
 }
 ```
 
+Besides, the empty fragment is a big problem. We create a list of visible primitives in current tile however the visible primitives may not fill the entire tile. Some primitive create a lot of empty fragments. Using a smaller tilesize can reduce this sideeffect but it increase the task size in sort stage. From our testing, change the tilesize from 16x16 to 8x8 is beneficial.
+
+Compacting the gradient in shared memory and skipping the empty fragments in gradient summation is a further solution. Compacting the valid fragments and store the gradient in shared memory. After a block synchronize, sum the gradients in shared memory. The code is followed.
+```
+__shared__ float gradient[tilesize*tilesize];
+__shared__ int valid_pix_num;
+for(point:points)
+{
+    float alpha=CalcAlpha(threadIdx.xy,point);
+    if(alpha>1.0f/255)
+    {
+        int index=AtomicAdd(&valid_pix_num);
+        gradient[index]=CalcGradient(point);
+    }
+}
+__syncthreads();
+Sum(gradient);
+```
