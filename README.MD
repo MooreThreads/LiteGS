@@ -16,7 +16,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 2. **Flexible**: PytorchGS offers two sets of modular APIs. One is implemented in CUDA, while the other is purely Python-based. You can easily modify the calculation logic in the Python API without delving into C code, allowing for rapid prototyping of your ideas. Moreover, we’ve carefully designed the GPU memory layout to ensure the Python API maintains reasonable training speeds. For performance enthusiasts, the CUDA-implemented API is also available for modification.
 
-3. **Better Performance and Fewer Resources**: LiteGS not only surpasses the original 3DGS code in terms of flexibility and readability but also achieves a significant speedup of 50%. Our optimizations have been focused on enhancing training performance while reducing GPU memory usage.
+3. **Better Performance and Fewer Resources**: LiteGS not only surpasses the original 3DGS code in terms of flexibility and readability but also achieves a significant speedup of 80%. Our optimizations have been focused on enhancing training performance while reducing GPU memory usage.
 
 4. **no-new**: We’ve preserved the original 3DGS algorithm, with only minor training logic adjustments due to the BVH creation.
 
@@ -243,7 +243,7 @@ Besides, the empty fragment is a big problem. We create a list of visible primit
 
 Compacting the gradient in shared memory and skipping the empty fragments in gradient summation is a further solution. Compacting the valid fragments and store the gradient in shared memory. After a block synchronize, sum the gradients in shared memory. The code is followed.
 ```
-__shared__ float gradient[tilesize*tilesize];
+__shared__ float gradient[9][tilesize*tilesize];
 __shared__ int valid_pix_num;
 for(point:points)
 {
@@ -251,9 +251,18 @@ for(point:points)
     if(alpha>1.0f/255)
     {
         int index=AtomicAdd(&valid_pix_num);
-        gradient[index]=CalcGradient(point);
+        GradientPack grad_pack=CalcGradient(point);
+        gradient[0][index]=grad_pack.ndc[0];
+        gradient[1][index]=grad_pack.ndc[1];
+        gradient[2][index]=grad_pack.cov_inv[0][0];
+        gradient[3][index]=grad_pack.cov_inv[0][1];
+        gradient[4][index]=grad_pack.cov_inv[1][1];
+        gradient[5][index]=grad_pack.rgb[0];
+        gradient[6][index]=grad_pack.rgb[1];
+        gradient[7][index]=grad_pack.rgb[2];
+        gradient[8][index]=grad_pack.alpha;
     }
 }
 __syncthreads();
-Sum(gradient);
+MultibatchSum(gradient);
 ```
