@@ -1,24 +1,24 @@
 # LiteGS
 
-**80% Faster!!  Modular!!  Pure Python or CUDA Extension**
+**80% Faster, Modular, and Available in Pure Python or CUDA**
 
-Welcome to this repository, which houses a refactored codebase designed to enhance the flexibility and performance of Gaussian splatting.
+This repository provides a refactored codebase aimed at improving the flexibility and performance of Gaussian splatting.
 
 ## Background
-Gaussian splatting is a powerful technique used in various computer graphics and vision applications. It involves mapping a set of points onto a grid using Gaussian distributions, allowing for efficient and accurate representation of spatial data. However, the original implementation (https://github.com/graphdeco-inria/gaussian-splatting) of Gaussian splatting in PyTorch posed certain challenges: 
+Gaussian splatting is a powerful technique used in various computer graphics and vision applications. It involves representing 3D data as Gaussian distributions in space, allowing for efficient and accurate representation of spatial data. However, the original implementation (https://github.com/graphdeco-inria/gaussian-splatting) of Gaussian splatting in PyTorch faced several limitations: 
 
-1. Both the forward and backward passes were encapsulated within a single PyTorch extension function, making it difficult to access intermediate variables without delving into the C code.
-2. Even if one attempted to modify the C code, they would have to derive the gradient formula manually and subsequently implement those formulas in the backward pass.
+1. The forward and backward computations were encapsulated in two distinct PyTorch extension functions. Although this design significantly accelerated training, it restricted access to intermediate variables unless the underlying C code was modified.
+2. Modifying any step of the algorithm required manually deriving gradient formulas and implementing them in the backward pass, adding considerable complexity.
 
 ## Features
 
-1. **Modular Design**: The refactored Gaussian splatting implementation separates the forward and backward into multiple PyTorch extension functions, promoting greater modularity and ease of access intermediate data. Besides, by leveraging PyTorch Autograd, the refactored codebase eliminates the need for deriving the gradient formula manually.
+1. **Modular Design**: The refactored codebase breaks forward and backward into multiple PyTorch extension functions, significantly improving modularity and enabling easier access to intermediate variables. Additionally, in some cases, leveraging PyTorch Autograd eliminates the need to manually derive gradient formulas.
 
-2. **Flexible**: PytorchGS offers two sets of modular APIs. One is implemented in CUDA, while the other is purely Python-based. You can easily modify the calculation logic in the Python API without delving into C code, allowing for rapid prototyping of your ideas. Moreover, we’ve carefully designed the GPU memory layout to ensure the Python API maintains reasonable training speeds. For performance enthusiasts, the CUDA-implemented API is also available for modification.
+2. **Flexible**: LiteGS provides two modular APIs—one implemented in CUDA and the other in Python. The Python-based API facilitates straightforward modifications to calculation logic without requiring expertise in C code, enabling rapid prototyping. Additionally, tensor dimensions are permuted to maintain competitive training speeds for the Python API. For performance-critical tasks, the CUDA-based API is fully customizable.
 
-3. **Better Performance and Fewer Resources**: LiteGS not only surpasses the original 3DGS code in terms of flexibility and readability but also achieves a significant speedup of 80%. Our optimizations have been focused on enhancing training performance while reducing GPU memory usage.
+3. **Better Performance and Fewer Resources**: LiteGS achieves an 80% speed improvement over the original 3DGS implementation while reducing GPU memory usage. These optimizations enhance training efficiency without compromising flexibility or readability.
 
-4. **no-new**: We’ve preserved the original 3DGS algorithm, with only minor training logic adjustments due to the BVH creation.
+4. **Algorithm Preservation**: LiteGS retains the core 3DGS algorithm, making only minor adjustments to the training logic due to BVH creation.
 
 
 ## Getting Started
@@ -55,9 +55,11 @@ Begin training with the following command:
 
 ## Faster
 
-The metrics is highly relay on the colmap result. we using the processed data same as the RetinaGS( https://github.com/MooreThreads/RetinaGS ).
+The performance metrics are heavily dependent on the COLMAP results. we use the same processed data as RetinaGS( https://github.com/MooreThreads/RetinaGS ).
 
-The traininig result of LiteGS with mipnerf360 datasets in NVIDIA A100 is shown as below. The training and eval command is `python ./full_eval.py --mipnerf360 SOURCE_PATH`
+The training results of LiteGS using the Mip-NeRF 360 dataset on an NVIDIA A100 GPU are presented below. The training and evaluation command used is:
+
+`python ./full_eval.py --mipnerf360 SOURCE_PATH`
 
 |  metric\|scene    |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
@@ -66,7 +68,7 @@ The traininig result of LiteGS with mipnerf360 datasets in NVIDIA A100 is shown 
 |LPIPS(Test) | 0.218   | 0.335   | 0.112   | 0.218   | 0.318   | 0.186   | 0.179   | 0.113   | 0.166   |
 
 
-The metrics of original 3DGS is shown as below for comparison. The metrics demonstrate that our refactored code does not compromise accuracy.
+For comparison, the metrics of the original 3DGS implementation are as follows. These results demonstrate that the refactored LiteGS code maintains accuracy while significantly improving performance.
 
 |metric\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
@@ -75,7 +77,7 @@ The metrics of original 3DGS is shown as below for comparison. The metrics demon
 |LPIPS(Test) | 0.200   | 0.320   | 0.107   | 0.223   | 0.317   | 0.220   | 0.204   | 0.129   | 0.205   |
 
 
-The cost of training on NVIDIA A100 is shown as below, illustrating the approximately **80% speedup** achieved by LiteGS.
+The training times for LiteGS and the original 3DGS implementation on an NVIDIA A100 GPU are summarized below, illustrating an approximately **80%** speedup achieved by LiteGS.
 
 | repo\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
@@ -86,48 +88,48 @@ The cost of training on NVIDIA A100 is shown as below, illustrating the approxim
 
 ## Modular
 
-In contrast to the original 3DGS, which encapsulates almost the entire rendering process into a single torch extension function, LiteGS divides the rendering process into several functions. Users can access intermediate variables and insert compute logic with Python scripts instead of modifying C code. LiteGS breaks down the rendering into the following steps:
+Unlike the original 3DGS, which encapsulates nearly the entire rendering process into a single PyTorch extension function, LiteGS divides the process into multiple modular functions. This design allows users to access intermediate variables and integrate custom computation logic using Python scripts, eliminating the need to modify C code. The rendering process in LiteGS is broken down into the following steps:
 
 1. Cluster Culling
     
-    LiteGS devide the gaussian points into servel chunks and each chunk include 1024 points. The first step of rendering is the frustum culling. 
+    LiteGS divides the Gaussian points into several chunks, with each chunk containing 1,024 points. The first step in the rendering pipeline is frustum culling, where points outside the camera's view are filtered out.
 
 2. Cluster Compact
     
-    Similar to mesh rendering, LiteGS compacts visible primitives after frustum culling. Specifically, it compacts each property of Gaussian points into sequential memory.
+    Similar to mesh rendering, LiteGS compacts visible primitives after frustum culling. Each property of the visible points is reorganized into sequential memory to improve processing efficiency.
 
 3. 3DGS Projection
     
-    This step projects Gaussian points into screen space, with no changes from the original version.
+    Gaussian points are projected into screen space in this step, with no modifications made compared to the original 3DGS implementation.
 
 4. Create Visibility Table
     
-    The forth step is creating the visibility table which maps the tile and its visible primitives.
+    A visibility table is created in this step, mapping tiles to their visible primitives, enabling efficient parallel processing in subsequent stages.
 
 5. Rasterization
     
-    The final step is rasterization. Each tile rasterize its visible primitives in parallel.
+    In the final step, each tile rasterizes its visible primitives in parallel, ensuring high computational efficiency.
 
-Due to LiteGS’s clustering of point clouds, density control requires a new implementation. LiteGS clones and splits points each epoch, clustering them into new chunks without rebuilding the BVH. The opacity of points is reset and invalid points are removed every 10 epochs, followed by BVH rebuilding. The opacity reset frequency in LiteGS is faster than in original 3DGS, so we opt for decaying opacity instead of resetting it close to zero.
+LiteGS makes slight adjustments to density control to accommodate its clustering-based approach. Points are cloned and split at each epoch, then reorganized into new chunks without the need to rebuild the BVH. Every 10 epochs, point opacity is reset, and invalid points are removed, followed by a BVH rebuild. Compared to the original 3DGS, LiteGS resets opacity more frequently and introduces an opacity decay mechanism instead of resetting it to near zero. These minor changes maintain compatibility with LiteGS's clustering-based approach.
 
 ## Flexible
 
-Inside `gaussian_splatting/wrapper.py`, there are two sets of GS function. Functions with the “v1” suffix are implemented in Python, while those with the “v2” suffix are implemented as CUDA extensions. The CUDA extensions offer significant performance improvements but lack the flexibility of Python. The choice between the two implementations depends on the specific use case:
+The gaussian_splatting/wrapper.py file contains two sets of APIs, offering flexibility in choosing between Python-based and CUDA-based implementations. Functions with the suffix “v1” represent the Python-based API, while those with the suffix “v2” correspond to the CUDA-based API. While the CUDA-based API delivers significant performance improvements, it lacks the flexibility. The choice between these implementations depends on the specific use case:
 
-* PythonScript: Offers greater flexibility. It is suitable for rapid prototyping and development where the training speed is not critical.
+* python-based api: Provides greater flexibility, making it ideal for rapid prototyping and development where training speed is less critical.
 
-* CudaExtension: Provides the highest performance and is recommended for production environments where training speed is of utmost importance.
+* cuda-based api: Offers the highest performance and is recommended for production environments where training speed is a priority.
 
-To switch between the two implementations, simply modify the `gaussian_splatting/wrapper.py` file
+Switching between the two implementations is straightforward: simply modify the gaussian_splatting/wrapper.py file.
 
-Here is an example that demonstrates the flexibility of LiteGS. In this instance, our goal is to create a more precise bounding box for a 2D Gaussian when generating visibility tables. In the original 3DGS, the bounding box for the 2D Gaussian is set to three times the length of the major axis. However, this coefficient can be reduced if opacity is taken into account.
+Here is an example that demonstrates the flexibility of LiteGS. In this instance, our goal is to create a more precise bounding box for a 2D Gaussian when generating visibility tables. In the original 3DGS implementation, the bounding box is determined as three times the length of the major axis of the Gaussian. However, incorporating opacity can allow for a smaller bounding box.
 
-Let’s attempt to implement this change in the original 3DGS. The tasks to be completed are as follows:
-* Modify the C++ functions, including both declarations and definitions.
-* Modify the CUDA global function.
-* Compile
+To implement this change in the original 3DGS, the following steps are required:
+* Modify the C++ function declarations and definitions
+* Update the CUDA global function
+* Recompile
 
-In contrast, with LiteGS, only the Python scripts need to be altered.
+In LiteGS, the same change can be achieved by simply editing a Python script.
 
 original:
 ```python
@@ -147,46 +149,46 @@ If you find this project useful in your research, please consider cite:
 @misc{LiteGS,
     title={LiteGS},
     author={LiteGS Contributors},
-    howpublished = {\url{https://sh-code.mthreads.com/ai/Pytorch-GaussianSplatting}},
+    howpublished = {\url{https://github.com/MooreThreads/LiteGS}},
     year={2024}
 }
 ```
 
-## Performance Optimization Log
+## Performance Optimization
 
-In this section, we detail the key optimizations implemented at each stage mentioned earlier.
+This section outlines the key optimizations implemented at each stage to enhance performance.
 
 ### high level
 
-At a high level, We **restructured the memory layout**. The dimension  order of tensors are altered from [points,property] to [property,points]. After this changing, the tensor computation implemented by pure python will load and store sequencially.
+At a high level, **tensor dimensions are permuted** from [points,property] to [property,points]. This change ensures that tensor computations implemented in pure Python load and store data sequentially, improving memory access efficiency.
 
 ### DensityControl
 
-**A simple BVH** is build for density control. In contrast to the original implementation, where new points are appended to the end of tensors, leading to decreasing spatial locality, our approach maintains it.
+To maintain spatial locality during density control, we implemented **a simple BVH** (Bounding Volume Hierarchy). Unlike the original implementation, where new points are appended to the end of tensors—resulting in reduced spatial locality—our approach organizes points to preserve spatial coherence.
 
 ### Cull and Compact
 
-The original implementation culls primitives directly, which can be time-consuming in large scenes. We optimized this by performing **frustum culling** on cluster AABBs (Axis-Aligned Bounding Boxes) instead.
+The original implementation performed direct culling of primitives, which could become time-consuming in large scenes. We optimized this by performing **frustum culling on cluster AABB**(Axis-Aligned Bounding Box) instead, significantly reducing computational overhead.
 
-Beside, we **compact** the parameters of gaussian points which improve the gpu utilization.  The original implementation skips calculations for culled Gaussian points but the gpu schedule instruction in wrap(32 threads).
+Additionally, we implemented **compaction** of Gaussian point parameters to improve GPU utilization. While the original implementation skipped computations for culled Gaussian points, it left the GPU scheduler underutilized due to warp-based execution (32 threads). By compacting Gaussian point parameters, GPU resource utilization is improved.
 
-An important note is that compaction should be applied to Gaussian point clusters. Applying it to primitives can slow down the backward pass due to out-of-order writes.
+It is important to note that compaction should be applied to Gaussian point clusters rather than individual primitives. Applying it at the primitive level can slow down the backward pass due to out-of-order memory writes.
 
 ### Projection
 
-The projection step has nothing changed with original implements. We highly recommend you to using the cuda implemented function instead of the prue python function. The essential different between these two functions is whether we write the intermediate data into the gpu global memory. Projection step contain servel consecutive 4x4 matmul. Writing the inermediate data into gpu global memory will significantly enlarge data transfer overhead.
+The projection step remains unchanged from the original implementation. We highly recommend using the cuda implemented function instead of the python implemented function. The essential different between these two functions is whether we write the intermediate data into the gpu global memory. The projection step involves several consecutive 4x4 matrix multiplications. Writing intermediate data to GPU global memory significantly increases data transfer overhead.
 
 ### Create Visibility Table
 
-Same as the "binning" step in compute raster, the purpose of this step is mapping the gaussian points and tiles. The key of this step is create a more accurate bounding box for each primitive. An accurate visibility table will reduce computation. Original 3DGS use the long axis of 2D gaussian to create a bounding square. It is rough. **Taking the transparency and short axis into consideration**, LiteGS create a accurate bounding box of 2D gaussian.
+Same as the "binning" step in compute raster, the purpose of this step is to map the Gaussian points and tiles. The critical optimization of this step is creating a more accurate bounding box for each primitive. An accurate visibility table will reduce computation in following step. Original 3DGS use the major axis of 2D Gaussian to create a bounding square which is a rough approximation. **Taking the alpha and minor axis into consideration**, LiteGS generates a more accurate bounding box for the 2D Gaussian.
 
-We have to trade off the accuracy for speed. The bounding box composed of long-axis and short-axis need 2 pass to create the visibility table. One pass for the allocate size and One pass for filling the table. 2D AABB is easy to get the allocate size so it only need one pass. LiteGS choose to using 2D AABB.
+There is a trade-off between accuracy and speed. The bounding box composed of major axis and minor axis need 2 pass to create the visibility table. One pass to allocate memory size and another to fill the table. 2D AABB is easy to get the allocate size so it only need one pass. LiteGS opts to use the 2D AABB for efficiency.
 
 ### Rasterization
 
-There is a large efficiency problem in original implementation. During the backward pass of rasterization, the gradient of properties is calculated for each pixel and these gradient need to be summed. The original implementation directly uses AtomicAdd.
+The original implementation of rasterization contains a significant efficiency issue. During the backward of rasterization, gradients of properties are computed for each pixel, and these gradients need to be summed. The original implementation uses AtomicAdd directly on global memory, which is inefficient for large-scale computations.
 
-A more efficient implementation is the reduction algorithm, which many repositories have already adopted. Here is an example of the code:
+A more efficient approach involves using a reduction algorithm. Below is the pseudo-code for such an implementation:
 
 ```
 for(int i=element_num;i > 16;i/=2)
@@ -211,15 +213,15 @@ for(int i=16;i > 0;i/=2)
 } 
 ```
 
-The backward pass of rasterizing the 2D Gaussian plane is the most time-consuming step in the entire training process, and it is necessary to pay more attention to it.
+The backward pass for rasterizing a 2D Gaussian plane is one of the most computationally expensive steps in the training process, requiring careful optimization.
 
-#### Warp-level reduction
-In some situations, skipping the reduction in shared memory and directly using Warp-level reduction followed by atomicadd is the best implementation. Specifically, if we have enough ROP units on device, the reduction on shared memory is not necessary. ROP unit is a haredware architecture in L2 cache to accelerate the atomic operation in NVIDIA gpu(Maybe some prue compute card will not have rop unit, but there must be some haredware unit resbonsible for global atomic operation. For brevity, we still use ROP units to refer to these hardware units). If there are enough ROP units, the atomicadd operation will not be the bottleneck. The key is the ratio between the compute units and ROP units. For example, Nvidia Turing architecture containing 36 SMs and 96 ROP units while Nvidia Ampere architecture containing 84 SMs and 112 ROP units.
+#### Warp-level Reduction
+In some cases, skipping shared memory reduction and directly performing warp-level reduction followed by AtomicAdd is the most efficient solution. Specifically, if the device has sufficient ROP (Raster Operations) units, shared memory reduction may be unnecessary. ROP unit is a hardware architecture in L2 cache to accelerate the atomic operation in NVIDIA gpu. While some GPUs may lack ROP units, all GPUs have hardware responsible for global atomic operations. For simplicity, we refer to these as ROP units. If the ratio of compute units to ROP units is favorable (e.g., Nvidia Turing architecture has 36 SMs and 96 ROP units, while Nvidia Ampere architecture has 84 SMs and 112 ROP units), AtomicAdd does not become a bottleneck.
 
-In a word, warp-level reduction is a simple implementation and takes good performance. For some devices, it is the best choice.
+In summary, warp-level reduction is a straightforward and efficient implementation that can be optimal for certain hardware configurations.
 
-#### multibatch reduction
-For the reduction in shared memory, there are many optimizations. Each pixel contain 9 float type variable as gradient which means that we are not doing a simple reduction but a multibatch reduction. Assigning threads to multiple batches instead of for-loop batches can greatly speed up reudction.
+#### Multibatch Reduction
+For reductions in shared memory, further optimizations are necessary. Each pixel typically involves 9 floating-point gradients, meaning the reduction process must handle multiple batches (multibatch reduction) instead of a simple one. Assigning threads to batches instead of relying on for-loops can significantly accelerate the reduction. Below is an optimized implementation:
 ```
 for (int property_id = threadidx / 32; property_id < property_num ; property_id+= wraps_num_in_block)
 {
@@ -239,9 +241,9 @@ for (int property_id = threadidx / 32; property_id < property_num ; property_id+
 }
 ```
 
-Besides, the empty fragment is a big problem. We create a list of visible primitives in current tile however the visible primitives may not fill the entire tile. Some primitive create a lot of empty fragments. Using a smaller tilesize can reduce this sideeffect but it increase the task size in sort stage. From our testing, change the tilesize from 16x16 to 8x8 is beneficial.
+Empty fragments are a notable problem in this process. Although the primitives visible to currrent tile are listed, they are often too small to fully occupy entire tile, creating empty fragments. Using smaller tiles (e.g., reducing the size from 16x16 to 8x8) can mitigate this issue but increases the task size in step 4: Create Visibility Table. Based on our tests, reducing tile size from 16x16 to 8x8 improves performance.
 
-Compacting the gradient in shared memory and skipping the empty fragments in gradient summation is a further solution. Compacting the valid fragments and store the gradient in shared memory. After a block synchronize, sum the gradients in shared memory. The code is followed.
+Compacting the gradient in shared memory and skipping the empty fragments in gradient summation is a further solution. By compacting valid fragments and storing their gradients in shared memory sequentially, followed by a block synchronization step, the gradients can be efficiently summed. Below is the implementation:
 ```
 __shared__ float gradient[9][tilesize*tilesize];
 __shared__ int valid_pix_num;
