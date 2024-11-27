@@ -264,7 +264,7 @@ for(point:points)
         gradient[7][index]=grad_pack.rgb[2];
         gradient[8][index]=grad_pack.alpha;
     }
+    __syncthreads();
+    MultibatchSum(gradient);
 }
-__syncthreads();
-MultibatchSum(gradient);
 ```
