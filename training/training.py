@@ -2,9 +2,9 @@ from gaussian_splatting.model import GaussianSplattingModel
 from training.arguments import OptimizationParams,ModelParams
 from gaussian_splatting.scene import GaussianScene
 from loader.InfoLoader import CameraInfo,ImageInfo,PinHoleCameraInfo
-import training.loss.ssim
 from training.view_manager import ViewManager
 import training.loss
+import fused_ssim
 from training.densitycontroller import DensityControllerOfficial
 from util.statistic_helper import StatisticsHelperInst
 from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
@@ -175,7 +175,7 @@ class GaussianTrainer:
 
             #### loss ###
             l1_loss=training.loss.l1_loss(img,ground_truth_batch)
-            ssim_loss=ssim_module(img,ground_truth_batch)
+            ssim_loss=fused_ssim.fused_ssim(img,ground_truth_batch)
             loss=(1.0-self.opt_params.lambda_dssim)*l1_loss+self.opt_params.lambda_dssim*(1-ssim_loss)
             loss.backward()
             log_loss+=l1_loss.detach()

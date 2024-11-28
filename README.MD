@@ -35,7 +35,15 @@ To get started, you’ll need to install the required submodules:
 
     `python setup.py install`
 
-2. Install gaussian_raster
+2. Install fused-ssim
+
+    `cd gaussian_splatting/submodules/fussed_ssim`
+
+    `python setup.py build_ext --inplace -j8`
+
+    `python setup.py install`
+
+3. Install gaussian_raster
 
     `cd gaussian_splatting/submodules/gaussian_raster`
 
