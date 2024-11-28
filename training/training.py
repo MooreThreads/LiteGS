@@ -152,7 +152,6 @@ class GaussianTrainer:
         counter=0
         iter_range=list(range(0,total_views_num,batch_size))
         random.shuffle(iter_range)
-        ssim_module=training.loss.ssim.SSIM(data_range=1.0).cuda()
 
         ### iter batch ###
         for iter_i,i in enumerate(iter_range):
