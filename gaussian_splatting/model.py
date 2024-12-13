@@ -317,7 +317,7 @@ class GaussianSplattingModel:
         allocate_size=total_tiles_num_batch.max().cpu()
 
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=torch.ops.RasterBinning.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,int(allocate_size),int(tilesX))
+        my_table=torch.ops.GaussianRaster.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,int(allocate_size),int(tilesX))
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
@@ -326,7 +326,7 @@ class GaussianSplattingModel:
         sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=torch.ops.RasterBinning.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start_index=torch.ops.GaussianRaster.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
         return tile_start_index,sorted_pointId,sorted_tileId,b_visible
     
@@ -351,6 +351,7 @@ class GaussianSplattingModel:
             frustumplane=cg_torch.viewproj_to_frustumplane(view_project_matrix)
             chunk_visibility=cg_torch.frustum_culling_aabb(frustumplane,self.chunk_AABB_origin,self.chunk_AABB_extend)
             chunk_visibility=chunk_visibility.any(dim=0)
+            visible_chunkid=chunk_visibility.nonzero()[:,0]
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.set_compact_mask(chunk_visibility)
 
@@ -379,4 +380,4 @@ class GaussianSplattingModel:
             tiles=self.cached_tiles_map
         tile_img,tile_transmitance=self.raster(ndc_pos_batch,inv_cov2d,colors,opacities,tile_start_index,sorted_pointId,sorted_tileId,tiles)
 
-        return tile_img,tile_transmitance.unsqueeze(1)
+        return tile_img,tile_transmitance.unsqueeze(1),visible_chunkid

@@ -5,7 +5,7 @@
 #include "transform.h"
 
 
-TORCH_LIBRARY(RasterBinning, m) {
+TORCH_LIBRARY(GaussianRaster, m) {
   m.def("duplicateWithKeys", duplicateWithKeys);
   m.def("tileRange", tileRange);
   m.def("rasterize_forward", rasterize_forward);
@@ -22,4 +22,5 @@ TORCH_LIBRARY(RasterBinning, m) {
   m.def("inv_2x2matrix_backward", inv_2x2matrix_backward);
   m.def("compact_visible_params_forward", compact_visible_params_forward);
   m.def("compact_visible_params_backward", compact_visible_params_backward);
+  m.def("adamUpdate", adamUpdate);
 }

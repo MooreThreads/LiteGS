@@ -13,13 +13,13 @@ class CreateTransformMatrixFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
         ctx.save_for_backward(quaternion,scale)
-        transform_matrix=torch.ops.RasterBinning.createTransformMatrix_forward(quaternion,scale)
+        transform_matrix=torch.ops.GaussianRaster.createTransformMatrix_forward(quaternion,scale)
         return transform_matrix
     
     @staticmethod
     def backward(ctx,grad_transform_matrix:torch.Tensor):
         (quaternion,scale)=ctx.saved_tensors
-        grad_quaternion,grad_scale=torch.ops.RasterBinning.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
+        grad_quaternion,grad_scale=torch.ops.GaussianRaster.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
         return grad_quaternion,grad_scale
 
 def create_transform_matrix_internal_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
@@ -82,7 +82,7 @@ def create_rayspace_transform(point_positions:torch.Tensor,view_matrix:torch.Ten
     def create_rayspace_transform_v2(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
         '''faster'''
         t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
-        J=torch.ops.RasterBinning.jacobianRayspace(t,camera_focal,bTranspose)
+        J=torch.ops.GaussianRaster.jacobianRayspace(t,camera_focal,bTranspose)
         return J
     
     return create_rayspace_transform_v2(point_positions,view_matrix,camera_focal,bTranspose)
@@ -133,7 +133,7 @@ class World2NdcFunc(torch.autograd.Function):
     @staticmethod
     def backward(ctx,grad_ndc_pos:torch.Tensor):
         (view_project_matrix,ndc_pos,repc_hom_w)=ctx.saved_tensors
-        position_grad=torch.ops.RasterBinning.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
+        position_grad=torch.ops.GaussianRaster.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
         return (position_grad,None)
 
 def wrold2ndc(position:torch.Tensor,view_project_matrix:torch.Tensor)->torch.Tensor:
@@ -187,13 +187,13 @@ class Cov2dCreateV2Func(torch.autograd.Function):
     @staticmethod
     def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
         ctx.save_for_backward(J,view_matrix,transform_matrix)
-        cov2d=torch.ops.RasterBinning.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
+        cov2d=torch.ops.GaussianRaster.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
         return cov2d
     
     @staticmethod
     def backward(ctx,grad_cov2d:torch.Tensor):
         (J,view_matrix,transform_matrix)=ctx.saved_tensors
-        transform_matrix_grad=torch.ops.RasterBinning.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
+        transform_matrix_grad=torch.ops.GaussianRaster.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
         return (None,None,transform_matrix_grad)
     
 class Cov2dCreateV1Func(torch.autograd.Function):
@@ -244,7 +244,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
         img_h:int,
         img_w:int
     ):
-        img,transmitance,lst_contributor=torch.ops.RasterBinning.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+        img,transmitance,lst_contributor=torch.ops.GaussianRaster.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                                                    tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=tile_size
@@ -259,7 +259,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
 
 
-        grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.RasterBinning.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+        grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.GaussianRaster.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                                                                         transmitance,lst_contributor,grad_out_color,
                                                                                                         tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
 
@@ -320,7 +320,7 @@ class SphericalHarmonicFunc(torch.autograd.Function):
         ctx.save_for_backward(dirs)
         ctx.degree=deg
         ctx.sh_rest_dim=sh_rest.shape[0]
-        rgb=torch.ops.RasterBinning.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
+        rgb=torch.ops.GaussianRaster.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
         return rgb
     
     @staticmethod
@@ -328,7 +328,7 @@ class SphericalHarmonicFunc(torch.autograd.Function):
         (dirs,)=ctx.saved_tensors
         degree=ctx.degree
         sh_rest_dim=ctx.sh_rest_dim
-        sh_base_grad,sh_reset_grad=torch.ops.RasterBinning.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs)
+        sh_base_grad,sh_reset_grad=torch.ops.GaussianRaster.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs)
 
 
         return None,sh_base_grad,sh_reset_grad,None
@@ -350,14 +350,14 @@ def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor
 class EighAndInverse2x2Func(torch.autograd.Function):
     @staticmethod
     def forward(ctx,input_matrix:torch.Tensor):
-        val,vec,inverse_matrix=torch.ops.RasterBinning.eigh_and_inv_2x2matrix_forward(input_matrix)
+        val,vec,inverse_matrix=torch.ops.GaussianRaster.eigh_and_inv_2x2matrix_forward(input_matrix)
         ctx.save_for_backward(inverse_matrix)
         return val,vec,inverse_matrix
     
     @staticmethod
     def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
         (inverse_matrix,)=ctx.saved_tensors
-        matrix_grad:torch.Tensor=torch.ops.RasterBinning.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+        matrix_grad:torch.Tensor=torch.ops.GaussianRaster.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
         matrix_grad.nan_to_num_(0)
         return matrix_grad
     
@@ -396,7 +396,7 @@ class CompactVisibleParamsFunc(torch.autograd.Function):
                 sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
         visible_mask_cumsum=visible_mask.cumsum(0)
         visible_chunks_num=int(visible_mask_cumsum[-1].cpu())
-        compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,reverse_map=torch.ops.RasterBinning.compact_visible_params_forward(
+        compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,reverse_map=torch.ops.GaussianRaster.compact_visible_params_forward(
             visible_chunks_num,
             visible_mask,
             visible_mask_cumsum,
@@ -412,11 +412,18 @@ class CompactVisibleParamsFunc(torch.autograd.Function):
         return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity
     
     @staticmethod
-    def backward(ctx,compacted_pos_grad:torch.Tensor,compacted_scale_grad:torch.Tensor,compacted_rot_grad:torch.Tensor,compacted_sh_base_grad:torch.Tensor,compacted_sh_rest_grad:torch.Tensor,compacted_opacity_grad:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+    def backward(ctx,*args):
         (reverse_map,)=ctx.saved_tensors
         chunk_num=ctx.chunk_num
         chunk_size=ctx.chunk_size
-        grads=torch.ops.RasterBinning.compact_visible_params_backward(chunk_num,chunk_size,reverse_map,compacted_pos_grad,compacted_scale_grad,compacted_rot_grad,compacted_sh_base_grad,compacted_sh_rest_grad,compacted_opacity_grad)
+        grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
+        if True:#todo
+            for grad in args:
+                sparse_value=grad.reshape(-1,chunk_size)
+                placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim(),sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-1],chunk_num,chunk_size))
+                grads.append(placeholder_grad)
+        else:
+            grads=torch.ops.GaussianRaster.compact_visible_params_backward(chunk_num,chunk_size,reverse_map,*args)
         return None,*grads
 
 def compact_visible_params(visible_mask:torch.Tensor,
@@ -435,3 +442,8 @@ def compact_visible_params(visible_mask:torch.Tensor,
             compacted_additional_params.append(compacted_tensor)
 
     return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,compacted_additional_params
+
+def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
+                       lr:float, b1:float, b2:float, eps:float):
+    torch.ops.GaussianRaster.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+    return

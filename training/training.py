@@ -8,6 +8,7 @@ import fused_ssim
 from training.densitycontroller import DensityControllerOfficial
 from util.statistic_helper import StatisticsHelperInst
 from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
+from training.sparse_adam import SparseGaussianAdam
 
 import torch
 import typing
@@ -21,7 +22,6 @@ import os
 import torchvision
 
 
-    
     
 
 class GaussianTrainer:
@@ -116,7 +116,7 @@ class GaussianTrainer:
             {'params': [gaussian_model._rotation], 'lr': args.rotation_lr, "name": "rotation"}
         ]
 
-        self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        self.optimizer = SparseGaussianAdam(l, lr=0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=args.position_lr_delay_mult,
@@ -167,7 +167,7 @@ class GaussianTrainer:
                 ground_truth_batch=ground_truth[i:batch_tail].contiguous()
 
             ### render ###
-            tile_img,tile_transmitance=self.model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,
+            tile_img,tile_transmitance,visible_chunkid=self.model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,
                                                          None,None)
             img=tiles2img_torch(tile_img,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]].contiguous()
             #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]].contiguous()
@@ -180,7 +180,7 @@ class GaussianTrainer:
             log_loss+=l1_loss.detach()
             counter+=1
 
-            self.optimizer.step()
+            self.optimizer.step(visible_chunkid)
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.backward_callback()
             self.optimizer.zero_grad(set_to_none = True)
@@ -213,7 +213,7 @@ class GaussianTrainer:
                 img_name=view_manager.view_list[i].image_name
 
             ### render ###
-            tile_img,tile_transmitance=gs_model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
+            tile_img,tile_transmitance,_=gs_model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch)
             img=tiles2img_torch(tile_img,gs_model.cached_tiles_size[0],gs_model.cached_tiles_size[1])[...,:view_manager.image_size[1],:view_manager.image_size[0]]
             #transmitance=tiles2img_torch(tile_transmitance,self.model.cached_tiles_size[0],self.model.cached_tiles_size[1])[...,:self.image_size[1],:self.image_size[0]]
             callback_result_list.append(iter_callback(i,img_name,img,ground_truth_bath))
