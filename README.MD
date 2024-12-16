@@ -1,6 +1,6 @@
 # LiteGS
 
-**80% Faster, Modular, and Available in Pure Python or CUDA**
+**2.79x Acceleration, Modular, and Available in Pure Python or CUDA**
 
 This repository provides a refactored codebase aimed at improving the flexibility and performance of Gaussian splatting.
 
@@ -16,7 +16,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 2. **Flexible**: LiteGS provides two modular APIs—one implemented in CUDA and the other in Python. The Python-based API facilitates straightforward modifications to calculation logic without requiring expertise in C code, enabling rapid prototyping. Additionally, tensor dimensions are permuted to maintain competitive training speeds for the Python API. For performance-critical tasks, the CUDA-based API is fully customizable.
 
-3. **Better Performance and Fewer Resources**: LiteGS achieves an 80% speed improvement over the original 3DGS implementation while reducing GPU memory usage. These optimizations enhance training efficiency without compromising flexibility or readability.
+3. **Better Performance and Fewer Resources**: LiteGS achieves an 2.79x speed improvement over the original 3DGS implementation while reducing GPU memory usage. These optimizations enhance training efficiency without compromising flexibility or readability.
 
 4. **Algorithm Preservation**: LiteGS retains the core 3DGS algorithm, making only minor adjustments to the training logic due to BVH creation.
 
@@ -69,28 +69,28 @@ The training results of LiteGS using the Mip-NeRF 360 dataset on an NVIDIA A100 
 
 `python ./full_eval.py --mipnerf360 SOURCE_PATH`
 
-|  metric\|scene    |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
-|   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
-|SSIM(Test)  | 0.764   | 0.612   | 0.858   | 0.787   | 0.637   | 0.919   | 0.906   | 0.920   | 0.940   |
-|PSNR(Test)  | 25.454  | 22.038  | 27.622  | 27.174  | 22.768  | 32.027  | 29.307  | 32.100  | 33.073  |
-|LPIPS(Test) | 0.218   | 0.335   | 0.112   | 0.218   | 0.318   | 0.186   | 0.179   | 0.113   | 0.166   |
+|metric\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
+|   ----        | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
+|SSIM(Test)     | 0.764   | 0.611   | 0.857   | 0.788   | 0.639   | 0.919   | 0.906   | 0.921   | 0.940   |
+|PSNR(Test)     | 25.45   | 22.06   | 27.62   | 27.21   | 22.82   | 32.24   | 29.31   | 32.20   | 33.36   |
+|LPIPS(Test)    | 0.221   | 0.335   | 0.113   | 0.218   | 0.318   | 0.188   | 0.179   | 0.114   | 0.167   |
 
 
 For comparison, the metrics of the original 3DGS implementation are as follows. These results demonstrate that the refactored LiteGS code maintains accuracy while significantly improving performance.
 
 |metric\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
-|   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
-|SSIM(Test)  | 0.770   | 0.623   | 0.866   | 0.771   | 0.641   | 0.931   | 0.919   | 0.933   | 0.950   |
-|PSNR(Test)  | 25.33  | 21.85  | 27.58  | 26.74  | 22.46  | 31.93  | 29.54  | 31.52  | 33.10  |
-|LPIPS(Test) | 0.200   | 0.320   | 0.107   | 0.223   | 0.317   | 0.220   | 0.204   | 0.129   | 0.205   |
+|   ----        | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
+|SSIM(Test)     | 0.770   | 0.623   | 0.866   | 0.771   | 0.641   | 0.931   | 0.919   | 0.933   | 0.950   |
+|PSNR(Test)     | 25.33   | 21.85   | 27.58   | 26.74   | 22.46   | 31.93   | 29.54   | 31.52   | 33.10   |
+|LPIPS(Test)    | 0.200   | 0.320   | 0.107   | 0.223   | 0.317   | 0.220   | 0.204   | 0.129   | 0.205   |
 
 
-The training times for LiteGS and the original 3DGS implementation on an NVIDIA A100 GPU are summarized below, illustrating an approximately **80%** speedup achieved by LiteGS.
+The training times for LiteGS and the original 3DGS implementation on an NVIDIA A100 GPU are summarized below, illustrating an approximately **2.79x** speedup achieved by LiteGS.
 
 | repo\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
 | Original(d9fad7b) | 32:09   | 24:37   | 31:34   | 25:58   | 24:08   | 21:59   | 21:45   | 25:41   | 19:10   |
-| LiteGS | 17:19   | 13:45   | 17:24   | 16:56   | 15:26   | 9:31   | 9:40   | 10:34   | 10:02   |
+| LiteGS | 10:34   | 8:50   | 10:55   | 10:09   | 10:11   | 6:54   | 7:27   | 8:09   | 8:34   |
 
 ![image](doc_img/takes_time.png)
 
