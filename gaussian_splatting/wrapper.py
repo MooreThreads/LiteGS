@@ -317,7 +317,7 @@ def rasterize_2d_gaussian(
 class SphericalHarmonicFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx,deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        ctx.save_for_backward(dirs)
+        ctx.save_for_backward(dirs,sh_base,sh_rest)
         ctx.degree=deg
         ctx.sh_rest_dim=sh_rest.shape[0]
         rgb=torch.ops.GaussianRaster.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
@@ -325,13 +325,13 @@ class SphericalHarmonicFunc(torch.autograd.Function):
     
     @staticmethod
     def backward(ctx, grad_rgb):
-        (dirs,)=ctx.saved_tensors
+        (dirs,sh_base,sh_rest)=ctx.saved_tensors
         degree=ctx.degree
         sh_rest_dim=ctx.sh_rest_dim
-        sh_base_grad,sh_reset_grad=torch.ops.GaussianRaster.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs)
+        sh_base_grad,sh_reset_grad,dir_grad=torch.ops.GaussianRaster.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs,sh_base,sh_rest)
 
 
-        return None,sh_base_grad,sh_reset_grad,None
+        return None,sh_base_grad,sh_reset_grad,dir_grad
 
 def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
 
