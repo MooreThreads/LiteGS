@@ -959,7 +959,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
     int C = rgb_grad.size(1);
 
     at::Tensor sh_grad = torch::empty({ 1 ,C,P }, rgb_grad.options());
-    at::Tensor sh_rest_grad = torch::empty({ sh_rest_dim ,C,P }, rgb_grad.options());
+    at::Tensor sh_rest_grad = torch::zeros({ sh_rest_dim ,C,P }, rgb_grad.options());
     at::Tensor dir_grad = torch::empty_like(dir);
 
     int threadsnum = 256;
