@@ -207,14 +207,14 @@ class GaussianSplattingModel:
 
         If you need to modifiy the intermediate variables, use the following functions: transform_to_cov3d -> proj_cov3d_to_cov2d
         '''
-        transform_matrix=wrapper.create_transform_matrix(scaling_vec,rotator_vec)
-        J=wrapper.create_rayspace_transform(point_positions,view_matrix,camera_focal,False)
-        cov2d=wrapper.create_2dcov_directly(J,view_matrix,transform_matrix)
+        transform_matrix=wrapper.CreateTransformMatrix.call_fused(scaling_vec,rotator_vec)
+        J=wrapper.CreateRaySpaceTransformMatrix.call_fused(point_positions,view_matrix,camera_focal,False)
+        cov2d=wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
         return cov2d
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
-        transform_matrix=wrapper.create_transform_matrix(scaling_vec,rotator_vec)#[3,3,P]
-        cov3d=wrapper.create_cov3d(transform_matrix.permute((2,0,1))).permute((1,2,0))
+        transform_matrix=wrapper.CreateTransformMatrix.call_fused(scaling_vec,rotator_vec)#[3,3,P]
+        cov3d=wrapper.CreateCovarianceMatrixFunc.apply(transform_matrix.permute((2,0,1))).permute((1,2,0))
         return cov3d,transform_matrix
     
     #@torch.compile
@@ -222,12 +222,12 @@ class GaussianSplattingModel:
         '''
         J^t @ M^t @ Cov3d @ M @J
         '''
-        trans_J=wrapper.create_rayspace_transform(point_positions,view_matrix,camera_focal,True)[:,:2].transpose(-1,-2).transpose(-2,-3)
+        trans_J=wrapper.CreateRaySpaceTransformMatrix.call_fused(point_positions,view_matrix,camera_focal,True)[:,:2].transpose(-1,-2).transpose(-2,-3)
 
         trans_M=view_matrix[:,0:3,0:3].unsqueeze(0).transpose(-1,-2)
         trans_T=(trans_J@trans_M).contiguous()
 
-        cov2d=wrapper.project_3dcov_to_2d(cov3d,trans_T)#backward improvement
+        cov2d=wrapper.ProjCov3dTo2dFunc.apply(cov3d,trans_T)
 
         cov2d[:,:,0,0]+=0.3
         cov2d[:,:,1,1]+=0.3
@@ -336,7 +336,7 @@ class GaussianSplattingModel:
             def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
                 return tensor[:,:2].norm(dim=1)
             StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,gradient_wrapper)
-        img,transmitance=wrapper.rasterize_2d_gaussian(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacities,tiles,
+        img,transmitance=wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacities,tiles,
                                                self.cached_tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],self.cached_image_size[1],self.cached_image_size[0])
 
         return img,transmitance
@@ -363,7 +363,7 @@ class GaussianSplattingModel:
         #gs projection
         cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)
         eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)
-        ndc_pos_batch=wrapper.wrold2ndc(positions,view_project_matrix)
+        ndc_pos_batch=wrapper.World2NdcFunc.apply(positions,view_project_matrix)
 
         #color
         dirs=positions[:3]-camera_center_batch.unsqueeze(-1)

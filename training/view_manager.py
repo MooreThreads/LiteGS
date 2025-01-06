@@ -24,12 +24,12 @@ class ViewManager:
             proj_matrix_list.append(np.expand_dims(cur_view.project_matrix,0))
             camera_center_list.append(np.expand_dims(cur_view.camera_center,0))
             camera_focal_list.append(np.expand_dims((cur_view.focal_x,cur_view.focal_y),0))
-            gt_list.append(np.expand_dims(cur_view.image,0))
+            gt_list.append(np.expand_dims(cur_view.image.astype(np.float32)/255,0))
         self.view_matrix_tensor=np.concatenate(view_matrix_list)
         self.proj_matrix_tensor=np.concatenate(proj_matrix_list)
         self.camera_center_tensor=np.concatenate(camera_center_list)
         self.camera_focal_tensor=np.concatenate(camera_focal_list)
-        self.view_gt_tensor=np.concatenate(gt_list)/255.0
+        self.view_gt_tensor=np.concatenate(gt_list)
         self.view_gt_tensor=self.view_gt_tensor.transpose(0,3,1,2)
         self.image_size=image_list[0].image.size
 

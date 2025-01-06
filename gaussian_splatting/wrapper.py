@@ -6,65 +6,231 @@ from util import spherical_harmonics
 
 load_dynamic_lib()
 
-##
-## Create Transform Matrix from scale and quaternion
-##
-class CreateTransformMatrixFunc(torch.autograd.Function):
+
+class BaseWrapper:
+    '''
+    Base class for comparing the forward and backward results of two functions.
+    '''
+
+    _fused: typing.Callable = None  # Optimized function to be tested
+    _script: typing.Callable = None  # Reference implementation
+    _absolute_error_threshold = 1e-5  # Threshold for absolute error comparison
+    _relative_error_threshold = 1e-3  # Threshold for relative error comparison
+
+    test_inputs: list[tuple[list[int], typing.Any]] = []
+    '''Input Parameters for testing. 
+
+    (list[int],dtypes,requires_grad) for random input generate by torch.randn
+
+    (typing.Any,None,None) for constant parameter for testing'''
+
     @staticmethod
-    def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
-        ctx.save_for_backward(quaternion,scale)
-        transform_matrix=torch.ops.GaussianRaster.createTransformMatrix_forward(quaternion,scale)
-        return transform_matrix
+    def compute_forward_and_backward(func: typing.Callable, input_tensors: list[torch.Tensor]) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """
+        Compute forward and backward passes for a given function.
+
+        Args:
+            func (typing.Callable): The function to evaluate.
+            input_tensors (list[torch.Tensor]): List of input tensors with gradients enabled.
+
+        Returns:
+            tuple[list[torch.Tensor], list[torch.Tensor]]: 
+                - Forward outputs as a list of tensors.
+                - Gradients of the input tensors.
+        """
+        forward_outputs_list = []
+        gradients_list = []
+
+        # Forward pass
+        forward_outputs: list[torch.Tensor] = func(*input_tensors)
+        if isinstance(forward_outputs, torch.Tensor):
+            forward_outputs = [forward_outputs]
+
+        # Compute sum of outputs for backward pass
+        total_output_sum = 0
+        for output_data in forward_outputs:
+            if isinstance(output_data, torch.Tensor):
+                forward_outputs_list.append(output_data.detach())
+                total_output_sum += output_data.sum()
+            else:
+                forward_outputs_list.append(output_data)
+        
+        # Backward pass
+        if total_output_sum.requires_grad:
+            total_output_sum.backward()
+            for input_tensor in input_tensors:
+                if isinstance(input_tensor, torch.Tensor) and input_tensor.requires_grad:
+                    gradients_list.append(input_tensor.grad)
+                    input_tensor.grad = None
+                else:
+                    gradients_list.append(None)
+
+        return forward_outputs_list, gradients_list
+
+    @classmethod
+    def compare_tensors(cls, outputs_1: list[torch.Tensor], outputs_2: list[torch.Tensor], phase: str) -> bool:
+        """
+        Compare two lists of tensors for similarity within error thresholds.
+
+        Args:
+            outputs_1 (list[torch.Tensor]): First list of tensors (e.g., from fused function).
+            outputs_2 (list[torch.Tensor]): Second list of tensors (e.g., from script function).
+            phase (str): A label indicating the phase of comparison (e.g., 'forward', 'backward').
+
+        Returns:
+            bool: True if all tensors are within the defined error thresholds; False otherwise.
+        """
+        tensors_match = True
+
+        if len(outputs_1) != len(outputs_2):
+            print(f"[{cls.__name__}-{phase}]: Mismatch in the number of tensors.")
+            return False
+
+        for i, (tensor_1, tensor_2) in enumerate(zip(outputs_1, outputs_2)):
+            
+            if tensor_1.__class__ != tensor_2.__class__:
+                print(f"[{cls.__name__}-{phase}]: Ojbect #{i} does not match.")
+                tensors_match = False
+                continue
+
+            if isinstance(tensor_1, torch.Tensor):
+                absolute_error = (tensor_1 - tensor_2).abs()
+                relative_error = absolute_error / tensor_2.abs()
+
+                within_threshold = ((absolute_error < cls._absolute_error_threshold) | (relative_error < cls._relative_error_threshold)).all()
+
+                if not within_threshold:
+                    print(f"[{cls.__name__}-{phase}]: Tensor #{i} does not match.")
+                    tensors_match = False
+
+        return tensors_match
     
-    @staticmethod
-    def backward(ctx,grad_transform_matrix:torch.Tensor):
-        (quaternion,scale)=ctx.saved_tensors
-        grad_quaternion,grad_scale=torch.ops.GaussianRaster.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
-        return grad_quaternion,grad_scale
+    @classmethod
+    def gen_inputs(cls):
+        inputs = []
+        for obj, obj_type,requires_grad in cls.test_inputs:
+            if obj_type is not None:
+                obj = torch.randn(obj, dtype=obj_type, device='cuda', requires_grad=requires_grad)
+            inputs.append(obj)
+        return inputs
 
-def create_transform_matrix_internal_v2(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-    '''faster'''
-    transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
-    return transform_matrix
+    @classmethod
+    def validate(cls):
+        """
+        Validate the consistency between the `fused` and `script` functions for forward and backward passes.
 
-def create_transform_matrix_internal_v1(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-    rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
+        Returns:
+            bool: True if both forward and backward results match; False otherwise.
+        """
+        inputs=cls.gen_inputs()
 
-    r=rotator_vec[0]
-    x=rotator_vec[1]
-    y=rotator_vec[2]
-    z=rotator_vec[3]
+        fused_forward, fused_grads = cls.compute_forward_and_backward(cls.call_fused, inputs)
+        script_forward, script_grads = cls.compute_forward_and_backward(cls.call_script, inputs)
+
+        forward_match = cls.compare_tensors(fused_forward, script_forward, 'forward')
+        backward_match = cls.compare_tensors(fused_grads, script_grads, 'backward')
+
+        if forward_match and backward_match:
+            print(f"[{cls.__name__}]: Validation successful.")
+            return True
+        return False
+    
+    @classmethod
+    def call_fused(cls, *args, **kwargs):
+        return cls._fused(*args, **kwargs)
+
+    @classmethod
+    def call_script(cls, *args, **kwargs):
+        return cls._script(*args, **kwargs)
+    
+    @classmethod
+    def call(cls, *args, **kwargs):
+        return cls._fused(*args, **kwargs)
 
 
-    rotation_matrix[0,0]=1 - 2 * (y * y + z * z)
-    rotation_matrix[0,1]=2 * (x * y + r * z)
-    rotation_matrix[0,2]=2 * (x * z - r * y)
 
-    rotation_matrix[1,0]=2 * (x * y - r * z)
-    rotation_matrix[1,1]=1 - 2 * (x * x + z * z)
-    rotation_matrix[1,2]=2 * (y * z + r * x)
+class CreateTransformMatrix(BaseWrapper):
+    """
+    A wrapped class for creating 3D transformation matrices.
 
-    rotation_matrix[2,0]=2 * (x * z + r * y)
-    rotation_matrix[2,1]=2 * (y * z - r * x)
-    rotation_matrix[2,2]=1 - 2 * (x * x + y * y)
+    This class provides implementations for generating 3D transformation matrices based on scaling vectors and quaternion-based rotation vectors.
+    Users can invoke the computations through `call_fused`, `call_script`, or `call` methods.
 
-    transform_matrix=rotation_matrix*scaling_vec.unsqueeze(1)
-    return transform_matrix
+    Args:
+        scaling_vec (torch.Tensor): A tensor of shape [3, num_points] representing scaling factors for the transformation along x, y, and z axes.
+        rotator_vec (torch.Tensor): A tensor of shape [4, num_points] containing quaternion components (r, x, y, z) for rotation.
 
-def create_transform_matrix(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+    Returns:
+        torch.Tensor: A 3D transformation matrix of shape [3, 3, num_points], where each slice corresponds to the transformation for one point.
+    """
+    def __create_transform_matrix_fused(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
 
-    return create_transform_matrix_internal_v2(scaling_vec,rotator_vec)
+        class CreateTransformMatrixFunc(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
+                ctx.save_for_backward(quaternion,scale)
+                transform_matrix=torch.ops.GaussianRaster.createTransformMatrix_forward(quaternion,scale)
+                return transform_matrix
+            
+            @staticmethod
+            def backward(ctx,grad_transform_matrix:torch.Tensor):
+                (quaternion,scale)=ctx.saved_tensors
+                grad_quaternion,grad_scale=torch.ops.GaussianRaster.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
+                return grad_quaternion,grad_scale
+            
+        transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
+        return transform_matrix
+
+    def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
+
+        r=rotator_vec[0]
+        x=rotator_vec[1]
+        y=rotator_vec[2]
+        z=rotator_vec[3]
 
 
-##
-## Create Rayspace Transform Matrix through first-order Taylor expansion.
-##
-def create_rayspace_transform(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
-    #Keep no_grad. Auto gradient will make bad influence of xyz
+        rotation_matrix[0,0]=1 - 2 * (y * y + z * z)
+        rotation_matrix[0,1]=2 * (x * y + r * z)
+        rotation_matrix[0,2]=2 * (x * z - r * y)
 
+        rotation_matrix[1,0]=2 * (x * y - r * z)
+        rotation_matrix[1,1]=1 - 2 * (x * x + z * z)
+        rotation_matrix[1,2]=2 * (y * z + r * x)
+
+        rotation_matrix[2,0]=2 * (x * z + r * y)
+        rotation_matrix[2,1]=2 * (y * z - r * x)
+        rotation_matrix[2,2]=1 - 2 * (x * x + y * y)
+
+        transform_matrix=rotation_matrix*scaling_vec.unsqueeze(1)
+        return transform_matrix
+
+    _fused=__create_transform_matrix_fused
+    _script=__create_transform_matrix_script
+    test_inputs=[([3,1024*512],torch.float32,True),
+                  ([4,1024*512],torch.float32,True)]
+
+
+class CreateRaySpaceTransformMatrix(BaseWrapper):
+    """
+    A wrapped class for creating ray-space transformation matrices.
+
+    This class provides methods to compute the transformation matrices in ray space using both a fused implementation and a script-based implementation.
+    The transformations are calculated based on the positions of points in 3D space, a view matrix, and camera focal lengths.
+
+    Args:
+        point_positions (torch.Tensor): A tensor representing the 3D positions of points with shape [4, num_points].
+        view_matrix (torch.Tensor): A tensor representing the camera view matrix with shape [num_views, 4, 4].
+        camera_focal (torch.Tensor): A tensor representing the focal lengths of the camera with shape [num_views, 2].
+        bTranspose (bool, optional): A flag indicating whether to transpose certain matrix components during the computation. Default is True.
+
+    Returns:
+        torch.Tensor: A ray-space transformation matrix with shape [num_views, 3, 3, num_points].
+    """
     @torch.no_grad()
-    def create_rayspace_transform_v1(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
+    def __create_rayspace_transform_script(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
         t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
+        t[:,2].clamp_(1e-2)#near plane 0.01
         J=torch.zeros((t.shape[0],3,3,t.shape[-1]),device=t.device)#view point mat3x3
         camera_focal=camera_focal.unsqueeze(-1)
         tz_square=t[:,2]*t[:,2]
@@ -79,49 +245,31 @@ def create_rayspace_transform(point_positions:torch.Tensor,view_matrix:torch.Ten
         return J
 
     @torch.no_grad()
-    def create_rayspace_transform_v2(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
-        '''faster'''
+    def __create_rayspace_transform_fused(point_positions:torch.Tensor,view_matrix:torch.Tensor,camera_focal:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
         t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
         J=torch.ops.GaussianRaster.jacobianRayspace(t,camera_focal,bTranspose)
         return J
     
-    return create_rayspace_transform_v2(point_positions,view_matrix,camera_focal,bTranspose)
+    _fused=__create_rayspace_transform_fused
+    _script=__create_rayspace_transform_script
+    test_inputs=[([4,1024*512],torch.float32,True),
+                 ([1,4,4],torch.float32,False),
+                 ([1,2],torch.float32,False),
+                 (True,None,None)]
 
-##
-## Create Covariance matrix through transform matrix
-##
-class CreateCovarianceMatrixFunc(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx,transforms:torch.Tensor):
-        ctx.save_for_backward(transforms)
-        cov=transforms.transpose(-1,-2).contiguous()@transforms
-        return cov
-    
-    @staticmethod
-    def backward(ctx,CovarianceMatrixGradient:torch.Tensor):
-        (transforms,)=ctx.saved_tensors
-        return (2*transforms@CovarianceMatrixGradient)
-
-def create_cov3d(transform_matrix:torch.Tensor)->torch.Tensor:
-    '''
-        transform_matrix:[P,3,3]
-        trans^t @ trans
-    '''
-    def create_cov3d_internal_v1(transform_matrix:torch.Tensor)->torch.Tensor:
-        cov3d=torch.matmul(transform_matrix.transpose(-1,-2),transform_matrix)
-        return cov3d
-    
-    def create_cov3d_internal_v2(transform_matrix:torch.Tensor)->torch.Tensor:
-        '''simplify the calculations in the backward phase.(The grad of Cov3d will be symmetric)'''
-        cov3d=CreateCovarianceMatrixFunc.apply(transform_matrix)
-        return cov3d
-
-    return create_cov3d_internal_v2(transform_matrix)
-
-###
-### world position to ndc position
-###
 class World2NdcFunc(torch.autograd.Function):
+    '''
+    A custom autograd function for transforming world coordinates to normalized device coordinates (NDC).
+
+    This implementation overrides the backward computation to address potential floating-point precision issues 
+    that may arise in the standard autograd process for `world2ndc` transformations.
+
+    Args:
+        position (torch.Tensor): Input tensor representing world coordinates with shape [4, num_points].
+        view_project_matrix (torch.Tensor): View-projection matrix with shape [num_views, 4, 4].
+    Returns:
+        torch.Tensor: Normalized device coordinates (NDC) with shape [num_views, 4, num_points].
+    '''
     @staticmethod
     def forward(ctx,position:torch.Tensor,view_project_matrix:torch.Tensor):
         hom_pos=torch.matmul(view_project_matrix.transpose(-1,-2),position)
@@ -136,16 +284,43 @@ class World2NdcFunc(torch.autograd.Function):
         position_grad=torch.ops.GaussianRaster.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
         return (position_grad,None)
 
-def wrold2ndc(position:torch.Tensor,view_project_matrix:torch.Tensor)->torch.Tensor:
+class CreateCovarianceMatrixFunc(torch.autograd.Function):
     '''
-    Override the backward. AutoGrad for world2ndc may lead to floating-point precision issues.
-    '''
-    return World2NdcFunc.apply(position,view_project_matrix)
+    A custom autograd function for efficiently computing the forward and backward passes of gaussian 3D covariance matrix.
 
-###
-### project the 3d-cov in world space to screen space
-###
+    This function assumes the input `transforms` is a symmetric matrix and optimizes the computation of the backward pass.
+
+    Args:
+        transforms (torch.Tensor): Input transform matrix of shape [num_views, num_points, 3, 3]. Assumed to be symmetric.
+    Returns:
+        torch.Tensor: 3D covariance matrix of shape [num_views, num_points, 3, 3].
+    '''
+    @staticmethod
+    def forward(ctx,transforms:torch.Tensor):
+        ctx.save_for_backward(transforms)
+        cov=transforms.transpose(-1,-2).contiguous()@transforms
+        return cov
+    
+    @staticmethod
+    def backward(ctx,CovarianceMatrixGradient:torch.Tensor):
+        (transforms,)=ctx.saved_tensors
+        return (2*transforms@CovarianceMatrixGradient)
+
 class ProjCov3dTo2dFunc(torch.autograd.Function):
+    """
+    A custom autograd function for projecting a 3D covariance matrix to a 2D covariance matrix.
+
+    This function assumes the input `cov3d` and `transforms_t` is a symmetric matrix and optimizes the computation of the backward pass.
+
+    Args:
+        cov3d (torch.Tensor): Input 3D covariance matrix of shape [num_views, num_points, 3, 3]. Assumed to be symmetric.
+        transforms_t (torch.Tensor): Translated transformation matrices of shape [num_views, num_points, 2, 3]. Assumed to be symmetric.
+
+    Returns:
+        torch.Tensor: Projected 2D covariance matrix of shape [num_views, num_points, 2, 2].
+    """
+
+
     @staticmethod
     def forward(ctx,cov3d:torch.Tensor,transforms_t:torch.Tensor):
         ctx.save_for_backward(transforms_t)
@@ -169,32 +344,65 @@ class ProjCov3dTo2dFunc(torch.autograd.Function):
         cov3d_gradient=temp_matrix_A@temp_matrix_B
 
         return cov3d_gradient,None
+
+#todo
+
+
+
+
+class CreateCov2dDirectly(BaseWrapper):
+    """
     
-def project_3dcov_to_2d(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
-    def project_3dcov_to_2d_internal_v1(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
-        cov2d=(transforms_t@cov3d@transforms_t.transpose(-1,-2))
+    """
+    def create_2dcov_fused(J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
+        '''
+        An optimized function to calculate cov2d
+
+        The usual method contains several matrix multiplications with a large batch number and a small K. Loading and writing these intermediate variables takes a lot of time.
+        '''
+        class Cov2dCreateV2Func(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
+                ctx.save_for_backward(J,view_matrix,transform_matrix)
+                cov2d=torch.ops.GaussianRaster.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
+                return cov2d
+            
+            @staticmethod
+            def backward(ctx,grad_cov2d:torch.Tensor):
+                (J,view_matrix,transform_matrix)=ctx.saved_tensors
+                transform_matrix_grad=torch.ops.GaussianRaster.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
+                return (None,None,transform_matrix_grad)
+
+        cov2d=Cov2dCreateV2Func.apply(J,view_matrix,transform_matrix)
         return cov2d
-    def project_3dcov_to_2d_internal_v2(cov3d:torch.Tensor,transforms_t:torch.Tensor)->torch.Tensor:
-        '''simplify the calculations in the backward phase.'''
-        return ProjCov3dTo2dFunc.apply(cov3d,transforms_t)
     
-    return project_3dcov_to_2d_internal_v2(cov3d,transforms_t)
+    _fused=create_2dcov_fused
+    _script=None
+    test_inputs=[([1,3,3,1024*512],torch.float32,False),
+                 ([1,4,4],torch.float32,False),
+                 ([3,3,1024*512],torch.float32,True)]
+    _relative_error_threshold=5e-2#ProjCov3dTo2dFunc 引入浮点误差，适度放大relative error
+    
+    @classmethod
+    def call_script(cls, J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor):
+        cov3d=CreateCovarianceMatrixFunc.apply(transform_matrix.permute((2,0,1)))
+        trans_J=J[:,:,:2].permute(0,3,2,1)
+        trans_M=view_matrix[:,0:3,0:3].unsqueeze(0).transpose(-1,-2)
+        trans_T=(trans_J@trans_M).contiguous()
+        cov2d=ProjCov3dTo2dFunc.apply(cov3d,trans_T)
+        cov2d[:,:,0,0]+=0.3
+        cov2d[:,:,1,1]+=0.3
+        return cov2d.permute((0,2,3,1))
+
+
+
+
+
+
 
 ###
 ### The fastest version of Create cov2d. 
 ###
-class Cov2dCreateV2Func(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
-        ctx.save_for_backward(J,view_matrix,transform_matrix)
-        cov2d=torch.ops.GaussianRaster.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
-        return cov2d
-    
-    @staticmethod
-    def backward(ctx,grad_cov2d:torch.Tensor):
-        (J,view_matrix,transform_matrix)=ctx.saved_tensors
-        transform_matrix_grad=torch.ops.GaussianRaster.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
-        return (None,None,transform_matrix_grad)
     
 class Cov2dCreateV1Func(torch.autograd.Function):
     '''
@@ -215,18 +423,9 @@ class Cov2dCreateV1Func(torch.autograd.Function):
         dTrans=dT@(view_rayspace_transform.transpose(-1,-2).contiguous())
         return (None,None,dTrans)
     
-def create_2dcov_directly(J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
-    '''
-    A faster function to calculate cov2d
 
-    The usual method contains several matrix multiplications with a large batch number and a small K. Loading and writing these intermediate variables takes a lot of time.
-    '''
-    cov2d=Cov2dCreateV2Func.apply(J,view_matrix,transform_matrix)
-    return cov2d
 
-###
-### the rasterization of 2d guassian.
-###
+
 class GaussiansRasterFunc(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -279,34 +478,6 @@ class GaussiansRasterFunc(torch.autograd.Function):
         )
 
         return grads
-
-def rasterize_2d_gaussian(
-        sorted_pointId:torch.Tensor,
-        tile_start_index:torch.Tensor,
-        mean2d:torch.Tensor,
-        cov2d_inv:torch.Tensor,
-        color:torch.Tensor,
-        opacities:torch.Tensor,
-        tiles:torch.Tensor,
-        tile_size:int,
-        tiles_num_x:int,
-        tiles_num_y:int,
-        img_h:int,
-        img_w:int):
-    
-    return GaussiansRasterFunc.apply(
-        sorted_pointId,
-        tile_start_index,
-        mean2d,
-        cov2d_inv,
-        color,
-        opacities,
-        tiles,
-        tile_size,
-        tiles_num_x,
-        tiles_num_y,
-        img_h,
-        img_w)
 
 
 
@@ -366,9 +537,9 @@ def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
     def eigh_and_inverse_cov2d_internal_v1(cov2d:torch.Tensor):
         det=cov2d[:,0,0]*cov2d[:,1,1]-cov2d[:,0,1]*cov2d[:,1,0]
         with torch.no_grad():
-            mid=0.5*(cov2d[:,0,0]+cov2d[:,1,1])
-            temp=(mid*mid-det).clamp_min(1e-9).sqrt()
-            eigen_val=torch.cat(((mid-temp).unsqueeze(1),(mid+temp).unsqueeze(1)),dim=1)
+            temp0=cov2d[:,0,0]+cov2d[:,1,1]
+            temp1=((cov2d[:,0,0]-cov2d[:,1,1]).square()+(2*cov2d[:,1,0]).square()).sqrt()
+            eigen_val=torch.cat(((temp0-temp1).unsqueeze(1)*0.5,(temp0+temp1).unsqueeze(1)*0.5),dim=1)
             eigen_vec_y=((eigen_val-cov2d[:,0,0].unsqueeze(1))/cov2d[:,0,1].unsqueeze(1))
             eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-2),eigen_vec_y.unsqueeze(-2)),dim=-2)
             eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-2)
@@ -383,7 +554,7 @@ def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
     def eigh_and_inverse_cov2d_internal_v2(cov2d:torch.Tensor):
         return EighAndInverse2x2Func.apply(cov2d)
 
-    return eigh_and_inverse_cov2d_internal_v2(cov2d)
+    return eigh_and_inverse_cov2d_internal_v1(cov2d)
 
 ###
 ### compact params
