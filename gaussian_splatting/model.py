@@ -7,9 +7,8 @@ from gaussian_splatting.scene import GaussianScene
 from util import cg_torch
 from gaussian_splatting import wrapper
 from util.statistic_helper import StatisticsHelperInst,StatisticsHelper
-from util.BVH.Object import GSpointBatch
-from util.BVH.PytorchBVH import BVH
 from util.platform import platform_torch_compile
+from util.cg_torch import gen_morton_code
 
 class GaussianSplattingModel:
     @torch.no_grad()
@@ -37,6 +36,7 @@ class GaussianSplattingModel:
         self._opacity = torch.nn.Parameter(torch.Tensor(scene.opacity).transpose(0,1).cuda())#.sigmoid
         self.max_sh_degree=scene.sh_degree
         self.__split_into_chunk()
+        self.rebuild_AABB()
         assert(self.actived_sh_degree<=self.max_sh_degree)#mismatch
         return
     
@@ -59,51 +59,23 @@ class GaussianSplattingModel:
     @torch.no_grad()
     def __split_into_chunk(self):
         assert(self.b_split_into_chunk==False)
-        #build BVH
-        temporary_point_id=torch.arange(self._xyz.shape[-1],device='cuda')
-        scale=self._scaling.exp()
-        roator=torch.nn.functional.normalize(self._rotation,dim=0)
-        temporary_cov3d,_=self.transform_to_cov3d(scale,roator)
-        points_batch=GSpointBatch(temporary_point_id,self._xyz[:3,:].permute(1,0),{'cov':temporary_cov3d.permute(2,0,1)})
-        bvh=BVH([points_batch,])
-        bvh.build(self.chunk_size)
 
-        #split into chunk
-        chunk_num=len(bvh.leaf_nodes)
-        xyz_chunk=torch.zeros((*self._xyz.shape[:-1],chunk_num,self.chunk_size),device='cuda')
-        features_dc_chunk=torch.zeros((*self._features_dc.shape[:-1],chunk_num,self.chunk_size),device='cuda')
-        features_rest_chunk=torch.zeros((*self._features_rest.shape[:-1],chunk_num,self.chunk_size),device='cuda')
-        opacity_chunk=torch.zeros((*self._opacity.shape[:-1],chunk_num,self.chunk_size),device='cuda')
-        scaling_chunk=torch.zeros((*self._scaling.shape[:-1],chunk_num,self.chunk_size),device='cuda')
-        rotation_chunk=torch.zeros((*self._rotation.shape[:-1],chunk_num,self.chunk_size),device='cuda')
+        morton_code=gen_morton_code(self._xyz.transpose(0,1).contiguous()[:,:3])
+        _,index=morton_code.sort()
+        padding_num=(self.chunk_size-morton_code.shape[0]%self.chunk_size)
+        index=torch.concat([index,index[-padding_num:]])
 
-        origin_list=[]
-        extend_list=[]
-        for chunk_index,node in enumerate(bvh.leaf_nodes):
-            points_num=node.objs.shape[0]
-            repeat_n=int(self.chunk_size/points_num)
-            xyz_chunk[:,chunk_index,:repeat_n*points_num]=self._xyz[...,node.objs].repeat(1,repeat_n)
-            features_dc_chunk[:,:,chunk_index,:repeat_n*points_num]=self._features_dc[...,node.objs].repeat(1,1,repeat_n)
-            features_rest_chunk[:,:,chunk_index,:repeat_n*points_num]=self._features_rest[...,node.objs].repeat(1,1,repeat_n)
-            opacity_chunk[:,chunk_index,:repeat_n*points_num]=self._opacity[...,node.objs].repeat(1,repeat_n)
-            scaling_chunk[:,chunk_index,:repeat_n*points_num]=self._scaling[...,node.objs].repeat(1,repeat_n)
-            rotation_chunk[:,chunk_index,:repeat_n*points_num]=self._rotation[...,node.objs].repeat(1,repeat_n)
-
-            remain_num=self.chunk_size-repeat_n*points_num
-            if remain_num>0:
-                remain_points=node.objs[:remain_num]
-                xyz_chunk[:,chunk_index,repeat_n*points_num:]=self._xyz[...,remain_points]
-                features_dc_chunk[:,:,chunk_index,repeat_n*points_num:]=self._features_dc[...,remain_points]
-                features_rest_chunk[:,:,chunk_index,repeat_n*points_num:]=self._features_rest[...,remain_points]
-                opacity_chunk[:,chunk_index,repeat_n*points_num:]=-1e5
-                scaling_chunk[:,chunk_index,repeat_n*points_num:]=self._scaling[...,remain_points]
-                rotation_chunk[:,chunk_index,repeat_n*points_num:]=self._rotation[...,remain_points]
-
-            origin_list.append(node.origin.unsqueeze(0))
-            extend_list.append(node.extend.unsqueeze(0))
-
-        self.chunk_AABB_origin=torch.cat(origin_list,dim=-2).contiguous()
-        self.chunk_AABB_extend=torch.cat(extend_list,dim=-2).contiguous()
+        def reorder_parameters_and_split(tensor:torch.Tensor,index:torch.Tensor)->torch.Tensor:
+            assert(index.shape[0]%self.chunk_size==0)
+            chunks_num=int(index.shape[0]/self.chunk_size)
+            chunk_tensor=tensor[...,index].reshape(*tensor.shape[:-1],chunks_num,self.chunk_size)
+            return chunk_tensor
+        xyz_chunk=reorder_parameters_and_split(self._xyz,index)
+        features_dc_chunk=reorder_parameters_and_split(self._features_dc,index)
+        features_rest_chunk=reorder_parameters_and_split(self._features_rest,index)
+        opacity_chunk=reorder_parameters_and_split(self._opacity,index)
+        scaling_chunk=reorder_parameters_and_split(self._scaling,index)
+        rotation_chunk=reorder_parameters_and_split(self._rotation,index)
     
         self._xyz=torch.nn.Parameter(xyz_chunk.contiguous())
         self._features_dc=torch.nn.Parameter(features_dc_chunk.contiguous())
@@ -111,6 +83,9 @@ class GaussianSplattingModel:
         self._opacity=torch.nn.Parameter(opacity_chunk.contiguous())
         self._scaling=torch.nn.Parameter(scaling_chunk.contiguous())
         self._rotation=torch.nn.Parameter(rotation_chunk.contiguous())
+
+        self.chunk_AABB_origin=None
+        self.chunk_AABB_extend=None
         self.b_split_into_chunk=True
         return
     
@@ -134,11 +109,12 @@ class GaussianSplattingModel:
         self.b_split_into_chunk=False
         return
     
-    def rebuild_BVH(self,chunk_size):
+    def rebuild_chunk_morton(self,chunk_size):
         assert(chunk_size>0)
         self.chunk_size=chunk_size
         self.__concate_param_chunks()
         self.__split_into_chunk()
+        self.rebuild_AABB()
         torch.cuda.empty_cache()
         return
 
@@ -149,40 +125,37 @@ class GaussianSplattingModel:
             self.chunk_AABB_extend=self.chunk_AABB_extend[valid_mask]
 
         if chunks_num>=1:
-            scale=self._scaling[:,-1-chunks_num:-1,:].reshape(3,-1).exp()
-            rotator=torch.nn.functional.normalize(self._rotation[:,-1-chunks_num:-1,:],dim=0).reshape(4,-1)
-            transform_matrix=wrapper.create_transform_matrix_internal_v1(scale,rotator)
+            scale=self._scaling[:,-chunks_num:,:].reshape(3,-1).exp()
+            rotator=torch.nn.functional.normalize(self._rotation[:,-chunks_num:,:],dim=0).reshape(4,-1)
+            transform_matrix=wrapper.CreateTransformMatrix.call_fused(scale,rotator)
             coefficient=2*math.log(255)
             extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
             point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
 
-            position=(self._xyz[:3,-1-chunks_num:-1,:]).permute(1,2,0)
+            position=(self._xyz[:3,-chunks_num:,:]).permute(1,2,0)
             max_xyz=(position+point_extend).max(dim=-2).values
             min_xyz=(position-point_extend).min(dim=-2).values
             origin=(max_xyz+min_xyz)/2
             extend=(max_xyz-min_xyz)/2
+            
+            if self.chunk_AABB_origin is None:
+                self.chunk_AABB_origin=origin
+            else:
+                self.chunk_AABB_origin=torch.cat((self.chunk_AABB_origin,origin))
 
-            self.chunk_AABB_origin=torch.cat((self.chunk_AABB_origin,origin))
-            self.chunk_AABB_extend=torch.cat((self.chunk_AABB_extend,extend))
+            if self.chunk_AABB_extend is None:
+                self.chunk_AABB_extend=extend
+            else:
+                self.chunk_AABB_extend=torch.cat((self.chunk_AABB_extend,extend))
         return 
 
     @torch.no_grad()
     def rebuild_AABB(self):
-        scale=self._scaling.exp().reshape(3,-1)
-        rotator=torch.nn.functional.normalize(self._rotation,dim=0).reshape(4,-1)
-        transform_matrix=wrapper.create_transform_matrix(scale,rotator)
-        coefficient=2*math.log(255)
-        extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
-        point_extend=extend_axis.abs().sum(dim=0).reshape(3,-1,self.chunk_size).permute(1,2,0)
-
-        position=self._xyz.permute(1,2,0)[...,:3]
-        max_xyz=(position+point_extend).max(dim=-2).values
-        min_xyz=(position-point_extend).min(dim=-2).values
-        origin=(max_xyz+min_xyz)/2
-        extend=(max_xyz-min_xyz)/2
-
-        self.chunk_AABB_origin=origin
-        self.chunk_AABB_extend=extend
+        assert(self.b_split_into_chunk)
+        chunks_num=self._xyz.shape[-2]
+        self.chunk_AABB_origin=None
+        self.chunk_AABB_extend=None
+        self.build_AABB_for_additional_chunks(chunks_num,None)
         return 
 
     def get_params(self):

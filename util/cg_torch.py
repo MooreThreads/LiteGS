@@ -2,6 +2,57 @@ import torch
 import math
 
 @torch.no_grad()
+def gen_morton_code(positions: torch.Tensor, bits: int = 21) -> torch.Tensor:
+    """
+    Generate 3D Morton (Z-order) codes for a set of 3D points using PyTorch.
+
+    Args:
+        positions (torch.Tensor): A tensor of shape (N, 3), where each row is (x, y, z).
+        bits (int): Number of bits used to quantize each coordinate. Default is 10.
+                    The final Morton code will use 3 * bits bits in total.
+
+    Returns:
+        torch.Tensor: A 1D tensor of size N (dtype=torch.long), where each element
+                      is the Morton code corresponding to the input point.
+    
+    Steps:
+        1. Compute the bounding box (min and max) of all points.
+        2. Normalize coordinates into [0, 2^bits - 1].
+        3. Convert to long type and clamp to avoid out-of-range values.
+        4. Interleave bits (bit by bit) from X, Y, and Z to form the final Morton code.
+    """
+    assert positions.dim() == 2 and positions.size(1) == 3, "positions must be a (N, 3) tensor."
+
+    # 1. Get min and max across each dimension
+    min_vals = positions.min(dim=0).values
+    max_vals = positions.max(dim=0).values
+    scale = (2 ** bits) - 1
+
+    # Avoid division by zero by clamping the denominator
+    denom = (max_vals - min_vals).clamp_min(1e-12)
+
+    # 2. Normalize positions into [0, 2^bits - 1]
+    normalized = ((positions - min_vals) / denom) * scale
+
+    # 3. Convert to long and clamp
+    X = normalized[:, 0].long().clamp_(0, scale)
+    Y = normalized[:, 1].long().clamp_(0, scale)
+    Z = normalized[:, 2].long().clamp_(0, scale)
+
+    # 4. Interleave bits
+    codes = torch.zeros_like(X, dtype=torch.long)  # Output Morton codes
+    for i in range(bits):
+        # Extract the i-th bit from X, Y, and Z
+        x_i = (X >> i) & 1
+        y_i = (Y >> i) & 1
+        z_i = (Z >> i) & 1
+        
+        # Place these bits into (3*i), (3*i+1), and (3*i+2) of the final code
+        codes |= (x_i << (3 * i)) | (y_i << (3 * i + 1)) | (z_i << (3 * i + 2))
+
+    return codes
+
+@torch.no_grad()
 def world_to_ndc(position,view_project_matrix):
     '''
     no grad!!! AutoGrad for world2ndc may lead to floating-point precision issues.

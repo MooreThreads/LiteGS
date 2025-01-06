@@ -110,6 +110,7 @@ class DenityControlParams:
     def __init__(self, opt_params:OptimizationParams,sample_num:int):
         self.densification_interval = opt_params.densification_interval
         self.opacity_reset_interval = opt_params.opacity_reset_interval
+        self.prune_interval=opt_params.prune_interval
         
         self.densify_from_iter = int(opt_params.densify_from_iter/sample_num)
         self.densify_until_iter = int(math.ceil(int(math.ceil(opt_params.densify_until_iter/sample_num))/opt_params.opacity_reset_interval)*opt_params.opacity_reset_interval+1)
@@ -167,7 +168,7 @@ class DensityControllerOfficial(DensityControllerBase):
         return selected_pts_mask
     
     @torch.no_grad()
-    def prune_and_rebuildBVH(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
+    def prune_and_rebuild_chunk(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer):
         
         def __prune_torch_parameter(tensor:torch.nn.Parameter,prune_mask:torch.Tensor,padding_value:float):
             chunk_size=tensor.shape[-1]
@@ -192,7 +193,7 @@ class DensityControllerOfficial(DensityControllerBase):
         __prune_torch_parameter(gaussian_model._features_rest,prune_mask,0.0)
         __prune_torch_parameter(gaussian_model._opacity,prune_mask,-10)#sigmoid(opacity)<1/255. make padding points invalid
         #print("\nprune_num:{0} cur_points_num:{1}".format(prune_mask.sum().cpu(),gaussian_model._xyz.shape[-1]*gaussian_model._xyz.shape[-2]))
-        gaussian_model.rebuild_BVH(gaussian_model.chunk_size)
+        gaussian_model.rebuild_chunk_morton(gaussian_model.chunk_size)
 
         params_dict={
                     "xyz":gaussian_model._xyz,
@@ -290,12 +291,12 @@ class DensityControllerOfficial(DensityControllerBase):
     def step(self,gaussian_model:GaussianSplattingModel,optimizer:torch.optim.Optimizer,epoch_i:int):
         if self.IsDensify(epoch_i)==True:
             bResetOpacity=(epoch_i%self.opt_params.opacity_reset_interval==0)
+            bPrune=(epoch_i%self.opt_params.prune_interval==0)
+            self.split_and_clone(gaussian_model,optimizer)
+            if bPrune:
+                self.prune_and_rebuild_chunk(gaussian_model,optimizer)
             if bResetOpacity:
-                self.split_and_clone(gaussian_model,optimizer)
-                self.prune_and_rebuildBVH(gaussian_model,optimizer)
                 self.reset_opacity(gaussian_model)
-            else:
-                self.split_and_clone(gaussian_model,optimizer)
             StatisticsHelperInst.reset(gaussian_model._xyz.shape[-2],gaussian_model._xyz.shape[-1])
         
         if StatisticsHelperInst.bStart==False and self.IsDensify(epoch_i+1)==True:

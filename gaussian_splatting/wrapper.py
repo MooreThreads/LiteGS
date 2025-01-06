@@ -147,8 +147,6 @@ class BaseWrapper:
     def call(cls, *args, **kwargs):
         return cls._fused(*args, **kwargs)
 
-
-
 class CreateTransformMatrix(BaseWrapper):
     """
     A wrapped class for creating 3D transformation matrices.
@@ -209,7 +207,6 @@ class CreateTransformMatrix(BaseWrapper):
     _script=__create_transform_matrix_script
     test_inputs=[([3,1024*512],torch.float32,True),
                   ([4,1024*512],torch.float32,True)]
-
 
 class CreateRaySpaceTransformMatrix(BaseWrapper):
     """
@@ -345,11 +342,6 @@ class ProjCov3dTo2dFunc(torch.autograd.Function):
 
         return cov3d_gradient,None
 
-#todo
-
-
-
-
 class CreateCov2dDirectly(BaseWrapper):
     """
     
@@ -393,38 +385,6 @@ class CreateCov2dDirectly(BaseWrapper):
         cov2d[:,:,0,0]+=0.3
         cov2d[:,:,1,1]+=0.3
         return cov2d.permute((0,2,3,1))
-
-
-
-
-
-
-
-###
-### The fastest version of Create cov2d. 
-###
-    
-class Cov2dCreateV1Func(torch.autograd.Function):
-    '''
-    Used only for debugging and testing purposes
-    '''
-    @staticmethod
-    def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
-        view_rayspace_transform=(view_matrix[...,:3,:3].unsqueeze(1)@J[...,:2]).contiguous()
-        T=transform_matrix@view_rayspace_transform
-        cov2d=T.transpose(-1,-2).contiguous()@T
-        ctx.save_for_backward(T,view_rayspace_transform)
-        return cov2d
-    
-    @staticmethod
-    def backward(ctx,grad_cov2d:torch.Tensor):
-        (T,view_rayspace_transform)=ctx.saved_tensors
-        dT=2*T@grad_cov2d
-        dTrans=dT@(view_rayspace_transform.transpose(-1,-2).contiguous())
-        return (None,None,dTrans)
-    
-
-
 
 class GaussiansRasterFunc(torch.autograd.Function):
     @staticmethod
