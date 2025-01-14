@@ -62,7 +62,10 @@ class GaussianSplattingModel:
 
         morton_code=gen_morton_code(self._xyz.transpose(0,1).contiguous()[:,:3])
         _,index=morton_code.sort()
-        padding_num=(self.chunk_size-morton_code.shape[0]%self.chunk_size)
+
+        padding_num=morton_code.shape[0]%self.chunk_size
+        if padding_num!=0:
+            padding_num=self.chunk_size-padding_num
         index=torch.concat([index,index[-padding_num:]])
 
         def reorder_parameters_and_split(tensor:torch.Tensor,index:torch.Tensor)->torch.Tensor:
