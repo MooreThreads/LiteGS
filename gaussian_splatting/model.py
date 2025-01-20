@@ -185,7 +185,7 @@ class GaussianSplattingModel:
         '''
         transform_matrix=wrapper.CreateTransformMatrix.call_fused(scaling_vec,rotator_vec)
         J=wrapper.CreateRaySpaceTransformMatrix.call_fused(point_positions,view_matrix,camera_focal,False)
-        cov2d=wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
+        cov2d=wrapper.CreateCov2dDirectly.call_script(J,view_matrix,transform_matrix)
         return cov2d
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
@@ -338,13 +338,13 @@ class GaussianSplattingModel:
 
         #gs projection
         cov2d=self.create_cov2d_optimized(scales,rotators,positions,view_matrix,camera_focal)
-        eigen_val,eigen_vec,inv_cov2d=wrapper.eigh_and_inverse_cov2d(cov2d)
+        eigen_val,eigen_vec,inv_cov2d=wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
         ndc_pos_batch=wrapper.World2NdcFunc.apply(positions,view_project_matrix)
 
         #color
         dirs=positions[:3]-camera_center_batch.unsqueeze(-1)
         dirs=torch.nn.functional.normalize(dirs,dim=-2)
-        colors=wrapper.sh2rgb(self.actived_sh_degree,sh_base,sh_rest,dirs)
+        colors=wrapper.SphericalHarmonicToRGB.call_fused(self.actived_sh_degree,sh_base,sh_rest,dirs)
         
         #visibility table
         tile_start_index,sorted_pointId,sorted_tileId,b_visible=self.binning(ndc_pos_batch,eigen_val,eigen_vec,opacities)

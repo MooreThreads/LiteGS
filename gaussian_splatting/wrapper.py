@@ -344,13 +344,26 @@ class ProjCov3dTo2dFunc(torch.autograd.Function):
 
 class CreateCov2dDirectly(BaseWrapper):
     """
-    
+    A wrapped class for creating 2D covariance matrices.
+
+    This class provides implementations for efficiently computing 2D covariance matrices by minimizing intermediate matrix operations.
+
+    Users can invoke the computations through `call_fused`, `call_script`, or `call` methods.
     """
     def create_2dcov_fused(J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
         '''
         An optimized function to calculate cov2d
 
         The usual method contains several matrix multiplications with a large batch number and a small K. Loading and writing these intermediate variables takes a lot of time.
+
+        Args:
+            J (torch.Tensor): Input tensor representing transformations with shape [num_views, 3, 3, num_points].
+            view_matrix (torch.Tensor): View matrix with shape [num_views, 4, 4].
+            transform_matrix (torch.Tensor): Transformation matrix with shape [num_views, 3, 3, num_points].
+
+        Returns:
+            torch.Tensor: Computed 2D covariance matrix with shape [num_views, 2, 2, num_points].
+
         '''
         class Cov2dCreateV2Func(torch.autograd.Function):
             @staticmethod
@@ -377,6 +390,20 @@ class CreateCov2dDirectly(BaseWrapper):
     
     @classmethod
     def call_script(cls, J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor):
+        """
+        Script-based implementation for creating 2D covariance matrices.
+
+        This method uses a step-by-step approach involving intermediate computations such as 3D covariance matrix 
+        generation and matrix transformations to compute the final 2D covariance matrix.
+
+        Args:
+            J (torch.Tensor): Input tensor representing transformations with shape [num_views, 3, 3, num_points].
+            view_matrix (torch.Tensor): View matrix with shape [num_views, 4, 4].
+            transform_matrix (torch.Tensor): Transformation matrix with shape [num_views, 3, 3, num_points].
+
+        Returns:
+            torch.Tensor: Computed 2D covariance matrix with shape [num_views, 2, 2, num_points].
+        """
         cov3d=CreateCovarianceMatrixFunc.apply(transform_matrix.permute((2,0,1)))
         trans_J=J[:,:,:2].permute(0,3,2,1)
         trans_M=view_matrix[:,0:3,0:3].unsqueeze(0).transpose(-1,-2)
@@ -439,82 +466,88 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         return grads
 
+class SphericalHarmonicToRGB(BaseWrapper):
+    """
+    A derived class for converting spherical harmonics to RGB color values.
 
+    This class provides both a fused implementation and a script-based fallback for evaluating spherical harmonics (SH) and converting them to RGB values for a given set of directions.
 
+    Args:
+            deg (int): Degree of the spherical harmonics.
+            sh_base (torch.Tensor): Base spherical harmonic coefficients with shape [1, num_channels, num_points].
+            sh_rest (torch.Tensor): Remaining SH coefficients with shape [(deg+1)**2-1, num_channels, num_points].
+            dirs (torch.Tensor): Directions tensor with shape [num_views,3, num_points].
 
-###
-### the rasterization of 2d guassian.
-###
-class SphericalHarmonicFunc(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx,deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        ctx.save_for_backward(dirs,sh_base,sh_rest)
-        ctx.degree=deg
-        ctx.sh_rest_dim=sh_rest.shape[0]
-        rgb=torch.ops.GaussianRaster.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
-        return rgb
-    
-    @staticmethod
-    def backward(ctx, grad_rgb):
-        (dirs,sh_base,sh_rest)=ctx.saved_tensors
-        degree=ctx.degree
-        sh_rest_dim=ctx.sh_rest_dim
-        sh_base_grad,sh_reset_grad,dir_grad=torch.ops.GaussianRaster.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs,sh_base,sh_rest)
-
-
-        return None,sh_base_grad,sh_reset_grad,dir_grad
-
-def sh2rgb(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-
-    def sh2rgb_internal_v1(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
-    
-    def sh2rgb_internal_v2(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+    Returns:
+        torch.Tensor: RGB values computed from the spherical harmonics with shape [num_views, num_channels, num_points].
+    """
+    def __sh2rgb_fused(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+        class SphericalHarmonicFunc(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx,deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+                ctx.save_for_backward(dirs,sh_base,sh_rest)
+                ctx.degree=deg
+                ctx.sh_rest_dim=sh_rest.shape[0]
+                rgb=torch.ops.GaussianRaster.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
+                return rgb
+            
+            @staticmethod
+            def backward(ctx, grad_rgb):
+                (dirs,sh_base,sh_rest)=ctx.saved_tensors
+                degree=ctx.degree
+                sh_rest_dim=ctx.sh_rest_dim
+                sh_base_grad,sh_reset_grad,dir_grad=torch.ops.GaussianRaster.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs,sh_base,sh_rest)
+                return None,sh_base_grad,sh_reset_grad,dir_grad
         return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
-    
-    return sh2rgb_internal_v2(deg,sh_base,sh_rest,dirs)
+    def __sh2rgb_script(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
+        return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
+    _fused=__sh2rgb_fused
+    _script=__sh2rgb_script
+    test_inputs=[(3,None,None),
+        ([1,3,1024*512],torch.float32,True),
+        ([(3+1)**2-1,3,1024*512],torch.float32,True),
+        ([1,3,1024*512],torch.float32,True)]
 
-
-###
-### eigh[no grad] and inverse[grad] the matrix.
-###
-class EighAndInverse2x2Func(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx,input_matrix:torch.Tensor):
-        val,vec,inverse_matrix=torch.ops.GaussianRaster.eigh_and_inv_2x2matrix_forward(input_matrix)
-        ctx.save_for_backward(inverse_matrix)
-        return val,vec,inverse_matrix
-    
-    @staticmethod
-    def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
-        (inverse_matrix,)=ctx.saved_tensors
-        matrix_grad:torch.Tensor=torch.ops.GaussianRaster.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
-        matrix_grad.nan_to_num_(0)
-        return matrix_grad
-    
-def eigh_and_inverse_cov2d(cov2d:torch.Tensor):
-
-    def eigh_and_inverse_cov2d_internal_v1(cov2d:torch.Tensor):
-        det=cov2d[:,0,0]*cov2d[:,1,1]-cov2d[:,0,1]*cov2d[:,1,0]
+class EighAndInverse2x2Matrix(BaseWrapper):
+    def __eight_inverse_2x2matrix_script(cov2d:torch.Tensor):
         with torch.no_grad():
-            temp0=cov2d[:,0,0]+cov2d[:,1,1]
-            temp1=((cov2d[:,0,0]-cov2d[:,1,1]).square()+(2*cov2d[:,1,0]).square()).sqrt()
-            eigen_val=torch.cat(((temp0-temp1).unsqueeze(1)*0.5,(temp0+temp1).unsqueeze(1)*0.5),dim=1)
-            eigen_vec_y=((eigen_val-cov2d[:,0,0].unsqueeze(1))/cov2d[:,0,1].unsqueeze(1))
-            eigen_vec=torch.cat((torch.ones_like(eigen_vec_y).unsqueeze(-2),eigen_vec_y.unsqueeze(-2)),dim=-2)
-            eigen_vec=torch.nn.functional.normalize(eigen_vec,dim=-2)
-        reci_det=1/(det+1e-7)
-        cov2d_inv=torch.zeros_like(cov2d)
-        cov2d_inv[:,0,1]=-cov2d[:,0,1]*reci_det
-        cov2d_inv[:,1,0]=-cov2d[:,1,0]*reci_det
-        cov2d_inv[:,0,0]=cov2d[:,1,1]*reci_det
-        cov2d_inv[:,1,1]=cov2d[:,0,0]*reci_det
+            eigen_val,eigen_vec=torch.linalg.eigh(cov2d.permute(0,3,1,2).reshape(-1,2,2))
+            eigen_val=eigen_val.reshape(cov2d.shape[0],cov2d.shape[3],2).permute(0,2,1)
+            eigen_vec=eigen_vec.reshape(cov2d.shape[0],cov2d.shape[3],2,2).permute(0,2,3,1)
+
+        cov2d_inv=torch.linalg.inv(cov2d.permute(0,3,1,2).reshape(-1,2,2))
+        cov2d_inv=cov2d_inv.reshape(cov2d.shape[0],cov2d.shape[3],2,2).permute(0,2,3,1)
         return eigen_val,eigen_vec,cov2d_inv
-    
-    def eigh_and_inverse_cov2d_internal_v2(cov2d:torch.Tensor):
+
+    def __eight_inverse_2x2matrix_fused(cov2d:torch.Tensor):
+        class EighAndInverse2x2Func(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx,input_matrix:torch.Tensor):
+                val,vec,inverse_matrix=torch.ops.GaussianRaster.eigh_and_inv_2x2matrix_forward(input_matrix)
+                ctx.save_for_backward(inverse_matrix)
+                return val,vec,inverse_matrix
+            
+            @staticmethod
+            def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
+                (inverse_matrix,)=ctx.saved_tensors
+                matrix_grad:torch.Tensor=torch.ops.GaussianRaster.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+                matrix_grad.nan_to_num_(0)
+                return matrix_grad
         return EighAndInverse2x2Func.apply(cov2d)
 
-    return eigh_and_inverse_cov2d_internal_v1(cov2d)
+    @classmethod
+    def gen_inputs(cls):
+        cov2d=torch.randn([1,2,2,512*1024], dtype=torch.float32, device='cuda', requires_grad=False)
+        cov2d[:,0,1,:]=cov2d[:,1,0,:]
+        cov2d[:,0,0,:]*=10
+        cov2d[:,1,1,:]*=10
+        cov2d.requires_grad_(True)
+        return [cov2d,]
+    
+    _fused=__eight_inverse_2x2matrix_fused
+    _script=__eight_inverse_2x2matrix_script
+    test_inputs=None
+    _relative_error_threshold=1e-2
 
 ###
 ### compact params

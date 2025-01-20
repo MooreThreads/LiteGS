@@ -1033,29 +1033,40 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
     {
         float input_matrix[2][2] = { {input[batch_id][0][0][index],input[batch_id][0][1][index]},{input[batch_id][1][0][index],input[batch_id][1][1][index]}};
         float det = input_matrix[0][0] * input_matrix[1][1] - input_matrix[0][1] * input_matrix[1][0];
-        float mid = 0.5f * (input_matrix[0][0] + input_matrix[1][1]);
-        float temp = sqrt(max(mid * mid - det,1e-9f));
+        //a*c-b*b  ->  (a-b)(c-b)+b*(a+c-2*b)
+        float det1 = (input_matrix[0][0] - input_matrix[0][1]) * (input_matrix[1][1] - input_matrix[0][1]) + input_matrix[0][1] * (input_matrix[0][0] + input_matrix[1][1] - 2 * input_matrix[0][1]);
+        det=(abs(det) < abs(1e-5f * input_matrix[0][1] * input_matrix[1][0])) ? det1 : det;
+        
+        
+        float temp0 = input_matrix[0][0] + input_matrix[1][1];
+        float temp1 = sqrt((input_matrix[0][0] - input_matrix[1][1]) * (input_matrix[0][0] - input_matrix[1][1])
+            + 4 * input_matrix[0][1] * input_matrix[0][1]);
+        temp1 = max(temp1, 1e-9f);
 
-        val[batch_id][0][index] = mid - temp;
-        val[batch_id][1][index] = mid + temp;
+        float eig_value0 = 0.5 * (temp0 - temp1);
+        float eig_value1= 0.5 * (temp0 + temp1);
 
-        if (input_matrix[0][1] != 0)
+        val[batch_id][0][index] = eig_value0;
+        val[batch_id][1][index] = eig_value1;
+
+        float vec_0[2];
+        float vec_1[2];
+        if (abs(eig_value0 - input_matrix[0][0]) > abs(eig_value0 - input_matrix[1][1]))
         {
-            float vec_y_0 = ((mid - temp) - input_matrix[0][0]) / input_matrix[0][1] ;
-            float vec_y_1 = ((mid + temp) - input_matrix[0][0]) / input_matrix[0][1] ;
-
-            float square_sum_0_recip = 1 / sqrt(1 + vec_y_0 * vec_y_0);
-            float square_sum_1_recip = 1 / sqrt(1 + vec_y_1 * vec_y_1);
-
-            vec[batch_id][0][0][index] = square_sum_0_recip; vec[batch_id][0][1][index] = vec_y_0 * square_sum_0_recip;
-            vec[batch_id][1][0][index] = square_sum_1_recip; vec[batch_id][1][1][index] = vec_y_1 * square_sum_1_recip;
+            vec_0[0] = -input_matrix[0][1]; vec_0[1] = input_matrix[0][0] - eig_value0;
+            vec_1[0] = eig_value1 - input_matrix[1][1]; vec_1[1] = input_matrix[0][1];
         }
         else
         {
-            vec[batch_id][0][0][index] = 0; vec[batch_id][0][1][index] = 1;
-            vec[batch_id][1][0][index] = 1; vec[batch_id][1][1][index] = 0;
+            vec_0[0] = input_matrix[1][1] - eig_value0; vec_0[1] = -input_matrix[0][1];
+            vec_1[0] = input_matrix[0][1]; vec_1[1] = eig_value1 - input_matrix[0][0];
         }
+        float length0_rec = 1.0f / sqrt(vec_0[0] * vec_0[0] + vec_0[1] * vec_0[1]);
+        float length1_rec = 1.0f / sqrt(vec_1[0] * vec_1[0] + vec_1[1] * vec_1[1]);
+        vec[batch_id][0][0][index] = vec_0[0] * length0_rec; vec[batch_id][0][1][index] = vec_1[0] * length1_rec;
+        vec[batch_id][1][0][index] = vec_0[1] * length0_rec; vec[batch_id][1][1][index] = vec_1[1] * length1_rec;
         
+        det = (abs(det) < 1e-9f ? 1e-9 : det);
         float det_recip = 1 / det;
         inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
         inv[batch_id][1][0][index] = -input_matrix[1][0] * det_recip;
