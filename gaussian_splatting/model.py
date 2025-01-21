@@ -66,7 +66,7 @@ class GaussianSplattingModel:
         padding_num=morton_code.shape[0]%self.chunk_size
         if padding_num!=0:
             padding_num=self.chunk_size-padding_num
-        index=torch.concat([index,index[-padding_num:]])
+            index=torch.concat([index,index[-padding_num:]])
 
         def reorder_parameters_and_split(tensor:torch.Tensor,index:torch.Tensor)->torch.Tensor:
             assert(index.shape[0]%self.chunk_size==0)
