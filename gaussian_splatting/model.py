@@ -185,7 +185,7 @@ class GaussianSplattingModel:
         '''
         transform_matrix=wrapper.CreateTransformMatrix.call_fused(scaling_vec,rotator_vec)
         J=wrapper.CreateRaySpaceTransformMatrix.call_fused(point_positions,view_matrix,camera_focal,False)
-        cov2d=wrapper.CreateCov2dDirectly.call_script(J,view_matrix,transform_matrix)
+        cov2d=wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
         return cov2d
     
     def transform_to_cov3d(self,scaling_vec,rotator_vec)->torch.Tensor:
