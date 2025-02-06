@@ -18,7 +18,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 3. **Better Performance and Fewer Resources**: LiteGS achieves an 2.79x speed improvement over the original 3DGS implementation while reducing GPU memory usage. These optimizations enhance training efficiency without compromising flexibility or readability.
 
-4. **Algorithm Preservation**: LiteGS retains the core 3DGS algorithm, making only minor adjustments to the training logic due to BVH creation.
+4. **Algorithm Preservation**: LiteGS retains the core 3DGS algorithm, making only minor adjustments to the training logic due to culstering.
 
 
 ## Getting Started
@@ -118,17 +118,17 @@ Unlike the original 3DGS, which encapsulates nearly the entire rendering process
     
     In the final step, each tile rasterizes its visible primitives in parallel, ensuring high computational efficiency.
 
-LiteGS makes slight adjustments to density control to accommodate its clustering-based approach. Points are cloned and split at each epoch, then reorganized into new chunks without the need to rebuild the BVH. Every 10 epochs, point opacity is reset, and invalid points are removed, followed by a BVH rebuild. Compared to the original 3DGS, LiteGS resets opacity more frequently and introduces an opacity decay mechanism instead of resetting it to near zero. These minor changes maintain compatibility with LiteGS's clustering-based approach.
+LiteGS makes slight adjustments to density control to accommodate its clustering-based approach. 
 
 ## Flexible
 
-The gaussian_splatting/wrapper.py file contains two sets of APIs, offering flexibility in choosing between Python-based and CUDA-based implementations. Functions with the suffix “v1” represent the Python-based API, while those with the suffix “v2” correspond to the CUDA-based API. While the CUDA-based API delivers significant performance improvements, it lacks the flexibility. The choice between these implementations depends on the specific use case:
+The gaussian_splatting/wrapper.py file contains two sets of APIs, offering flexibility in choosing between Python-based and CUDA-based implementations. The Python-based API is invoked using call_script(), while the CUDA-based API is available via call_fused(). While the CUDA-based API delivers significant performance improvements, it lacks the flexibility. The choice between these implementations depends on the specific use case:
 
 * python-based api: Provides greater flexibility, making it ideal for rapid prototyping and development where training speed is less critical.
 
 * cuda-based api: Offers the highest performance and is recommended for production environments where training speed is a priority.
 
-Switching between the two implementations is straightforward: simply modify the gaussian_splatting/wrapper.py file.
+Additionally, an interface validate() and the accompanying check_wrapper.py script are provided to verify that both APIs produce consistent gradients.
 
 Here is an example that demonstrates the flexibility of LiteGS. In this instance, our goal is to create a more precise bounding box for a 2D Gaussian when generating visibility tables. In the original 3DGS implementation, the bounding box is determined as three times the length of the major axis of the Gaussian. However, incorporating opacity can allow for a smaller bounding box.
 
@@ -172,7 +172,7 @@ At a high level, **tensor dimensions are permuted** from [points,property] to [p
 
 ### DensityControl
 
-To maintain spatial locality during density control, we implemented **a simple BVH** (Bounding Volume Hierarchy). Unlike the original implementation, where new points are appended to the end of tensors—resulting in reduced spatial locality—our approach organizes points to preserve spatial coherence.
+To maintain spatial locality during density control, we now employ Morton code partitioning. Unlike the previous approach where new points were simply appended to the end of tensors—resulting in reduced spatial locality—our updated method leverages Morton codes to map 3D points into a one-dimensional space while preserving their spatial proximity. This reordering ensures that points which are close in the 3D space remain adjacent in memory, thereby improving memory access efficiency and overall computational performance.
 
 ### Cull and Compact
 
@@ -181,6 +181,8 @@ The original implementation performed direct culling of primitives, which could 
 Additionally, we implemented **compaction** of Gaussian point parameters to improve GPU utilization. While the original implementation skipped computations for culled Gaussian points, it left the GPU scheduler underutilized due to warp-based execution (32 threads). By compacting Gaussian point parameters, GPU resource utilization is improved.
 
 It is important to note that compaction should be applied to Gaussian point clusters rather than individual primitives. Applying it at the primitive level can slow down the backward pass due to out-of-order memory writes.
+
+Furthermore, in the backward phase, a dense tensor can be directly encapsulated as a sparse tensor. The indices of the sparse tensor correspond to the cluster's visibility, ensuring that only the visible clusters contribute to the gradient computation.
 
 ### Projection
 
