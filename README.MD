@@ -182,7 +182,11 @@ Additionally, we implemented **compaction** of Gaussian point parameters to impr
 
 It is important to note that compaction should be applied to Gaussian point clusters rather than individual primitives. Applying it at the primitive level can slow down the backward pass due to out-of-order memory writes.
 
-Furthermore, in the backward phase, a dense tensor can be directly encapsulated as a sparse tensor. The indices of the sparse tensor correspond to the cluster's visibility, ensuring that only the visible clusters contribute to the gradient computation.
+### Sparse Gradients and Fused Optimizer
+
+Another closely related optimization is the use of sparse gradients. After visibility culling, the gradient back-propagated to each parameter can be represented as a sparse tensor whose indices are defined by visible primitives only. In higher-order spherical-harmonics (3DGS) training, utilizing sparse tensors can provide significant performance benefits.
+
+Furthermore, conventional optimizers may not be optimal for 3DGS training. For example, the default Adam implementation often relies on a multitensor-based algorithm (invoked via multiple multitensor_add, multitensor_mul, multitensor_div steps in Python), which is generally tailored for large numbers of small tensors in typical neural networks. By contrast, 3DGS involves fewer—but often larger—tensors. Specifying the fused parameter triggers a kernel-based Adam implementation for each tensor, which can improve efficiency in 3DGS workflows.
 
 ### Projection
 
@@ -226,9 +230,9 @@ for(int i=16;i > 0;i/=2)
 The backward pass for rasterizing a 2D Gaussian plane is one of the most computationally expensive steps in the training process, requiring careful optimization.
 
 #### Warp-level Reduction
-In some cases, skipping shared memory reduction and directly performing warp-level reduction followed by AtomicAdd is the most efficient solution. Specifically, if the device has sufficient ROP (Raster Operations) units, shared memory reduction may be unnecessary. ROP unit is a hardware architecture in L2 cache to accelerate the atomic operation in NVIDIA gpu. While some GPUs may lack ROP units, all GPUs have hardware responsible for global atomic operations. For simplicity, we refer to these as ROP units. If the ratio of compute units to ROP units is favorable (e.g., Nvidia Turing architecture has 36 SMs and 96 ROP units, while Nvidia Ampere architecture has 84 SMs and 112 ROP units), AtomicAdd does not become a bottleneck.
+In some scenarios, it can be more efficient to bypass shared-memory reduction and directly use warp-level reduction followed by a global AtomicAdd. This approach works particularly well on devices that have sufficient L2 atomic throughput, making shared-memory accumulation unnecessary. Although NVIDIA’s official documentation does not specify the exact number of “L2 Atomic Pipelines,” numerous microbenchmark studies indicate that L2 caches are physically partitioned per memory controller, and each partition provides a dedicated atomic path. Because different GPU models have varying numbers of memory partitions, the ratio of L2 partitions to compute cores ultimately determines whether warp-level reduction plus a global atomic add will sustain high performance or become a bottleneck.
 
-In summary, warp-level reduction is a straightforward and efficient implementation that can be optimal for certain hardware configurations.
+In summary, warp-level reduction is a straightforward, efficient implementation that can be optimal for certain hardware configurations.
 
 #### Multibatch Reduction
 For reductions in shared memory, further optimizations are necessary. Each pixel typically involves 9 floating-point gradients, meaning the reduction process must handle multiple batches (multibatch reduction) instead of a simple one. Assigning threads to batches instead of relying on for-loops can significantly accelerate the reduction. Below is an optimized implementation:
