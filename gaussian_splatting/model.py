@@ -12,7 +12,7 @@ from util.cg_torch import gen_morton_code
 
 class GaussianSplattingModel:
     @torch.no_grad()
-    def __init__(self,scene:GaussianScene,actived_sh_degree:int,chunk_size=1024):
+    def __init__(self,scene:GaussianScene,actived_sh_degree:int,chunk_size=128):
         assert(chunk_size>0)
         self.actived_sh_degree=actived_sh_degree
         self.chunk_size=chunk_size
