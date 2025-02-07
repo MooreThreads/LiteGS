@@ -6,12 +6,11 @@ from gaussian_splatting.model import GaussianSplattingModel
 from training.view_manager import ViewManager
 from training.training import GaussianTrainer
 import typing
-from training.arguments import ModelParams,get_combined_args
+from training.arguments import ModelParams
 import os
 import torch
 import torchvision
-from util.image_utils import psnr,ssim
-from util.lpipsPyTorch import lpips
+from torchmetrics.image import psnr,ssim,lpip
 
 def report_result(inference_results:list,result_name:str):
     acc_psnr=0
@@ -66,13 +65,18 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(output_path,'test'), exist_ok=True)
     os.makedirs(os.path.join(output_path,'train'), exist_ok=True)
 
+    #metrics
+    ssim_metrics=ssim.StructuralSimilarityIndexMeasure(data_range=(0.0,1.0)).cuda()
+    psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
+    lpip_metrics=lpip.LearnedPerceptualImagePatchSimilarity(net_type='vgg').cuda()
+
     with torch.no_grad():
         def metrics_train(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
             torchvision.utils.save_image(ground_truth[0],os.path.join(output_path,'train','{0}_gt.png'.format(img_name)))
             torchvision.utils.save_image(out_img[0],os.path.join(output_path,'train','{0}.png'.format(img_name)))
-            img_psnr=psnr(out_img,ground_truth)
-            img_ssim=ssim(out_img,ground_truth)
-            img_lpips=lpips(out_img,ground_truth, net_type='vgg')
+            img_psnr=psnr_metrics(out_img,ground_truth)
+            img_ssim=ssim_metrics(out_img,ground_truth)
+            img_lpips=lpip_metrics(out_img,ground_truth)
             return img_psnr,img_ssim,img_lpips
         train_result:list=GaussianTrainer.inference(gs_model,view_manager_train,False,metrics_train)
         report_result(train_result,model_params.model_path+' training set')
@@ -80,9 +84,9 @@ if __name__ == "__main__":
         def metrics_test(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
             torchvision.utils.save_image(ground_truth[0],os.path.join(output_path,'test','{0}_gt.png'.format(img_name)))
             torchvision.utils.save_image(out_img[0],os.path.join(output_path,'test','{0}.png'.format(img_name)))
-            img_psnr=psnr(out_img,ground_truth)
-            img_ssim=ssim(out_img,ground_truth)
-            img_lpips=lpips(out_img,ground_truth, net_type='vgg')
+            img_psnr=psnr_metrics(out_img,ground_truth)
+            img_ssim=ssim_metrics(out_img,ground_truth)
+            img_lpips=lpip_metrics(out_img,ground_truth)
             return img_psnr,img_ssim,img_lpips
         test_result=GaussianTrainer.inference(gs_model,view_manager_test,False,metrics_test)
         report_result(test_result,model_params.model_path+' testing set')

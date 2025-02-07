@@ -7,8 +7,9 @@ import training.loss
 import fused_ssim
 from training.densitycontroller import DensityControllerOfficial
 from util.statistic_helper import StatisticsHelperInst
-from util import cg_torch,image_utils,tiles2img_torch,img2tiles_torch
+from util import tiles2img_torch,img2tiles_torch
 from training.sparse_adam import SparseGaussianAdam
+import torchmetrics.image.psnr
 
 import torch
 import typing
@@ -222,8 +223,9 @@ class GaussianTrainer:
 
     @torch.no_grad()
     def report_psnr(self,epoch_i:int):
+        psnr_metrics=torchmetrics.image.psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
         def get_psnr_internal(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
-            psnr=image_utils.psnr(out_img,ground_truth)
+            psnr=psnr_metrics(out_img,ground_truth)
             return psnr
         psnr_list=GaussianTrainer.inference(self.model,self.view_manager,False,get_psnr_internal)
         psnr=torch.concat(psnr_list,dim=0)
