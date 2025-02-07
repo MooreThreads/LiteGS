@@ -71,15 +71,15 @@ if __name__ == "__main__":
     lpip_metrics=lpip.LearnedPerceptualImagePatchSimilarity(net_type='vgg').cuda()
 
     with torch.no_grad():
-        def metrics_train(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
-            torchvision.utils.save_image(ground_truth[0],os.path.join(output_path,'train','{0}_gt.png'.format(img_name)))
-            torchvision.utils.save_image(out_img[0],os.path.join(output_path,'train','{0}.png'.format(img_name)))
-            img_psnr=psnr_metrics(out_img,ground_truth)
-            img_ssim=ssim_metrics(out_img,ground_truth)
-            img_lpips=lpip_metrics(out_img,ground_truth)
-            return img_psnr,img_ssim,img_lpips
-        train_result:list=GaussianTrainer.inference(gs_model,view_manager_train,False,metrics_train)
-        report_result(train_result,model_params.model_path+' training set')
+        # def metrics_train(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
+        #     torchvision.utils.save_image(ground_truth[0],os.path.join(output_path,'train','{0}_gt.png'.format(img_name)))
+        #     torchvision.utils.save_image(out_img[0],os.path.join(output_path,'train','{0}.png'.format(img_name)))
+        #     img_psnr=psnr_metrics(out_img,ground_truth)
+        #     img_ssim=ssim_metrics(out_img,ground_truth)
+        #     img_lpips=lpip_metrics(out_img,ground_truth)
+        #     return img_psnr,img_ssim,img_lpips
+        # train_result:list=GaussianTrainer.inference(gs_model,view_manager_train,False,metrics_train)
+        # report_result(train_result,model_params.model_path+' training set')
         
         def metrics_test(iter_i:int,img_name:str,out_img:torch.Tensor,ground_truth:torch.Tensor)->torch.Tensor:
             torchvision.utils.save_image(ground_truth[0],os.path.join(output_path,'test','{0}_gt.png'.format(img_name)))

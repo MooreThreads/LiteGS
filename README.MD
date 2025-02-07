@@ -16,7 +16,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 2. **Flexible**: LiteGS provides two modular APIs—one implemented in CUDA and the other in Python. The Python-based API facilitates straightforward modifications to calculation logic without requiring expertise in C code, enabling rapid prototyping. Additionally, tensor dimensions are permuted to maintain competitive training speeds for the Python API. For performance-critical tasks, the CUDA-based API is fully customizable.
 
-3. **Better Performance and Fewer Resources**: LiteGS achieves an 2.79x speed improvement over the original 3DGS implementation while reducing GPU memory usage by around 30%. These optimizations enhance training efficiency without compromising flexibility or readability.
+3. **Better Performance and Fewer Resources**: LiteGS achieves an 3.0x speed improvement over the original 3DGS implementation while reducing GPU memory usage by around 30%. These optimizations enhance training efficiency without compromising flexibility or readability.
 
 4. **Algorithm Preservation**: LiteGS retains the core 3DGS algorithm, making only minor adjustments to the training logic due to culstering.
 
@@ -71,9 +71,9 @@ The training results of LiteGS using the Mip-NeRF 360 dataset on an NVIDIA A100 
 
 |metric\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----        | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
-|SSIM(Test)     | 0.770   | 0.620   | 0.866   | 0.795   | 0.652   | 0.931   | 0.916   | 0.935   | 0.952   |
-|PSNR(Test)     | 25.49   | 22.08   | 27.62   | 27.29   | 22.84   | 32.11   | 29.22   | 32.21   | 33.19   |
-|LPIPS(Test)    | 0.223   | 0.338   | 0.115   | 0.218   | 0.322   | 0.189   | 0.182   | 0.116   | 0.168   |
+|SSIM(Test)     | 0.767   | 0.615   | 0.864   | 0.793   | 0.649   | 0.932   | 0.916   | 0.934   | 0.952   |
+|PSNR(Test)     | 25.42   | 22.08   | 27.61   | 27.14   | 22.91   | 32.17   | 29.24   | 32.04   | 33.19   |
+|LPIPS(Test)    | 0.223   | 0.338   | 0.115   | 0.218   | 0.323   | 0.189   | 0.183   | 0.115   | 0.168   |
 
 
 For comparison, the metrics of the original 3DGS implementation are as follows. These results demonstrate that the refactored LiteGS code maintains accuracy while significantly improving performance.
@@ -85,20 +85,22 @@ For comparison, the metrics of the original 3DGS implementation are as follows. 
 |LPIPS(Test)    | 0.200   | 0.320   | 0.107   | 0.223   | 0.317   | 0.220   | 0.204   | 0.129   | 0.205   |
 
 
-The training times for LiteGS and the original 3DGS implementation on NVIDIA A100 and NVIDIA RTX3090 are summarized below, illustrating an approximately **2.8x** speedup achieved by LiteGS.
+Below is a summary of the training times for LiteGS and the original 3DGS implementations on NVIDIA A100 and NVIDIA RTX3090 GPUs. In the current setup, the original 3DGS implementation includes an integrated acceleration scheme from Taming-GS that can be enabled via training parameters. For comparison purposes, we have also included this TamingGS-integrated version in our evaluation.
 
-| repo\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
+Our experimental results demonstrate that even with kernel splitting to achieve modularity, LiteGS still delivers remarkable performance improvements. Specifically, compared to the original 3DGS implementation, LiteGS achieves a 3.0x speedup on the A100. Moreover, when compared to the TamingGS-integrated version of 3DGS, LiteGS still offers a 1.3x speedup. These results clearly underscore the effectiveness of our approach in enhancing training efficiency while maintaining high performance.
+
+|   |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
 |   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
 | Original-d9fad7b(A100)    | 32:09   | 24:37   | 31:34   | 25:58   | 24:08   | 21:59   | 21:45   | 25:41   | 19:10   |
-| LiteGS(A100)              | 10:36   | 08:12   | 11:03   | 09:31   | 08:34   | 07:33   | 09:05   | 08:13   | 07:50   |
+| Taming-Intergrated(A100)  | 13:29   | 10:53   | 13:02   | 10:48   | 10:19   | 10:04   | 10:11   | 14:16   | 13:48   |
+| LiteGS(A100)              | 08:55   | 08:01   | 09:08   | 08:10   | 08:35   | 07:29   | 07:25   | 07:50   | 07:15   |
 | Original-d9fad7b(RTX3090) | 40:06   | 28:46   | 42:18   | 32:40   | 29:39   | 24:53   | 24:16   | 29:30   | 20:15   |
+|Taming-Intergrated(RTX3090)| 15:29   | 11:42   | 16:24   | 11:49   | 11:48   | 10:06   | 12:00   | 16:38   | 09:01   |
 | LiteGS(RTX3090)           | 11:43   | 09:42   | 12:39   | 10:27   | 10:37   | 07:33   | 09:21   | 09:17   | 07:41   |
 
 ![image](doc_img/takes_time.png)
 
-目前，原始实现的3DGS合入了timing-GS的加速方案，通过训练参数开启。下面比较了合入timingGS加速方案的原始仓比较，LiteGS取得约xx的加速。
 
-TODO
 
 ## Modular
 
