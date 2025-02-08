@@ -1,6 +1,6 @@
 # LiteGS
 
-**2.8x Acceleration, Modular, and Available in Pure Python or CUDA**
+**3.5x Acceleration, Modular, and Available in Pure Python or CUDA**
 
 This repository provides a refactored codebase aimed at improving the flexibility and performance of Gaussian splatting.
 
