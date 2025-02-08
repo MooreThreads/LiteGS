@@ -38,25 +38,62 @@ namespace cg = cooperative_groups;
         int r = RD[view_id][0][point_id];
         int d = RD[view_id][1][point_id];
         int count = 0;
-
-        for (int i = u; i < d; i++)
+        if ((r - l) * (d - u) < 32)
         {
-            for (int j = l; j < r; j++)
+            for (int i = u; i < d; i++)
             {
-                int tile_id = i * TileSizeX + j;
-                table_tileId[view_id][end - 1 - count] = tile_id+1;// tile_id 0 means invalid!
-                table_pointId[view_id][end - 1 - count] = point_id;
-                count++;
+                for (int j = l; j < r; j++)
+                {
+                    int tile_id = i * TileSizeX + j;
+                    table_tileId[view_id][end - 1 - count] = tile_id + 1;// tile_id 0 means invalid!
+                    table_pointId[view_id][end - 1 - count] = point_id;
+                    count++;
+                }
             }
         }
     }
-
-
 }
 
+ __global__ void large_points_duplicate_with_keys_kernel(
+     const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> LU,//viewnum,2,pointnum
+     const torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> RD,//viewnum,2,pointnum
+     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> prefix_sum,//viewnum,pointnum
+     const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> depth_sorted_pointid,//viewnum,pointnum
+     const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> large_index,//tasknum,2
+     int TileSizeX,
+     torch::PackedTensorAccessor32 < int16_t, 2, torch::RestrictPtrTraits> table_tileId,
+     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
+ )
+ {
+     auto block = cg::this_thread_block();
+     auto warp = cg::tiled_partition<32>(block);
+     int task_index = warp.meta_group_size() * block.group_index().x + warp.meta_group_rank();
 
+     if (task_index < large_index.size(0))
+     {
+         int view_id = large_index[task_index][0];
+         int point_index = large_index[task_index][1];
+         int point_id = depth_sorted_pointid[view_id][point_index];
+         int end = prefix_sum[view_id][point_index];
 
-std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tensor prefix_sum, at::Tensor depth_sorted_pointid, int64_t allocate_size, int64_t TilesSizeX)
+         //int end = prefix_sum[view_id][point_id+1];
+         int l = LU[view_id][0][point_id];
+         int u = LU[view_id][1][point_id];
+         int width = RD[view_id][0][point_id]-l;
+         int height = RD[view_id][1][point_id]-u;
+         for (int i = warp.thread_rank(); i < width * height; i+=warp.num_threads())
+         {
+             int col = l + (i % width);
+             int row = u + (i / width);
+             int tile_id = row * TileSizeX + col;
+             table_tileId[view_id][end - 1 - i] = tile_id + 1;// tile_id 0 means invalid!
+             table_pointId[view_id][end - 1 - i] = point_id;
+         }
+     }
+ }
+
+std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tensor prefix_sum, at::Tensor depth_sorted_pointid,
+    at::Tensor large_index,int64_t allocate_size, int64_t TilesSizeX)
 {
     at::DeviceGuard guard(LU.device());
     int64_t view_num = LU.sizes()[0];
@@ -82,6 +119,18 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
     
+    int large_points_num = large_index.size(0);
+    int blocksnum = std::ceil((large_points_num * 32) / 1024.0f);
+    large_points_duplicate_with_keys_kernel << <blocksnum, 1024 >> > (
+        LU.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+        RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+        prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
+        large_index.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
+        TilesSizeX,
+        table_tileId.packed_accessor32<int16_t, 2, torch::RestrictPtrTraits>(),
+        table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+    CUDA_CHECK_ERRORS;
 
     return { table_tileId ,table_pointId };
     

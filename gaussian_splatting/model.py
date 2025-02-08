@@ -293,7 +293,8 @@ class GaussianSplattingModel:
         allocate_size=total_tiles_num_batch.max().cpu()
 
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=torch.ops.GaussianRaster.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,int(allocate_size),int(tilesX))
+        large_points_index=(tiles_touched>=32).nonzero()
+        my_table=torch.ops.GaussianRaster.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),int(tilesX))
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
