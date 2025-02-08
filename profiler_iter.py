@@ -11,6 +11,8 @@ from matplotlib import pyplot as plt
 from training.arguments import OptimizationParams
 import time
 import fused_ssim
+from training.sparse_adam import SparseGaussianAdam
+import training.loss
 
 all_scene=["bicycle","bonsai","counter","flowers","garden","kitchen","room","stump","treehill"]
 scene_str="bonsai"#all_scene[8]
@@ -28,6 +30,18 @@ scene.load_ply('./output/{0}/point_cloud/finish/point_cloud.ply'.format(scene_st
 gaussian_model=GaussianSplattingModel(scene,3)
 gaussian_model.update_tiles_coord(image_size,8)
 
+l = [
+            {'params': [gaussian_model._xyz], 'lr': args.position_lr_init*1e-9, "name": "xyz"},
+            {'params': [gaussian_model._features_dc], 'lr': args.feature_lr*1e-9, "name": "f_dc"},
+            {'params': [gaussian_model._features_rest], 'lr': args.feature_lr*1e-9, "name": "f_rest"},
+            {'params': [gaussian_model._opacity], 'lr': args.opacity_lr*1e-9, "name": "opacity"},
+            {'params': [gaussian_model._scaling], 'lr': args.scaling_lr*1e-9, "name": "scaling"},
+            {'params': [gaussian_model._rotation], 'lr': args.rotation_lr*1e-9, "name": "rotation"}
+        ]
+
+optimizer = SparseGaussianAdam(l, lr=0, eps=1e-15)
+
+
 trainingset=[c for idx, c in enumerate(images_info) if idx % 8 != 0]
 testset=[c for idx, c in enumerate(images_info) if idx % 8 == 0]
 view_manager=ViewManager(trainingset,cameras_info)
@@ -42,7 +56,7 @@ total_views_num=view_matrix.shape[0]
 
 
 start=time.monotonic()
-for i in range(0,10):
+for i in range(0,100):
     with torch.no_grad():
         view_matrix_batch=view_matrix[i:i+1]
         view_project_matrix_batch=view_project_matrix[i:i+1]
@@ -50,10 +64,14 @@ for i in range(0,10):
         camera_center_batch=camera_center[i:i+1]
         ground_truth_batch=ground_truth[i:i+1].contiguous()
 
-    tile_img,tile_transmitance,_=gaussian_model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,None)
+    tile_img,tile_transmitance,visible_chunkid=gaussian_model.render(view_matrix_batch,view_project_matrix_batch,camera_focal_batch,camera_center_batch,None,None)
     img=tiles2img_torch(tile_img,gaussian_model.cached_tiles_size[0],gaussian_model.cached_tiles_size[1])[...,:image_size[1],:image_size[0]].contiguous()
-    img.mean().backward()
-    #optimizer.zero_grad(set_to_none = True)
+    l1_loss=training.loss.l1_loss(img,ground_truth_batch)
+    ssim_loss=fused_ssim.fused_ssim(img,ground_truth_batch)
+    loss=(1.0-0.2)*l1_loss+0.2*(1-ssim_loss)
+    loss.backward()
+    optimizer.step(visible_chunkid)
+    optimizer.zero_grad(set_to_none = True)
 
 torch.cuda.synchronize()
 end=time.monotonic()
