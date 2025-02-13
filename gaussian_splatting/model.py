@@ -56,6 +56,51 @@ class GaussianSplattingModel:
             self.__split_into_chunk()
         return
     
+    def register_external(self,xyz:torch.Tensor,features_dc:torch.Tensor,features_rest:torch.Tensor,
+                               scaling:torch.Tensor,rotation:torch.Tensor,opacity:torch.Tensor,sort_morton:bool=True):
+        '''
+        xyz:[#points,4]
+        features_dc:[#points,1,3]
+        features_rest:[#points,x,3]
+        opacity:[#points,1]
+        scaling:[#points,3]
+        rotation:[#points,4]
+        '''
+        points_num=xyz.shape[0]
+        assert(xyz.shape==(points_num,4))
+        assert(features_dc.shape==(points_num,1,3))
+        assert(features_rest.shape[0]==points_num)
+        assert(opacity.shape==(points_num,1))
+        assert(scaling.shape==(points_num,3))
+        assert(rotation.shape==(points_num,4))
+
+        morton_code=gen_morton_code(xyz[:,:3])
+        _,index=morton_code.sort()
+
+        padding_num=morton_code.shape[0]%self.chunk_size
+        if padding_num!=0:
+            padding_num=self.chunk_size-padding_num
+            index=torch.concat([index,index[-padding_num:]])
+
+        def reorder_parameters_and_split(tensor:torch.Tensor,index:torch.Tensor)->torch.Tensor:
+            assert(index.shape[0]%self.chunk_size==0)
+            chunks_num=int(index.shape[0]/self.chunk_size)
+            chunk_tensor=tensor[...,index].reshape(*tensor.shape[:-1],chunks_num,self.chunk_size)
+            return chunk_tensor
+        self._xyz=reorder_parameters_and_split(xyz.permute(1,0),index)
+        self._features_dc=reorder_parameters_and_split(features_dc.permute(1,2,0),index)
+        self._features_rest=reorder_parameters_and_split(features_rest.permute(1,2,0),index)
+        self._opacity=reorder_parameters_and_split(opacity.permute(1,0),index)
+        self._scaling=reorder_parameters_and_split(scaling.permute(1,0),index)
+        self._rotation=reorder_parameters_and_split(rotation.permute(1,0),index)
+
+        self.chunk_AABB_origin=None
+        self.chunk_AABB_extend=None
+        self.b_split_into_chunk=True
+
+        self.rebuild_AABB()
+        return
+
     @torch.no_grad()
     def __split_into_chunk(self):
         assert(self.b_split_into_chunk==False)
