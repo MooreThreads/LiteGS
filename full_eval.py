@@ -30,7 +30,7 @@ if not args.skip_training:
     for scene in all_scenes:
         scene_input_path=os.path.join(args.mipnerf360,scene,args.colmap_subfolder)
         scene_output_path=os.path.join(args.output_path,scene)
-        os.system("python train.py -s " + scene_input_path + " -i images -m " + scene_output_path + " --eval --sh_degree 3")
+        os.system("python train.py -s " + scene_input_path + " -i images -m " + scene_output_path + " --eval --sh_degree 3 --test_epochs -1")
 
 for scene in all_scenes:
     scene_input_path=os.path.join(args.mipnerf360,scene,args.colmap_subfolder)
