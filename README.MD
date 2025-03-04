@@ -37,7 +37,7 @@ To get started, you’ll need to install the required submodules:
 
 2. Install fused-ssim
 
-    `cd gaussian_splatting/submodules/fussed_ssim`
+    `cd gaussian_splatting/submodules/fused_ssim`
 
     `python setup.py build_ext --inplace -j8`
 
