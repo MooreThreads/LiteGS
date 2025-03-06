@@ -1,18 +1,16 @@
 import torch
 import typing
+from ..scene import cluster
 class StatisticsHelper:
     def __init__(self,chunk_num,chunk_size):
-        self.reset(chunk_num,chunk_size)
+        self.reset(chunk_num,chunk_size,lambda epoch:False)
         return
     
-    def start(self):
-        self.bStart=True
-
-    def pause(self):
-        self.bStart=False
     
-    def reset(self,chunk_num,chunk_size):
+    def reset(self,chunk_num,chunk_size,is_running_handle:typing.Callable[[bool],int]):
         self.bStart=False
+        if is_running_handle is not None:
+            self.is_running=is_running_handle
         self.chunk_num=chunk_num
         self.chunk_size=chunk_size
         self.mean_and_std:dict[str,torch.Tensor]={}
@@ -22,6 +20,10 @@ class StatisticsHelper:
         self.compact_mask:torch.Tensor=None
 
         self.handle_list:list[tuple[str,torch.Tensor,typing.Callable[[torch.Tensor],torch.Tensor],typing.Callable]]=[]
+        return
+    
+    def step(self,epoch:int):
+        self.bStart=self.is_running(epoch+1)
         return
     
     def register_tensor_grad_callback(self,key:str,tensor:torch.Tensor,
@@ -137,6 +139,7 @@ class StatisticsHelper:
         max_val=None
         if data is not None:
             max_val=data[0]
+        max_val,=cluster.uncluster(max_val)
         return max_val
     
     @torch.no_grad()
@@ -145,6 +148,7 @@ class StatisticsHelper:
         min_val=None
         if data is not None:
             min_val=data[1]
+        min_val,=cluster.uncluster(min_val)
         return min_val
 
     @torch.no_grad()
@@ -153,6 +157,7 @@ class StatisticsHelper:
         mean_val=None
         if data is not None:
             mean_val=(data[0]/(self.visible_count+1e-6))
+            mean_val,=cluster.uncluster(mean_val)
         return mean_val
     
     @torch.no_grad()
@@ -168,6 +173,12 @@ class StatisticsHelper:
         std_tensor=None
         if data is not None:
             std_tensor=calc_std(data[0],data[1],self.visible_count)
+        std_tensor,=cluster.uncluster(std_tensor)
         return std_tensor
+    
+    def get_global_culling(self):
+        culled=(self.visible_count==0)
+        culled,=cluster.uncluster(culled)
+        return culled
 
 StatisticsHelperInst=StatisticsHelper(0,0)

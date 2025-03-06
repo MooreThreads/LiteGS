@@ -18,7 +18,8 @@ namespace cg = cooperative_groups;
 template <typename scalar_t,bool TRNASPOSE=true>
 __global__ void jacobian_rayspace_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> translated_position,    //[batch,4,point_num] 
-    const torch::PackedTensorAccessor32<scalar_t, 2, torch::RestrictPtrTraits> camera_focal,    //[batch,2] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> proj_matrix,    //[batch,2] 
+    const int output_h,const int output_w,
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian         //[batch,3,3,point_num]
     )
 {
@@ -26,8 +27,8 @@ __global__ void jacobian_rayspace_kernel(
     int batch_id = blockIdx.y;
     if (batch_id < translated_position.size(0) && index < translated_position.size(2))
     {
-        float focalx = camera_focal[batch_id][0];
-        float focaly = camera_focal[batch_id][1];
+        float focalx = proj_matrix[batch_id][0][0]*output_w*0.5;
+        float focaly = proj_matrix[batch_id][1][1]*output_h*0.5;
 
         float reciprocal_tz = 1.0f/max(translated_position[batch_id][2][index],1e-2f);//near plane 0.01
         float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
@@ -49,7 +50,8 @@ __global__ void jacobian_rayspace_kernel(
 
 at::Tensor jacobianRayspace(
     at::Tensor translated_position, //N,4,P
-    at::Tensor camera_focal, //N,2
+    at::Tensor proj_matrix, //N,2
+    int64_t output_h,int64_t output_w,
     bool bTranspose
 )
 {
@@ -63,14 +65,16 @@ at::Tensor jacobianRayspace(
     {
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.type(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t,true > << <Block3d, threadsnum >> > (
             translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            camera_focal.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
+            proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            output_h,output_w,
             jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
     }
     else
     {
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.type(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t, false > << <Block3d, threadsnum >> > (
             translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            camera_focal.packed_accessor32<scalar_t, 2, torch::RestrictPtrTraits>(),
+            proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            output_h,output_w,
             jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
     }
 

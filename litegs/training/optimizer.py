@@ -69,14 +69,16 @@ def get_optimizer(xyz:torch.nn.Parameter,scale:torch.nn.Parameter,rot:torch.nn.P
     
     l = [
         {'params': [xyz], 'lr': opt_setting.position_lr_init * spatial_lr_scale, "name": "xyz"},
-        {'params': [sh_0], 'lr': opt_setting.feature_lr, "name": "f_dc"},
-        {'params': [sh_rest], 'lr': opt_setting.feature_lr / 20.0, "name": "f_rest"},
+        {'params': [sh_0], 'lr': opt_setting.feature_lr, "name": "sh_0"},
+        {'params': [sh_rest], 'lr': opt_setting.feature_lr / 20.0, "name": "sh_rest"},
         {'params': [opacity], 'lr': opt_setting.opacity_lr, "name": "opacity"},
-        {'params': [scale], 'lr': opt_setting.scaling_lr, "name": "scaling"},
-        {'params': [rot], 'lr': opt_setting.rotation_lr, "name": "rotation"}
+        {'params': [scale], 'lr': opt_setting.scaling_lr, "name": "scale"},
+        {'params': [rot], 'lr': opt_setting.rotation_lr, "name": "rot"}
     ]
-
-    optimizer = SparseGaussianAdam(l, lr=0, eps=1e-15)
+    if opt_setting.sparse_grad:
+        optimizer = SparseGaussianAdam(l, lr=0, eps=1e-15)
+    else:
+        optimizer = torch.optim.Adam(l, lr=0, eps=1e-15)
     scheduler = Scheduler(optimizer,opt_setting.position_lr_init*spatial_lr_scale,
               opt_setting.position_lr_final*spatial_lr_scale,
               max_epochs=opt_setting.position_lr_max_steps)

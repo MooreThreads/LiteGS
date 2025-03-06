@@ -83,10 +83,7 @@ def get_morton_sorted_indices(xyz:torch.Tensor):
     return indices
 
 @torch.no_grad()
-def refine_spatial(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Tensor,*args)->list[torch.Tensor]:
-    '''
-    根据xyz重排参数，保证空间一致性。optimizer为None则重排tenosr，否则重排optimizer中的parameters
-    '''
+def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Tensor,*args)->list[torch.Tensor]:
     if bClustered:
         chunk_size=xyz.shape[-1]
         xyz,=cluster.uncluster(xyz)
@@ -118,7 +115,7 @@ def refine_spatial(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
                 refined_data = param_data[..., indices]
                 if bClustered:
                     refined_data, = cluster.cluster_points(chunk_size,refined_data)
-                param.data.copy_(refined_data)
+                param.data=refined_data
                 #grads
                 if param.grad is not None:
                         if bClustered:
@@ -128,7 +125,7 @@ def refine_spatial(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
                         refined_grad = grad_data[..., indices]
                         if bClustered:
                             refined_grad, = cluster.cluster_points(chunk_size,refined_grad)
-                        param.grad.data.copy_(refined_grad)
+                        param.grad.data=refined_grad
                 #state
                 state_dict = optimizer.state[param]
                 for key, value in state_dict.items():
@@ -140,5 +137,5 @@ def refine_spatial(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
                         refined_value = unclustered_value[..., indices]
                         if bClustered:
                             refined_value, = cluster.cluster_points(chunk_size,refined_value)
-                        value.copy_(refined_value)
+                        value.data=refined_value
     return None

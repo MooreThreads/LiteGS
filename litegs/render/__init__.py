@@ -3,6 +3,7 @@ import math
 import typing
 
 from .. import utils
+from ..utils.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from .. import arguments
 
 
@@ -66,12 +67,11 @@ def binning(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opaci
         
     return tile_start_index,sorted_pointId,sorted_tileId,b_visible
 
-def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,actived_sh_degree:int,
+def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
            xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
-           output_shape,pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+           actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
     #activate
-    #!!!!!!!!!!!todo xyz pad 1!!!!!!!!!!!!!!!!!!!
     pad_one=torch.ones((1,xyz.shape[-1]),dtype=xyz.dtype,device=xyz.device)
     xyz=torch.concat((xyz,pad_one),dim=0)
     scale=scale.exp()
@@ -80,7 +80,7 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,actived_sh_degree:i
 
     #gs projection
     transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot)
-    J=utils.wrapper.CreateRaySpaceTransformMatrix.call_script(xyz,view_matrix,proj_matrix,False)#todo script
+    J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(xyz,view_matrix,proj_matrix,output_shape,False)#todo script
     cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
     eigen_val,eigen_vec,inv_cov2d=utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
     ndc_pos=utils.wrapper.World2NdcFunc.apply(xyz,view_matrix@proj_matrix)
@@ -95,19 +95,18 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,actived_sh_degree:i
     tile_start_index,sorted_pointId,sorted_tileId,b_visible=binning(ndc_pos,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
     if StatisticsHelperInst.bStart:
         StatisticsHelperInst.update_visible_count(b_visible)
-
-    #rasterization
-    if tiles is None:
-        tiles=self.cached_tiles_map
-    if StatisticsHelperInst.bStart and ndc_pos.requires_grad:
         def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
             return tensor[:,:2].norm(dim=1)
         StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,gradient_wrapper)
-    img,transmitance=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,tiles,
-                                            pp.tile_size,self.cached_tiles_size[0],self.cached_tiles_size[1],output_shape[0],output_shape[1])
 
-    img=None
-    transmitance=None
+    #raster
+    tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size)))
+    tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size)))
+    #tiles=torch.arange(1,tiles_x*tiles_y+1,device=xyz.device,dtype=torch.int32).unsqueeze(0)#0 is invalid
+    img,transmitance=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
+                                            pp.tile_size,output_shape[0],output_shape[1])
+    img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+    transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     depth=None
     normal=None
     return img,transmitance,depth,normal

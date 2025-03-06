@@ -76,7 +76,6 @@ class PipelineParams(ParamGroup):
     def __init__(self, parser):
         self.convert_SHs_python = False
         self.compute_cov3D_python = False
-        self.cluster_interval = 1
         self.cluster_size = 128
         self.tile_size = 8
         self.debug = False
@@ -84,7 +83,7 @@ class PipelineParams(ParamGroup):
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 150
+        self.iterations = 100
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_max_steps = 150
@@ -92,14 +91,22 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
-        self.percent_dense = 0.01
         self.lambda_dssim = 0.2
-        self.densification_interval = 1
-        self.prune_interval = 5
-        self.opacity_reset_interval = 10
-        self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
-        self.densify_grad_threshold = 0.00015
+        self.spatial_refine_interval = 10
+        self.sparse_grad = True
         self.random_background = False
         super().__init__(parser, "Optimization Parameters")
+
+class DensifyParams(ParamGroup):
+    def __init__(self, parser):
+        self.densification_interval = 1
+        self.densify_from = 1
+        self.densify_until = 80
+        self.prune_interval = 5
+        self.opacity_reset_interval = 10
+        self.densify_grad_threshold = 0.00015
+        self.opacity_threshold=0.004
+        self.screen_size_threshold=None
+        self.percent_dense = 0.01
+        super().__init__(parser, "Densify Parameters")
         

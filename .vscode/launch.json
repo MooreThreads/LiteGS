@@ -19,7 +19,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "./example_train.py",
-            "args":["--sh_degree","3","-s","dataset/bicycle/A100_colmap-default_gaussian-splatting-default","-i","images","-m","output/bicycle","--eval"],
+            "args":["--sh_degree","3","-s","dataset/garden/A100_colmap-default_gaussian-splatting-default","-i","images","-m","output/garden","--eval"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false,

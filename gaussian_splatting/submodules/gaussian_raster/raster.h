@@ -7,10 +7,8 @@ std::vector<at::Tensor> rasterize_forward(
     at::Tensor cov2d_inv,
     at::Tensor color,
     at::Tensor opacity,
-    at::Tensor tiles,
+    at::Tensor specific_tiles,
     int64_t tilesize,
-    int64_t tilesnum_x,
-    int64_t tilesnum_y,
     int64_t img_h,
     int64_t img_w
 );
@@ -22,13 +20,11 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor cov2d_inv,
     at::Tensor color,
     at::Tensor opacity,
-    at::Tensor tiles,
+    at::Tensor specific_tiles,
     at::Tensor final_transmitance,
     at::Tensor last_contributor,
     at::Tensor d_img,
     int64_t tilesize,
-    int64_t tilesnum_x,
-    int64_t tilesnum_y,
     int64_t img_h,
     int64_t img_w
 );

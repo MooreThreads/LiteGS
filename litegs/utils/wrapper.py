@@ -1,8 +1,8 @@
 import torch
 import typing
 import numpy as np
-from util.platform import load_dynamic_lib
-from util import spherical_harmonics
+from .platform import load_dynamic_lib
+from . import spherical_harmonics
 
 load_dynamic_lib()
 
@@ -225,25 +225,27 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
         torch.Tensor: A ray-space transformation matrix with shape [num_views, 3, 3, num_points].
     """
     @torch.no_grad()
-    def __create_rayspace_transform_script(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
+    def __create_rayspace_transform_script(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
         t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
         t[:,2].clamp_(1e-2)#near plane 0.01
         J=torch.zeros((t.shape[0],3,3,t.shape[-1]),device=t.device)#view point mat3x3
         tz_square=t[:,2]*t[:,2]
-        J[:,0,0]=proj_matrix[:,0,0]/t[:,2]#focal x
-        J[:,1,1]=proj_matrix[:,1,1]/t[:,2]#focal y
+        focal_length_x=output_shape[1]*proj_matrix[:,0,0]*0.5
+        focal_length_y=output_shape[0]*proj_matrix[:,1,1]*0.5
+        J[:,0,0]=focal_length_x/t[:,2]#focal x
+        J[:,1,1]=focal_length_y/t[:,2]#focal y
         if bTranspose:
-            J[:,0,2]=-(proj_matrix[:,0,0]*t[:,0])/tz_square
-            J[:,1,2]=-(proj_matrix[:,1,1]*t[:,1])/tz_square
+            J[:,0,2]=-(focal_length_x*t[:,0])/tz_square
+            J[:,1,2]=-(focal_length_y*t[:,1])/tz_square
         else:
-            J[:,2,0]=-(proj_matrix[:,0,0]*t[:,0])/tz_square
-            J[:,2,1]=-(proj_matrix[:,1,1]*t[:,1])/tz_square
+            J[:,2,0]=-(focal_length_x*t[:,0])/tz_square
+            J[:,2,1]=-(focal_length_y*t[:,1])/tz_square
         return J
 
     @torch.no_grad()
-    def __create_rayspace_transform_fused(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,bTranspose:bool=True)->torch.Tensor:
+    def __create_rayspace_transform_fused(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
         t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
-        J=torch.ops.GaussianRaster.jacobianRayspace(t,camera_focal,bTranspose)#todo fix
+        J=torch.ops.GaussianRaster.jacobianRayspace(t,proj_matrix,output_shape[0],output_shape[1],bTranspose)
         return J
     
     _fused=__create_rayspace_transform_fused
@@ -424,29 +426,27 @@ class GaussiansRasterFunc(torch.autograd.Function):
         opacities:torch.Tensor,
         tiles:torch.Tensor,
         tile_size:int,
-        tiles_num_x:int,
-        tiles_num_y:int,
         img_h:int,
         img_w:int
     ):
         img,transmitance,lst_contributor=torch.ops.GaussianRaster.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
-                                                                                   tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
+                                                                                   tile_size,img_h,img_w)
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=tile_size
-        ctx.tiles_num=(tiles_num_x,tiles_num_y,img_h,img_w)
+        ctx.img_hw=(img_h,img_w)
         return img,transmitance
     
     @staticmethod
     def backward(ctx, grad_out_color:torch.Tensor, grad_out_transmitance):
         sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
-        (tiles_num_x,tiles_num_y,img_h,img_w)=ctx.tiles_num
+        (img_h,img_w)=ctx.img_hw
         tile_size=ctx.arg_tile_size
 
 
 
         grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.GaussianRaster.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                                                                         transmitance,lst_contributor,grad_out_color,
-                                                                                                        tile_size,tiles_num_x,tiles_num_y,img_h,img_w)
+                                                                                                        tile_size,img_h,img_w)
 
         grads = (
             None,
@@ -499,7 +499,7 @@ class SphericalHarmonicToRGB(BaseWrapper):
                 return None,sh_base_grad,sh_reset_grad,dir_grad
         return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
     def __sh2rgb_script(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        return spherical_harmonics.eval_sh(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
+        return spherical_harmonics.sh_to_rgb(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
     _fused=__sh2rgb_fused
     _script=__sh2rgb_script
     test_inputs=[(3,None,None),
@@ -552,59 +552,26 @@ class EighAndInverse2x2Matrix(BaseWrapper):
 ### compact params
 ###
 
-class CompactVisibleParamsFunc(torch.autograd.Function):
+class CompactVisibleWithSparseGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,visible_mask:torch.Tensor,
-                position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,
-                sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
-        visible_mask_cumsum=visible_mask.cumsum(0)
-        visible_chunks_num=int(visible_mask_cumsum[-1].cpu())
-        compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,reverse_map=torch.ops.GaussianRaster.compact_visible_params_forward(
-            visible_chunks_num,
-            visible_mask,
-            visible_mask_cumsum,
-            position,
-            scale,
-            rotation,
-            sh_base,
-            sh_rest,
-            opacity)
-        ctx.save_for_backward(reverse_map)
-        ctx.chunk_num=position.shape[-2]
-        ctx.chunk_size=position.shape[-1]
-        return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity
+    def forward(ctx,visible_id:torch.Tensor,*args:list[torch.Tensor])->list[torch.Tensor]:
+        compacted_tensors=[]
+        for tensor in args:
+            compacted_tensors.append(tensor[...,visible_id,:])
+        ctx.chunk_num=args[0].shape[-2]
+        ctx.chunk_size=args[0].shape[-1]
+        return *compacted_tensors,
     
     @staticmethod
     def backward(ctx,*args):
-        (reverse_map,)=ctx.saved_tensors
         chunk_num=ctx.chunk_num
         chunk_size=ctx.chunk_size
         grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
-        if True:#todo
-            for grad in args:
-                sparse_value=grad.reshape(-1,chunk_size)
-                placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim(),sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-1],chunk_num,chunk_size))
-                grads.append(placeholder_grad)
-        else:
-            grads=torch.ops.GaussianRaster.compact_visible_params_backward(chunk_num,chunk_size,reverse_map,*args)
+        for grad in args:
+            sparse_value=grad.reshape(-1,chunk_size)
+            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
+            grads.append(placeholder_grad)
         return None,*grads
-
-def compact_visible_params(visible_mask:torch.Tensor,
-                           position:torch.Tensor,scale:torch.Tensor,rotation:torch.Tensor,
-                           sh_base:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
-                           additional_params:list[torch.Tensor]=None)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,list[torch.Tensor]]:
-    compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity=CompactVisibleParamsFunc.apply(
-        visible_mask,
-        position,scale,rotation,
-        sh_base,sh_rest,opacity)
-    
-    compacted_additional_params=[]
-    if additional_params is not None:
-        for params in additional_params:
-            compacted_tensor=params[...,visible_mask,:].reshape(*params.shape[:-2],-1)
-            compacted_additional_params.append(compacted_tensor)
-
-    return compacted_pos,compacted_scale,compacted_rot,compacted_sh_base,compacted_sh_rest,compacted_opacity,compacted_additional_params
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
                        lr:float, b1:float, b2:float, eps:float):

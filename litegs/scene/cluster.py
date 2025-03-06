@@ -1,7 +1,6 @@
 import torch
 import math
 
-from .. import gaussian
 from .. import utils
 
 def cluster_points(chunksize,*args:list[torch.Tensor])->list[torch.Tensor]:
@@ -26,13 +25,14 @@ def uncluster(*args:list[torch.Tensor])->list[torch.Tensor]:
         output.append(input.reshape(*input.shape[:-2],input.shape[-1]*input.shape[-2]))
     return *output,
 
+@torch.no_grad()
 def get_cluster_AABB(clustered_xyz:torch.Tensor,clustered_scale:torch.Tensor,clustered_rot:torch.Tensor)->torch.Tensor:
     '''
     '''
     chunk_size=clustered_xyz.shape[-1]
     chunks_num=clustered_xyz.shape[-2]
     xyz,scale,rot=uncluster(clustered_xyz,clustered_scale,clustered_rot)
-    transform_matrix=gaussian.get_3d_transform_matrix(scale,rot)
+    transform_matrix=utils.wrapper.CreateTransformMatrix.call(scale,rot)   
     coefficient=2*math.log(255)
     extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
     point_extend=extend_axis.abs().sum(dim=0)
