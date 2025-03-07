@@ -219,6 +219,7 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
         point_positions (torch.Tensor): A tensor representing the 3D positions of points with shape [4, num_points].
         view_matrix (torch.Tensor): A tensor representing the camera view matrix with shape [num_views, 4, 4].
         proj_matrix (torch.Tensor): A tensor representing the focal lengths of the camera with shape [num_views, 4, 4].
+        output_shape (tuple[int,int]): ...
         bTranspose (bool, optional): A flag indicating whether to transpose certain matrix components during the computation. Default is True.
 
     Returns:
@@ -252,7 +253,8 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
     _script=__create_rayspace_transform_script
     test_inputs=[([4,1024*512],torch.float32,True),
                  ([1,4,4],torch.float32,False),
-                 ([1,2],torch.float32,False),
+                 ([1,4,4],torch.float32,False),
+                 ((1080,1920),None,None),
                  (True,None,None)]
 
 class World2NdcFunc(torch.autograd.Function):
