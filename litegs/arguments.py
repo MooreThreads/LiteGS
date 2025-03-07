@@ -100,7 +100,7 @@ class OptimizationParams(ParamGroup):
 class DensifyParams(ParamGroup):
     def __init__(self, parser):
         self.densification_interval = 1
-        self.densify_from = 1
+        self.densify_from = 10
         self.densify_until = 80
         self.prune_interval = 5
         self.opacity_reset_interval = 10

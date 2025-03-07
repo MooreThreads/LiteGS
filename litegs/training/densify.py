@@ -41,7 +41,8 @@ class DensityControllerBase:
             if stored_state is not None:
                 stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
                 stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
-            group["params"][0].data=torch.cat((group["params"][0], extension_tensor), dim=-2).contiguous()
+            new_param=torch.cat((group["params"][0], extension_tensor), dim=-2).contiguous()
+            group["params"][0].data.resize_(new_param.shape).copy_(new_param)
         return
     
     @torch.no_grad()
@@ -68,7 +69,7 @@ class DensityControllerBase:
                 new_param,=cluster.cluster_points(chunk_size,uncluster_param)
             else:
                 new_param=group["params"][0][...,valid_mask]
-            group["params"][0].data=new_param
+            group["params"][0].data.resize_(new_param.shape).copy_(new_param)
         return
     
 class DensityControllerOfficial(DensityControllerBase):

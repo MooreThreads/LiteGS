@@ -115,7 +115,7 @@ def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
                 refined_data = param_data[..., indices]
                 if bClustered:
                     refined_data, = cluster.cluster_points(chunk_size,refined_data)
-                param.data=refined_data
+                param.copy_(refined_data)
                 #grads
                 if param.grad is not None:
                         if bClustered:

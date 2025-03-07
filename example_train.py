@@ -4,17 +4,6 @@ import sys
 
 import litegs
 if __name__ == "__main__":
-    # test_param=torch.nn.Parameter(torch.ones((1120,128)))
-    # opt=torch.optim.Adam([test_param,])
-    # for i in range(100):
-    #     test_param.sum().backward()
-    #     opt.step()
-    #     opt.zero_grad(set_to_none=True)
-    # test_param.data=test_param[:1000]
-    # test_param.sum().backward()
-
-
-
     parser = ArgumentParser(description="Training script parameters")
     lp = litegs.arguments.ModelParams(parser)
     op = litegs.arguments.OptimizationParams(parser)

@@ -114,16 +114,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 opt.step()
             opt.zero_grad(set_to_none = True)
         schedular.step()
-        if 0:
-            density_controller.step(opt,epoch)
-        else:
-            xyz.data=xyz[...,:1000,:]
-            scale.data=scale[...,:1000,:]
-            rot.data=rot[...,:1000,:]
-            sh_0.data=sh_0[...,:1000,:]
-            sh_rest.data=sh_rest[...,:1000,:]
-            opacity.data=opacity[...,:1000,:]
-            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
+        density_controller.step(opt,epoch)
         StatisticsHelperInst.step(epoch)
 
         if epoch in test_epochs:
