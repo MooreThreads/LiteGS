@@ -131,9 +131,7 @@ class CameraFrameDataset(Dataset):
         cam_centers = []
 
         for frame in self.frames:
-            W2C = frame.get_viewmatrix()
-            C2W = np.linalg.inv(W2C)
-            cam_centers.append(C2W[:3, 3:4])
+            cam_centers.append(frame.get_camera_center()[:,None])
 
         center, diagonal = get_center_and_diag(cam_centers)
         radius = diagonal * 1.1
