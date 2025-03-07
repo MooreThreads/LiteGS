@@ -1,6 +1,8 @@
 import torch
 from torch.utils.data import DataLoader
 import fused_ssim
+from torchmetrics.image import psnr
+from tqdm import tqdm
 
 from .. import arguments
 from .. import data
@@ -17,6 +19,25 @@ from . import densify
 def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor):
     return torch.abs((network_output - gt)).mean()
 
+def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
+                      xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
+                      op:arguments.OptimizationParams,pp:arguments.PipelineParams):
+    if pp.cluster_size:
+        if cluster_origin is None or cluster_extend is None:
+            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
+        visible_chunkid=scene.cluster.get_visible_cluster(cluster_origin,cluster_extend,view_matrix,proj_matrix)
+        if op.sparse_grad:#enable sparse gradient
+            culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=wrapper.CompactVisibleWithSparseGrad.apply(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
+        else:
+            culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.culling(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
+        culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.set_compact_mask(visible_chunkid)
+    else:
+        culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=xyz,scale,rot,sh_0,sh_rest,opacity
+        visible_chunkid=None
+    return visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity
+
 def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.PipelineParams,dp:arguments.DensifyParams,
           test_epochs=[],save_ply=[],save_checkpoint=[],start_checkpoint:str=None):
     
@@ -24,7 +45,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     camera_frames:list[data.CameraFrame]=None
     cameras_info,camera_frames,init_xyz,init_color=io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
 
-    #pre load
+    #preload
     for camera_frame in camera_frames:
         camera_frame.load_image()
 
@@ -38,7 +59,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution)
     train_loader = DataLoader(trainingset, batch_size=1,shuffle=False,pin_memory=True)
     test_loader=None
-    if test_frames is not None:
+    if lp.eval:
         testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution)
         test_loader = DataLoader(testset, batch_size=1,shuffle=False,pin_memory=True)
     norm_trans,norm_radius=trainingset.get_norm()
@@ -67,9 +88,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale,rot)
     actived_sh_degree=0
 
-    #densify
+    #init
     density_controller=densify.DensityControllerOfficial(norm_radius,dp,pp.cluster_size>0)
     StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],density_controller.is_densify_actived)
+    progress_bar = tqdm(range(start_epoch, op.iterations), desc="Training progress")
+    progress_bar.update(0)
 
     for epoch in range(start_epoch,op.iterations):
 
@@ -81,45 +104,53 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             if actived_sh_degree<lp.sh_degree:
                 actived_sh_degree=int(epoch/2)
 
-        for view_matrix,proj_matrix,image in train_loader:
-            view_matrix=view_matrix.cuda()
-            proj_matrix=proj_matrix.cuda()
-            image=image.cuda()
+        with StatisticsHelperInst.try_start(epoch):
+            for view_matrix,proj_matrix,gt_image in train_loader:
+                view_matrix=view_matrix.cuda()
+                proj_matrix=proj_matrix.cuda()
+                gt_image=gt_image.cuda()
 
-            #cluster culling
-            if pp.cluster_size:
-                visible_chunkid=scene.cluster.get_visible_cluster(cluster_origin,cluster_extend,view_matrix,proj_matrix)
-                if opt.__class__ == SparseGaussianAdam:#enable sparse gradient
-                    culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=wrapper.CompactVisibleWithSparseGrad.apply(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
-                else:
-                    culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.culling(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
-                culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity)
+                #cluster culling
+                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,view_matrix,proj_matrix,
+                                                                                                               xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
+                img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+                                                            actived_sh_degree,gt_image.shape[2:],pp)
+                
+                l1_loss:torch.Tensor=__l1_loss(img,gt_image)
+                ssim_loss:torch.Tensor=fused_ssim.fused_ssim(img,gt_image)
+                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)
+                loss.backward()
                 if StatisticsHelperInst.bStart:
-                    StatisticsHelperInst.set_compact_mask(visible_chunkid)
-            else:
-                culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=xyz,scale,rot,sh_0,sh_rest,opacity
-            
-            img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
-                                                        actived_sh_degree,image.shape[2:],pp)
-            
-            l1_loss=__l1_loss(img,image)
-            ssim_loss=fused_ssim.fused_ssim(img,image)
-            loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)
-            loss.backward()
-            if StatisticsHelperInst.bStart:
-                StatisticsHelperInst.backward_callback()
-            if opt.__class__ == SparseGaussianAdam:
-                opt.step(visible_chunkid)
-            else:
-                opt.step()
-            opt.zero_grad(set_to_none = True)
+                    StatisticsHelperInst.backward_callback()
+                if op.sparse_grad:
+                    opt.step(visible_chunkid)
+                else:
+                    opt.step()
+                opt.zero_grad(set_to_none = True)
         schedular.step()
-        density_controller.step(opt,epoch)
-        StatisticsHelperInst.step(epoch)
+        xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
+        progress_bar.update()
+        
 
         if epoch in test_epochs:
             with torch.no_grad():
-                pass
+                psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
+                loaders={"Trainingset":train_loader}
+                if lp.eval:
+                    loaders["Testset"]=test_loader
+                for name,loader in loaders.items():
+                    psnr_list=[]
+                    for view_matrix,proj_matrix,image in test_loader:
+                        view_matrix=view_matrix.cuda()
+                        proj_matrix=proj_matrix.cuda()
+                        image=image.cuda()
+                        _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,view_matrix,proj_matrix,
+                                                                                                                xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
+                        img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+                                                                    actived_sh_degree,image.shape[2:],pp)
+                        psnr_list.append(psnr_metrics(img,gt_image).unsqueeze(0))
+                    tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
+                    
         if epoch in save_ply:
             io_manager.save_ply()
             pass

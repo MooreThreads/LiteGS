@@ -1,16 +1,18 @@
 import torch
 import typing
 from ..scene import cluster
+
+
 class StatisticsHelper:
     def __init__(self,chunk_num,chunk_size):
         self.reset(chunk_num,chunk_size,lambda epoch:False)
         return
     
     
-    def reset(self,chunk_num,chunk_size,is_running_handle:typing.Callable[[bool],int]):
+    def reset(self,chunk_num,chunk_size,statistics_check_handle:typing.Callable[[bool],int]):
         self.bStart=False
-        if is_running_handle is not None:
-            self.is_running=is_running_handle
+        if statistics_check_handle is not None:
+            self.is_statistics_enabled=statistics_check_handle
         self.chunk_num=chunk_num
         self.chunk_size=chunk_size
         self.mean_and_std:dict[str,torch.Tensor]={}
@@ -22,9 +24,10 @@ class StatisticsHelper:
         self.handle_list:list[tuple[str,torch.Tensor,typing.Callable[[torch.Tensor],torch.Tensor],typing.Callable]]=[]
         return
     
-    def step(self,epoch:int):
-        self.bStart=self.is_running(epoch+1)
-        return
+    def try_start(self,epoch:int):
+        if self.is_statistics_enabled(epoch):
+            return StatisticGuard(self)
+        return StatisticGuard(None)
     
     def register_tensor_grad_callback(self,key:str,tensor:torch.Tensor,
                                       statistics_update_func:typing.Callable,
@@ -180,5 +183,20 @@ class StatisticsHelper:
         culled=(self.visible_count==0)
         culled,=cluster.uncluster(culled)
         return culled
+    
+class StatisticGuard:
+    def __init__(self,inst:StatisticsHelper):
+        self.stats_obj=inst
+        return
+    
+    def __enter__(self):
+        if self.stats_obj is not None:
+            self.stats_obj.bStart=True
+        return
+
+    def __exit__(self, *args):
+        if self.stats_obj is not None:
+            self.stats_obj.bStart=False
+        return
 
 StatisticsHelperInst=StatisticsHelper(0,0)

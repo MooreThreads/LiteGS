@@ -30,7 +30,7 @@ class DensityControllerBase:
         sh_0=param_dict["sh_0"]
         sh_rest=param_dict["sh_rest"]
         opacity=param_dict["opacity"]
-        return xyz,rot,scale,sh_0,sh_rest,opacity
+        return xyz,scale,rot,sh_0,sh_rest,opacity
 
     @torch.no_grad()
     def _cat_tensors_to_optimizer(self, tensors_dict:dict,optimizer:torch.optim.Optimizer):
@@ -38,11 +38,13 @@ class DensityControllerBase:
             assert len(group["params"]) == 1
             extension_tensor = tensors_dict[group["name"]]
             stored_state = optimizer.state.get(group['params'][0], None)
+            assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
             if stored_state is not None:
                 stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
                 stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
             new_param=torch.cat((group["params"][0], extension_tensor), dim=-2).contiguous()
-            group["params"][0].data.resize_(new_param.shape).copy_(new_param)
+            group["params"][0]=torch.nn.Parameter(new_param)
+            assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
         return
     
     @torch.no_grad()
@@ -69,7 +71,7 @@ class DensityControllerBase:
                 new_param,=cluster.cluster_points(chunk_size,uncluster_param)
             else:
                 new_param=group["params"][0][...,valid_mask]
-            group["params"][0].data.resize_(new_param.shape).copy_(new_param)
+            group["params"][0]=torch.nn.Parameter(new_param)
         return
     
 class DensityControllerOfficial(DensityControllerBase):
@@ -116,10 +118,10 @@ class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad()
     def prune(self,optimizer:torch.optim.Optimizer):
         
-        xyz,rot,scale,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
         if self.bCluster:
             chunk_size=xyz.shape[-1]
-            xyz,rot,scale,sh_0,sh_rest,opacity=cluster.uncluster(xyz,rot,scale,sh_0,sh_rest,opacity)
+            xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
 
         prune_mask=self.get_prune_mask(opacity.sigmoid(),scale.exp())
         if self.bCluster:
@@ -136,10 +138,10 @@ class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad()
     def split_and_clone(self,optimizer:torch.optim.Optimizer):
         
-        xyz,rot,scale,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
         if self.bCluster:
             chunk_size=xyz.shape[-1]
-            xyz,rot,scale,sh_0,sh_rest,opacity=cluster.uncluster(xyz,rot,scale,sh_0,sh_rest,opacity)
+            xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
 
         clone_mask=self.get_clone_mask(scale.exp())
         split_mask=self.get_split_mask(scale.exp())
@@ -200,7 +202,7 @@ class DensityControllerOfficial(DensityControllerBase):
     
     @torch.no_grad()
     def reset_opacity(self,optimizer):
-        xyz,rot,scale,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
@@ -231,7 +233,7 @@ class DensityControllerOfficial(DensityControllerBase):
                 self.reset_opacity(optimizer)
                 bUpdate=True
             if bUpdate:
-                xyz,rot,scale,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+                xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
                 StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],self.is_densify_actived)
-        return
+        return self._get_params_from_optimizer(optimizer)
     

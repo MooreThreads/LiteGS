@@ -10,7 +10,7 @@ if __name__ == "__main__":
     pp = litegs.arguments.PipelineParams(parser)
     dp = litegs.arguments.DensifyParams(parser)
     
-    parser.add_argument("--test_epochs", nargs="+", type=int, default=[])
+    parser.add_argument("--test_epochs", nargs="+", type=int, default=[i for i in range(0,op.iterations,10)])
     parser.add_argument("--save_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
