@@ -3,6 +3,8 @@ from torch.utils.data import DataLoader
 import fused_ssim
 from torchmetrics.image import psnr
 from tqdm import tqdm
+from matplotlib import pyplot as plt 
+import numpy as np
 
 from .. import arguments
 from .. import data
@@ -71,9 +73,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         init_xyz=torch.tensor(init_xyz,dtype=torch.float32,device='cuda')
         init_color=torch.tensor(init_color,dtype=torch.float32,device='cuda')
         xyz,scale,rot,sh_0,sh_rest,opacity=scene.create_gaussians(init_xyz,init_color,lp.sh_degree)
+        #xyz,scale,rot,sh_0,sh_rest,opacity=scene.spatial_refine(False,None,xyz,scale,rot,sh_0,sh_rest,opacity)
         if pp.cluster_size:
             xyz,scale,rot,sh_0,sh_rest,opacity=scene.cluster.cluster_points(pp.cluster_size,xyz,scale,rot,sh_0,sh_rest,opacity)
-            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale,rot)
+            #cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
         xyz=torch.nn.Parameter(xyz)
         scale=torch.nn.Parameter(scale)
         rot=torch.nn.Parameter(rot)
@@ -85,7 +88,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     else:
         xyz,scale,rot,sh_0,sh_rest,opacity,start_epoch,opt,schedular=io_manager.load_checkpoint(start_checkpoint)
         if pp.cluster_size:
-            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale,rot)
+            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     actived_sh_degree=0
 
     #init
@@ -128,7 +131,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     opt.step()
                 opt.zero_grad(set_to_none = True)
         schedular.step()
-        xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
+        #xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
         progress_bar.update()
         
 
@@ -140,14 +143,14 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     loaders["Testset"]=test_loader
                 for name,loader in loaders.items():
                     psnr_list=[]
-                    for view_matrix,proj_matrix,image in test_loader:
+                    for view_matrix,proj_matrix,gt_image in loader:
                         view_matrix=view_matrix.cuda()
                         proj_matrix=proj_matrix.cuda()
-                        image=image.cuda()
+                        gt_image=gt_image.cuda()
                         _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,view_matrix,proj_matrix,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                         img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
-                                                                    actived_sh_degree,image.shape[2:],pp)
+                                                                    actived_sh_degree,gt_image.shape[2:],pp)
                         psnr_list.append(psnr_metrics(img,gt_image).unsqueeze(0))
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
                     
