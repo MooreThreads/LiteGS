@@ -87,8 +87,9 @@ def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
     if bClustered:
         chunk_size=xyz.shape[-1]
         xyz,=cluster.uncluster(xyz)
-        morton_code=_gen_morton_code(xyz)
-        _,indices=morton_code.sort()
+        
+    morton_code=_gen_morton_code(xyz)
+    _,indices=morton_code.sort(stable=True)
 
     if optimizer is None:
         #tensor
