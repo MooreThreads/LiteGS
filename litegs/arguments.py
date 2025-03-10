@@ -101,7 +101,7 @@ class DensifyParams(ParamGroup):
     def __init__(self, parser):
         self.densification_interval = 1
         self.densify_from = 5
-        self.densify_until = 100
+        self.densify_until = 81
         self.prune_interval = 10
         self.opacity_reset_interval = 10
         self.densify_grad_threshold = 0.00015

@@ -135,7 +135,7 @@ class DensityControllerOfficial(DensityControllerBase):
             del_indices=prune_mask.nonzero()[:del_limit]
             prune_mask=torch.zeros_like(prune_mask)
             prune_mask[del_indices]=True
-        print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
+        #print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
         self._prune_optimizer(~prune_mask,optimizer)
         return
 
@@ -212,7 +212,7 @@ class DensityControllerOfficial(DensityControllerBase):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
         decay_rate=0.5
-        decay_mask=(actived_opacities>1/(255*decay_rate-1))
+        decay_mask=(actived_opacities>1/(100*decay_rate))
         decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
         opacity.data=inverse_sigmoid(actived_opacities*decay_rate)#(actived_opacities.clamp_max(0.005))
         optimizer.state.clear()
