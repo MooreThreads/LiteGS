@@ -5,6 +5,7 @@ from torchmetrics.image import psnr
 from tqdm import tqdm
 from matplotlib import pyplot as plt 
 import numpy as np
+import os
 
 from .. import arguments
 from .. import data
@@ -152,14 +153,25 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
 
         xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
-                  
-        if epoch in save_ply:
-            io_manager.save_ply()
-            pass
-        if epoch in save_checkpoint:
-            io_manager.save_checkpoint()
-            pass
 
         progress_bar.update()  
+
+        if epoch in save_ply or epoch==op.iterations-1:
+            if pp.cluster_size:
+                tensors=scene.cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
+            else:
+                tensors=xyz,scale,rot,sh_0,sh_rest,opacity
+            param_nyp=[]
+            for tensor in tensors:
+                param_nyp.append(tensor.detach().cpu().numpy())
+            if epoch==op.iterations-1:
+                ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
+            else:
+                ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")
+            io_manager.save_ply(ply_path,*param_nyp)
+            pass
+
+        if epoch in save_checkpoint:
+            io_manager.save_checkpoint(lp.model_path,epoch,opt,schedular)
     
     return
