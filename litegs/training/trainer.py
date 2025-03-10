@@ -59,11 +59,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         training_frames=camera_frames
         test_frames=None
     trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution)
-    train_loader = DataLoader(trainingset, batch_size=1,shuffle=False,pin_memory=True)
+    train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=True)
     test_loader=None
     if lp.eval:
         testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution)
-        test_loader = DataLoader(testset, batch_size=1,shuffle=False,pin_memory=True)
+        test_loader = DataLoader(testset, batch_size=1,shuffle=True,pin_memory=True)
     norm_trans,norm_radius=trainingset.get_norm()
 
     #torch parameter
@@ -105,7 +105,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             if pp.cluster_size>0 and (epoch%op.spatial_refine_interval==0 or density_controller.is_densify_actived(epoch-1)):
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
-                actived_sh_degree=int(epoch/2)
+                actived_sh_degree=int(epoch/5)
 
         with StatisticsHelperInst.try_start(epoch):
             for view_matrix,proj_matrix,gt_image in train_loader:
@@ -131,9 +131,6 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     opt.step()
                 opt.zero_grad(set_to_none = True)
         schedular.step()
-        #xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
-        progress_bar.update()
-        
 
         if epoch in test_epochs:
             with torch.no_grad():
@@ -153,12 +150,16 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                                                                     actived_sh_degree,gt_image.shape[2:],pp)
                         psnr_list.append(psnr_metrics(img,gt_image).unsqueeze(0))
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
-                    
+
+        xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
+                  
         if epoch in save_ply:
             io_manager.save_ply()
             pass
         if epoch in save_checkpoint:
             io_manager.save_checkpoint()
             pass
+
+        progress_bar.update()  
     
     return

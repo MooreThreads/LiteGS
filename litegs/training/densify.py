@@ -43,7 +43,9 @@ class DensityControllerBase:
                 stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
                 stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
             new_param=torch.cat((group["params"][0], extension_tensor), dim=-2).contiguous()
+            optimizer.state.pop(group['params'][0])#pop param
             group["params"][0]=torch.nn.Parameter(new_param)
+            optimizer.state[group["params"][0]]=stored_state#assign to new param
             assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
         return
     
@@ -71,7 +73,9 @@ class DensityControllerBase:
                 new_param,=cluster.cluster_points(chunk_size,uncluster_param)
             else:
                 new_param=group["params"][0][...,valid_mask]
+            optimizer.state.pop(group['params'][0])#pop param
             group["params"][0]=torch.nn.Parameter(new_param)
+            optimizer.state[group["params"][0]]=stored_state#assign to new param
         return
     
 class DensityControllerOfficial(DensityControllerBase):
@@ -131,7 +135,7 @@ class DensityControllerOfficial(DensityControllerBase):
             del_indices=prune_mask.nonzero()[:del_limit]
             prune_mask=torch.zeros_like(prune_mask)
             prune_mask[del_indices]=True
-
+        print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
         self._prune_optimizer(~prune_mask,optimizer)
         return
 
@@ -149,11 +153,11 @@ class DensityControllerOfficial(DensityControllerBase):
         #split
         stds=scale[...,split_mask].exp()
         means=torch.zeros((3,stds.size(-1)),device="cuda")
-        samples = torch.normal(mean=means, std=stds).unsqueeze(1)
+        samples = torch.normal(mean=means, std=stds).unsqueeze(0)
         transform_matrix=wrapper.CreateTransformMatrix.call_fused(scale[...,split_mask].exp(),torch.nn.functional.normalize(rot[...,split_mask],dim=0))
         rotation_matrix=transform_matrix[:3,:3]
-        shift=rotation_matrix.permute(2,0,1)@(samples.permute(2,0,1))
-        shift=shift.permute(1,2,0).squeeze(1)
+        shift=(samples.permute(2,0,1))@rotation_matrix.permute(2,0,1)
+        shift=shift.permute(1,2,0).squeeze(0)
         
         split_xyz=xyz[...,split_mask]+shift
         clone_xyz=xyz[...,clone_mask]
@@ -197,6 +201,7 @@ class DensityControllerOfficial(DensityControllerBase):
                       "sh_rest": append_sh_rest,
                       "opacity" : append_opacity}
         
+        #print("\n#clone:{0} #split:{1}".format(clone_mask.sum().cpu(),split_mask.sum().cpu()))
         self._cat_tensors_to_optimizer(dict_clone,optimizer)
         return
     
@@ -210,6 +215,7 @@ class DensityControllerOfficial(DensityControllerBase):
         decay_mask=(actived_opacities>1/(255*decay_rate-1))
         decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
         opacity.data=inverse_sigmoid(actived_opacities*decay_rate)#(actived_opacities.clamp_max(0.005))
+        optimizer.state.clear()
         return
     
     @torch.no_grad()
@@ -235,5 +241,6 @@ class DensityControllerOfficial(DensityControllerBase):
             if bUpdate:
                 xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
                 StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],self.is_densify_actived)
+                torch.cuda.empty_cache()
         return self._get_params_from_optimizer(optimizer)
     
