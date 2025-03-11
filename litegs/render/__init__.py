@@ -1,6 +1,7 @@
 import torch
 import math
 import typing
+import torch.cuda.nvtx as nvtx
 
 from .. import utils
 from ..utils.statistic_helper import StatisticsHelperInst,StatisticsHelper
@@ -37,6 +38,7 @@ def binning(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opaci
 
         return left_up,right_down,tiles_touched,b_visible
     
+    nvtx.range_push("binning_allocate")
     img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
     tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
@@ -51,7 +53,8 @@ def binning(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opaci
     prefix_sum=tiles_touched.cumsum(1,dtype=torch.int32)#start index of points
     total_tiles_num_batch=prefix_sum[:,-1]
     allocate_size=total_tiles_num_batch.max().cpu()
-
+    nvtx.range_pop()
+    
     # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
     large_points_index=(tiles_touched>=32).nonzero()
     my_table=torch.ops.GaussianRaster.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
@@ -71,25 +74,30 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
            xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
            actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
-    #activate
+    nvtx.range_push("Activate")
     pad_one=torch.ones((1,xyz.shape[-1]),dtype=xyz.dtype,device=xyz.device)
     xyz=torch.concat((xyz,pad_one),dim=0)
     scale=scale.exp()
     rot=torch.nn.functional.normalize(rot,dim=0)
     opacity=opacity.sigmoid()
+    nvtx.range_pop()
 
     #gs projection
+    nvtx.range_push("Proj")
     transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot)
     J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(xyz,view_matrix,proj_matrix,output_shape,False)#todo script
     cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
     eigen_val,eigen_vec,inv_cov2d=utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
     ndc_pos=utils.wrapper.World2NdcFunc.apply(xyz,view_matrix@proj_matrix)
+    nvtx.range_pop()
 
     #color
+    nvtx.range_push("sh")
     camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
     dirs=xyz[:3]-camera_center.unsqueeze(-1)
     dirs=torch.nn.functional.normalize(dirs,dim=-2)
     color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,sh_0,sh_rest,dirs)
+    nvtx.range_pop()
     
     #visibility table
     tile_start_index,sorted_pointId,sorted_tileId,b_visible=binning(ndc_pos,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)

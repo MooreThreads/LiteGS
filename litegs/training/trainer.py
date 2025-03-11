@@ -6,6 +6,7 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt 
 import numpy as np
 import os
+import torch.cuda.nvtx as nvtx
 
 from .. import arguments
 from .. import data
@@ -25,6 +26,7 @@ def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor):
 def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
                       xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
                       op:arguments.OptimizationParams,pp:arguments.PipelineParams):
+    nvtx.range_push("Culling")
     if pp.cluster_size:
         if cluster_origin is None or cluster_extend is None:
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
@@ -39,6 +41,7 @@ def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,vi
     else:
         culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=xyz,scale,rot,sh_0,sh_rest,opacity
         visible_chunkid=None
+    nvtx.range_pop()
     return visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity
 
 def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.PipelineParams,dp:arguments.DensifyParams,
