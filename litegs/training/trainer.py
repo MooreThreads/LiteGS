@@ -106,7 +106,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             if pp.cluster_size>0 and (epoch%op.spatial_refine_interval==0 or density_controller.is_densify_actived(epoch-1)):
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
-                actived_sh_degree=int(epoch/5)
+                actived_sh_degree=min(int(epoch/5),lp.sh_degree)
 
         with StatisticsHelperInst.try_start(epoch):
             for view_matrix,proj_matrix,gt_image in train_loader:
@@ -153,7 +153,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
 
         xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
-
+        if epoch==70:
+            break
         progress_bar.update()  
 
         if epoch in save_ply or epoch==op.iterations-1:

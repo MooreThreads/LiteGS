@@ -5,7 +5,7 @@ def load_checkpoint(file_path):
     loaded_dict=torch.load(file_path)
     optimizer:torch.optim.Optimizer=loaded_dict['optimizer']
     schedular:torch.optim.lr_scheduler._LRScheduler=loaded_dict['schedular']
-    start_epoch:int=loaded_dict['epoch']
+    start_epoch:int=loaded_dict['epoch']+1
 
     parameters={}
     for group in optimizer.param_groups:
