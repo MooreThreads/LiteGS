@@ -76,6 +76,9 @@ class PipelineParams(ParamGroup):
     def __init__(self, parser):
         self.cluster_size = 128
         self.tile_size = 8
+        self.sparse_grad = True
+        self.spatial_refine_interval = 10
+        self.device_preload = True
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
@@ -89,9 +92,6 @@ class OptimizationParams(ParamGroup):
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.lambda_dssim = 0.2
-        self.spatial_refine_interval = 10
-        self.sparse_grad = True
-        self.random_background = False
         super().__init__(parser, "Optimization Parameters")
 
 class DensifyParams(ParamGroup):

@@ -142,14 +142,24 @@ class CameraFrameDataset(Dataset):
         frustumplane[5,3]=viewproj_matrix[3,3]-viewproj_matrix[3,2]
         return frustumplane
     
-    def __init__(self,cameras:list[CameraInfo],frames:list[CameraFrame],downsample:int=-1):
+    def __init__(self,cameras:dict[int,PinHoleCameraInfo],frames:list[CameraFrame],downsample:int=-1,bDevice=True):
         self.cameras=cameras
         self.frames=frames
         self.downsample=downsample
         self.frustumplanes=[]
+        if bDevice:
+            for camera in cameras.values():
+                camera.proj_matrix=torch.Tensor(camera.proj_matrix).cuda()
+            for frame in frames:
+                frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
+                for key in frame.image.keys():
+                    frame.image[key]=torch.Tensor(frame.image[key]).cuda()
         for frame in self.frames:
             frustumplane=self.__get_frustumplane(frame.get_viewmatrix(),self.cameras[frame.camera_id].get_project_matrix())
-            self.frustumplanes.append(frustumplane)
+            if bDevice:
+                self.frustumplanes.append(torch.Tensor(frustumplane).cuda())
+            else:
+                self.frustumplanes.append(frustumplane)
         return
     
     def __len__(self):

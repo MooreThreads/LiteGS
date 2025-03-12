@@ -32,7 +32,7 @@ def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,fr
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
         visible_chunkid=scene.cluster.get_visible_cluster(cluster_origin,cluster_extend,frustumplane)
         nvtx.range_push("compact")
-        if op.sparse_grad:#enable sparse gradient
+        if pp.cluster_size and pp.sparse_grad:#enable sparse gradient
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=wrapper.CompactVisibleWithSparseGrad.apply(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
         else:
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.culling(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -64,12 +64,12 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     else:
         training_frames=camera_frames
         test_frames=None
-    trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution)
-    train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=True)
+    trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
+    train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
     test_loader=None
     if lp.eval:
-        testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution)
-        test_loader = DataLoader(testset, batch_size=1,shuffle=True,pin_memory=True)
+        testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
+        test_loader = DataLoader(testset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
     norm_trans,norm_radius=trainingset.get_norm()
 
     #torch parameter
@@ -106,9 +106,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     for epoch in range(start_epoch,op.iterations):
 
         with torch.no_grad():
-            if epoch%op.spatial_refine_interval==0:#spatial refine
+            if epoch%pp.spatial_refine_interval==0:#spatial refine
                 scene.spatial_refine(pp.cluster_size>0,opt,xyz)
-            if pp.cluster_size>0 and (epoch%op.spatial_refine_interval==0 or density_controller.is_densify_actived(epoch-1)):
+            if pp.cluster_size>0 and (epoch%pp.spatial_refine_interval==0 or density_controller.is_densify_actived(epoch-1)):
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
@@ -132,7 +132,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
-                if op.sparse_grad:
+                if pp.cluster_size and pp.sparse_grad:
                     opt.step(visible_chunkid)
                 else:
                     opt.step()
