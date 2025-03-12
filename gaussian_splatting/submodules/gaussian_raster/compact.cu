@@ -16,103 +16,91 @@ namespace cg = cooperative_groups;
 
 
 __global__ void compact_visible_params_kernel_forward(
-    const torch::PackedTensorAccessor32<bool, 1, torch::RestrictPtrTraits> visible_mask,    //[chunk_num] 
-    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_mask_cumsum,    //[chunk_num] 
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunkid,    //[chunk_num] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[4,chunk_num,chunk_size] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunk_num,chunk_size] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[4,chunk_num,chunk_size] 
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunk_num,chunk_size] 
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunk_num,chunk_size] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[1,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_position,    //[4,p] 
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_scale,    //[3,p] 
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_rotation,    //[4,p] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_base,    //[1,3,p] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_rest,    //[?,3,p] 
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_opacity,    //[1,p] 
-    torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> reverse_map     //[visible_chunk_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_position,    //[4,p] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_scale,    //[3,p] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_rotation,    //[4,p] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> compacted_sh_base,    //[1,3,p] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> compacted_sh_rest,    //[?,3,p] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_opacity    //[1,p] 
 )
 {
-    if (visible_mask[blockIdx.x] == true)
+    if (blockIdx.x < visible_chunkid.size(0))
     {
         int chunksize = position.size(2);
-        int compacted_index = (visible_mask_cumsum[blockIdx.x]-1)* chunksize;
-        if (threadIdx.x == 0)
-        {
-            reverse_map[compacted_index/ chunksize] = blockIdx.x;
-        }
-
+        int chunkid = visible_chunkid[blockIdx.x];
         for (int index = threadIdx.x; index < chunksize; index += blockDim.x)
         {
             //copy
-            compacted_position[0][compacted_index + index] = position[0][blockIdx.x][index];
-            compacted_position[1][compacted_index + index] = position[1][blockIdx.x][index];
-            compacted_position[2][compacted_index + index] = position[2][blockIdx.x][index];
-            compacted_position[3][compacted_index + index] = position[3][blockIdx.x][index];
-            compacted_scale[0][compacted_index + index] = scale[0][blockIdx.x][index];
-            compacted_scale[1][compacted_index + index] = scale[1][blockIdx.x][index];
-            compacted_scale[2][compacted_index + index] = scale[2][blockIdx.x][index];
-            compacted_rotation[0][compacted_index + index] = rotation[0][blockIdx.x][index];
-            compacted_rotation[1][compacted_index + index] = rotation[1][blockIdx.x][index];
-            compacted_rotation[2][compacted_index + index] = rotation[2][blockIdx.x][index];
-            compacted_rotation[3][compacted_index + index] = rotation[3][blockIdx.x][index];
-            compacted_sh_base[0][0][compacted_index + index] = sh_base[0][0][blockIdx.x][index];
-            compacted_sh_base[0][1][compacted_index + index] = sh_base[0][1][blockIdx.x][index];
-            compacted_sh_base[0][2][compacted_index + index] = sh_base[0][2][blockIdx.x][index];
+            compacted_position[0][blockIdx.x][index] = position[0][chunkid][index];
+            compacted_position[1][blockIdx.x][index] = position[1][chunkid][index];
+            compacted_position[2][blockIdx.x][index] = position[2][chunkid][index];
+            compacted_scale[0][blockIdx.x][index] = scale[0][chunkid][index];
+            compacted_scale[1][blockIdx.x][index] = scale[1][chunkid][index];
+            compacted_scale[2][blockIdx.x][index] = scale[2][chunkid][index];
+            compacted_rotation[0][blockIdx.x][index] = rotation[0][chunkid][index];
+            compacted_rotation[1][blockIdx.x][index] = rotation[1][chunkid][index];
+            compacted_rotation[2][blockIdx.x][index] = rotation[2][chunkid][index];
+            compacted_rotation[3][blockIdx.x][index] = rotation[3][chunkid][index];
+            compacted_sh_base[0][0][blockIdx.x][index] = sh_base[0][0][chunkid][index];
+            compacted_sh_base[0][1][blockIdx.x][index] = sh_base[0][1][chunkid][index];
+            compacted_sh_base[0][2][blockIdx.x][index] = sh_base[0][2][chunkid][index];
             for (int i = 0; i < sh_rest.size(0); i++)
             {
-                compacted_sh_rest[i][0][compacted_index + index] = sh_rest[i][0][blockIdx.x][index];
-                compacted_sh_rest[i][1][compacted_index + index] = sh_rest[i][1][blockIdx.x][index];
-                compacted_sh_rest[i][2][compacted_index + index] = sh_rest[i][2][blockIdx.x][index];
+                compacted_sh_rest[i][0][blockIdx.x][index] = sh_rest[i][0][chunkid][index];
+                compacted_sh_rest[i][1][blockIdx.x][index] = sh_rest[i][1][chunkid][index];
+                compacted_sh_rest[i][2][blockIdx.x][index] = sh_rest[i][2][chunkid][index];
             }
-            compacted_opacity[0][compacted_index + index] = opacity[0][blockIdx.x][index];
+            compacted_opacity[0][blockIdx.x][index] = opacity[0][chunkid][index];
         }
     }
 }
 
 
-std::vector<at::Tensor> compact_visible_params_forward(int64_t visible_num, at::Tensor visible_mask, at::Tensor visible_mask_cumsum, at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity)
+std::vector<at::Tensor> compact_visible_params_forward(at::Tensor visible_chunkid, at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity)
 {
-    int64_t chunknum = position.size(1);
+    int64_t visible_chunknum = visible_chunkid.size(0);
     int64_t chunksize = position.size(2);
 
     auto tensor_shape = position.sizes();
-    at::Tensor compacted_position = torch::empty({ tensor_shape[0],chunksize * visible_num }, position.options());
+    at::Tensor compacted_position = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, position.options());
     tensor_shape = scale.sizes();
-    at::Tensor compacted_scale = torch::empty({ tensor_shape[0],chunksize * visible_num }, scale.options());
+    at::Tensor compacted_scale = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, scale.options());
     tensor_shape = rotation.sizes();
-    at::Tensor compacted_rotation = torch::empty({ tensor_shape[0],chunksize * visible_num }, rotation.options());
+    at::Tensor compacted_rotation = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, rotation.options());
 
     tensor_shape = sh_base.sizes();
-    at::Tensor compacted_sh_base = torch::empty({ tensor_shape[0],tensor_shape[1],chunksize * visible_num }, sh_base.options());
+    at::Tensor compacted_sh_base = torch::empty({ tensor_shape[0],tensor_shape[1], visible_chunknum, chunksize }, sh_base.options());
     tensor_shape = sh_rest.sizes();
-    at::Tensor compacted_sh_rest = torch::empty({ tensor_shape[0],tensor_shape[1],chunksize * visible_num }, sh_rest.options());
+    at::Tensor compacted_sh_rest = torch::empty({ tensor_shape[0],tensor_shape[1], visible_chunknum, chunksize }, sh_rest.options());
 
     tensor_shape = opacity.sizes();
-    at::Tensor compacted_opacity = torch::empty({ tensor_shape[0],chunksize * visible_num }, opacity.options());
-
-    at::Tensor reverse_map = torch::empty({ visible_num }, visible_mask_cumsum.options().requires_grad(false));
+    at::Tensor compacted_opacity = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, opacity.options());
 
     //dim3 Block3d(32, 1, 1);
-    compact_visible_params_kernel_forward<<<chunknum, 256 >>>(
-        visible_mask.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
-        visible_mask_cumsum.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+    compact_visible_params_kernel_forward<<<visible_chunknum, 128 >>>(
+        visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
         position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        compacted_scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        compacted_rotation.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        compacted_sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        reverse_map.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>()
+        compacted_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        compacted_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        compacted_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
     );
     CUDA_CHECK_ERRORS;
-    return { compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity,reverse_map };
+    return { compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity };
 }
 
 
@@ -225,20 +213,20 @@ __global__ void sparse_adam_kernel(
 )
 {
     
-    if (blockIdx.x < visible.size(0) && threadIdx.x < param.size(2))
+    //if (blockIdx.x < visible.size(0)&&blockIdx.y<param.size(0) && threadIdx.x < param.size(2))
     {
         int chunk_id = visible[blockIdx.x];
-        for (int i = 0; i < param.size(0); i++)
+        //for (int i = 0; i < param.size(0); i++)
         {
-            float Register_param_grad = grad[i][blockIdx.x][threadIdx.x];
-            float Register_exp_avg = exp_avg[i][chunk_id][threadIdx.x];
-            float Register_exp_avg_sq = exp_avg_sq[i][chunk_id][threadIdx.x];
+            float Register_param_grad = grad[blockIdx.y][blockIdx.x][threadIdx.x];
+            float Register_exp_avg = exp_avg[blockIdx.y][chunk_id][threadIdx.x];
+            float Register_exp_avg_sq = exp_avg_sq[blockIdx.y][chunk_id][threadIdx.x];
             Register_exp_avg = b1 * Register_exp_avg + (1.0f - b1) * Register_param_grad;
             Register_exp_avg_sq = b2 * Register_exp_avg_sq + (1.0f - b2) * Register_param_grad * Register_param_grad;
             float step = -lr * Register_exp_avg / (sqrt(Register_exp_avg_sq) + eps);
-            param[i][chunk_id][threadIdx.x] += step;
-            exp_avg[i][chunk_id][threadIdx.x] = Register_exp_avg;
-            exp_avg_sq[i][chunk_id][threadIdx.x] = Register_exp_avg_sq;
+            param[blockIdx.y][chunk_id][threadIdx.x] += step;
+            exp_avg[blockIdx.y][chunk_id][threadIdx.x] = Register_exp_avg;
+            exp_avg_sq[blockIdx.y][chunk_id][threadIdx.x] = Register_exp_avg_sq;
         }
         //param[0][0][0] = -1;
     }
@@ -252,7 +240,8 @@ void adamUpdate(torch::Tensor &param,torch::Tensor &param_grad,torch::Tensor &ex
 	const double eps
 )
 {
-    sparse_adam_kernel << <visible.size(0), param.size(2) >> > (
+    dim3 Block3d(visible.size(0), param.size(0), 1);
+    sparse_adam_kernel << <Block3d, param.size(2) >> > (
         param.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         param_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         exp_avg.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
