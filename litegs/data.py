@@ -103,10 +103,53 @@ class CameraFrame:
         return self.camera_center
     
 class CameraFrameDataset(Dataset):
+    def __get_frustumplane(self,view_matrix:npt.NDArray,proj_matrix:npt.NDArray)->npt.NDArray:
+        viewproj_matrix=view_matrix@proj_matrix
+        frustumplane=np.zeros((6,4),dtype=np.float32)
+        #left plane
+        frustumplane[0,0]=viewproj_matrix[0,3]+viewproj_matrix[0,0]
+        frustumplane[0,1]=viewproj_matrix[1,3]+viewproj_matrix[1,0]
+        frustumplane[0,2]=viewproj_matrix[2,3]+viewproj_matrix[2,0]
+        frustumplane[0,3]=viewproj_matrix[3,3]+viewproj_matrix[3,0]
+        #right plane
+        frustumplane[1,0]=viewproj_matrix[0,3]-viewproj_matrix[0,0]
+        frustumplane[1,1]=viewproj_matrix[1,3]-viewproj_matrix[1,0]
+        frustumplane[1,2]=viewproj_matrix[2,3]-viewproj_matrix[2,0]
+        frustumplane[1,3]=viewproj_matrix[3,3]-viewproj_matrix[3,0]
+
+        #bottom plane
+        frustumplane[2,0]=viewproj_matrix[0,3]+viewproj_matrix[0,1]
+        frustumplane[2,1]=viewproj_matrix[1,3]+viewproj_matrix[1,1]
+        frustumplane[2,2]=viewproj_matrix[2,3]+viewproj_matrix[2,1]
+        frustumplane[2,3]=viewproj_matrix[3,3]+viewproj_matrix[3,1]
+
+        #top plane
+        frustumplane[3,0]=viewproj_matrix[0,3]-viewproj_matrix[0,1]
+        frustumplane[3,1]=viewproj_matrix[1,3]-viewproj_matrix[1,1]
+        frustumplane[3,2]=viewproj_matrix[2,3]-viewproj_matrix[2,1]
+        frustumplane[3,3]=viewproj_matrix[3,3]-viewproj_matrix[3,1]
+
+        #near plane
+        frustumplane[4,0]=viewproj_matrix[0,2]
+        frustumplane[4,1]=viewproj_matrix[1,2]
+        frustumplane[4,2]=viewproj_matrix[2,2]
+        frustumplane[4,3]=viewproj_matrix[3,2]
+
+        #far plane
+        frustumplane[5,0]=viewproj_matrix[0,3]-viewproj_matrix[0,2]
+        frustumplane[5,1]=viewproj_matrix[1,3]-viewproj_matrix[1,2]
+        frustumplane[5,2]=viewproj_matrix[2,3]-viewproj_matrix[2,2]
+        frustumplane[5,3]=viewproj_matrix[3,3]-viewproj_matrix[3,2]
+        return frustumplane
+    
     def __init__(self,cameras:list[CameraInfo],frames:list[CameraFrame],downsample:int=-1):
         self.cameras=cameras
         self.frames=frames
         self.downsample=downsample
+        self.frustumplanes=[]
+        for frame in self.frames:
+            frustumplane=self.__get_frustumplane(frame.get_viewmatrix(),self.cameras[frame.camera_id].get_project_matrix())
+            self.frustumplanes.append(frustumplane)
         return
     
     def __len__(self):
@@ -116,8 +159,8 @@ class CameraFrameDataset(Dataset):
         image=self.frames[idx].load_image(self.downsample)
         view_matrix=self.frames[idx].get_viewmatrix()
         proj_matrix=self.cameras[self.frames[idx].camera_id].get_project_matrix()
-        
-        return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(image)
+        frustumplane=self.frustumplanes[idx]
+        return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(frustumplane),torch.Tensor(image)
     
     def get_norm(self)->tuple[float,float]:
         def get_center_and_diag(cam_centers):

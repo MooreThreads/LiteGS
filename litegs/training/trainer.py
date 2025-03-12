@@ -23,18 +23,20 @@ from . import densify
 def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor):
     return torch.abs((network_output - gt)).mean()
 
-def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
+def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,frustumplane:torch.Tensor,
                       xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
                       op:arguments.OptimizationParams,pp:arguments.PipelineParams):
     nvtx.range_push("Culling")
     if pp.cluster_size:
         if cluster_origin is None or cluster_extend is None:
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
-        visible_chunkid=scene.cluster.get_visible_cluster(cluster_origin,cluster_extend,view_matrix,proj_matrix)
+        visible_chunkid=scene.cluster.get_visible_cluster(cluster_origin,cluster_extend,frustumplane)
+        nvtx.range_push("compact")
         if op.sparse_grad:#enable sparse gradient
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=wrapper.CompactVisibleWithSparseGrad.apply(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
         else:
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.culling(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
+        nvtx.range_pop()
         culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_compact_mask(visible_chunkid)
@@ -112,13 +114,14 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
 
         with StatisticsHelperInst.try_start(epoch):
-            for view_matrix,proj_matrix,gt_image in train_loader:
+            for view_matrix,proj_matrix,frustumplane,gt_image in train_loader:
                 view_matrix=view_matrix.cuda()
                 proj_matrix=proj_matrix.cuda()
+                frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()
 
                 #cluster culling
-                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,view_matrix,proj_matrix,
+                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,frustumplane,
                                                                                                                xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                 img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                             actived_sh_degree,gt_image.shape[2:],pp)

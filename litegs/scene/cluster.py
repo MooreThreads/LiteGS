@@ -1,5 +1,6 @@
 import torch
 import math
+import torch.cuda.nvtx as nvtx
 
 from .. import utils
 
@@ -44,11 +45,14 @@ def get_cluster_AABB(clustered_xyz:torch.Tensor,clustered_scale:torch.Tensor,clu
     extend=(max_xyz-min_xyz)/2
     return origin,extend
 
-def get_visible_cluster(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,view_matrix:torch.Tensor,project_matrix:torch.Tensor)->torch.Tensor:
-    frustumplane=utils.viewproj_to_frustumplane(view_matrix@project_matrix)
+def get_visible_cluster(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,frustumplane:torch.Tensor)->torch.Tensor:
+    nvtx.range_push("frustum culling")
     chunk_visibility=utils.frustum_culling_aabb(frustumplane,cluster_origin,cluster_extend)#[N,M]
     chunk_visibility=chunk_visibility.any(dim=0)
+    nvtx.range_pop()
+    nvtx.range_push("nonzero")
     visible_chunkid=chunk_visibility.nonzero()[:,0]
+    nvtx.range_pop()
     return visible_chunkid
 
 def culling(visible_chunkid:torch.Tensor,*args)->list[torch.Tensor]:
