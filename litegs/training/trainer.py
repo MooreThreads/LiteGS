@@ -89,7 +89,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         sh_0=torch.nn.Parameter(sh_0)
         sh_rest=torch.nn.Parameter(sh_rest)
         opacity=torch.nn.Parameter(opacity)
-        opt,schedular=optimizer.get_optimizer(xyz,scale,rot,sh_0,sh_rest,opacity,norm_radius,op)
+        opt,schedular=optimizer.get_optimizer(xyz,scale,rot,sh_0,sh_rest,opacity,norm_radius,op,pp)
         start_epoch=0
     else:
         xyz,scale,rot,sh_0,sh_rest,opacity,start_epoch,opt,schedular=io_manager.load_checkpoint(start_checkpoint)
@@ -98,12 +98,15 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     actived_sh_degree=0
 
     #init
+    total_epoch=int(op.iterations/len(trainingset))
+    if dp.densify_until<0:
+        dp.densify_until=int(total_epoch/2)
     density_controller=densify.DensityControllerOfficial(norm_radius,dp,pp.cluster_size>0)
     StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],density_controller.is_densify_actived)
-    progress_bar = tqdm(range(start_epoch, op.iterations), desc="Training progress")
+    progress_bar = tqdm(range(start_epoch, total_epoch), desc="Training progress")
     progress_bar.update(0)
 
-    for epoch in range(start_epoch,op.iterations):
+    for epoch in range(start_epoch,total_epoch):
 
         with torch.no_grad():
             if epoch%pp.spatial_refine_interval==0:#spatial refine
@@ -137,7 +140,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 else:
                     opt.step()
                 opt.zero_grad(set_to_none = True)
-        schedular.step()
+                schedular.step()
 
         if epoch in test_epochs:
             with torch.no_grad():
@@ -147,11 +150,12 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     loaders["Testset"]=test_loader
                 for name,loader in loaders.items():
                     psnr_list=[]
-                    for view_matrix,proj_matrix,gt_image in loader:
+                    for view_matrix,proj_matrix,frustumplane,gt_image in loader:
                         view_matrix=view_matrix.cuda()
                         proj_matrix=proj_matrix.cuda()
+                        frustumplane=frustumplane.cuda()
                         gt_image=gt_image.cuda()
-                        _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,view_matrix,proj_matrix,
+                        _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render_preprocess(cluster_origin,cluster_extend,frustumplane,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                         img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                                     actived_sh_degree,gt_image.shape[2:],pp)
@@ -159,8 +163,6 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
 
         xyz,scale,rot,sh_0,sh_rest,opacity=density_controller.step(opt,epoch)
-        if epoch==70:
-            break
         progress_bar.update()  
 
         if epoch in save_ply or epoch==op.iterations-1:

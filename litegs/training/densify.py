@@ -132,7 +132,7 @@ class DensityControllerOfficial(DensityControllerBase):
             N=prune_mask.sum()
             chunk_num=int(N/chunk_size)
             del_limit=chunk_num*chunk_size
-            del_indices=prune_mask.nonzero()[:del_limit]
+            del_indices=prune_mask.nonzero()[:del_limit,0]
             prune_mask=torch.zeros_like(prune_mask)
             prune_mask[del_indices]=True
         #print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
@@ -201,7 +201,7 @@ class DensityControllerOfficial(DensityControllerBase):
                       "sh_rest": append_sh_rest,
                       "opacity" : append_opacity}
         
-        #print("\n#clone:{0} #split:{1}".format(clone_mask.sum().cpu(),split_mask.sum().cpu()))
+        #print("\n#clone:{0} #split:{1} #points:{2}".format(clone_mask.sum().cpu(),split_mask.sum().cpu(),xyz.shape[-1]+append_xyz.shape[-1]*append_xyz.shape[-2]))
         self._cat_tensors_to_optimizer(dict_clone,optimizer)
         return
     
@@ -212,7 +212,7 @@ class DensityControllerOfficial(DensityControllerBase):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
         decay_rate=0.5
-        decay_mask=(actived_opacities>1/(100*decay_rate))
+        decay_mask=(actived_opacities>1/(255*decay_rate-1))
         decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
         opacity.data=inverse_sigmoid(actived_opacities*decay_rate)#(actived_opacities.clamp_max(0.005))
         optimizer.state.clear()
