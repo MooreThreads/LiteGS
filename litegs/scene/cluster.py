@@ -15,15 +15,15 @@ def cluster_points(chunksize,*args:list[torch.Tensor])->list[torch.Tensor]:
         if input.shape[-1]%chunksize!=0:
             padding_num=input.shape[-1]%chunksize
             padding_num=chunksize-padding_num
-            input=torch.concat([input,input[...,-padding_num:]],dim=-1)
+            input=torch.concat([input,input[...,-padding_num:]],dim=-1).contiguous()
         chunks_num=int(input.shape[-1]/chunksize)
-        output.append(input.reshape(*input.shape[:-1],chunks_num,chunksize))
+        output.append(input.view(*input.shape[:-1],chunks_num,chunksize))
     return *output,
 
 def uncluster(*args:list[torch.Tensor])->list[torch.Tensor]:
     output=[]
     for input in args:
-        output.append(input.reshape(*input.shape[:-2],input.shape[-1]*input.shape[-2]))
+        output.append(input.view(*input.shape[:-2],input.shape[-1]*input.shape[-2]))
     return *output,
 
 @torch.no_grad()
