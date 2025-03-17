@@ -18,6 +18,6 @@ elif plat == 'linux':
 #load dynamic library
 def load_dynamic_lib():
     if plat == 'windows':
-        torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
+        torch.ops.load_library("litegs/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
     elif plat == 'linux':
-        torch.ops.load_library("gaussian_splatting/submodules/gaussian_raster/build/libGaussianRaster.so")
+        torch.ops.load_library("litegs/submodules/gaussian_raster/build/libGaussianRaster.so")
