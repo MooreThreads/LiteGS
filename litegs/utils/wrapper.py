@@ -6,6 +6,7 @@ from torch.cuda import nvtx
 
 from .platform import load_dynamic_lib
 from . import spherical_harmonics
+from ..utils.statistic_helper import StatisticsHelperInst
 
 load_dynamic_lib()
 
@@ -577,18 +578,18 @@ class Binning(BaseWrapper):
             right_down[:,0].clamp_(0,img_tile_shape[1])
             right_down[:,1].clamp_(0,img_tile_shape[0])
 
-            #splatting area of each points
-            rect_length=right_down-left_up
-            tiles_touched=rect_length[:,0]*rect_length[:,1]
-            b_visible=(tiles_touched!=0)
-
-            return left_up,right_down,tiles_touched,b_visible
+            return left_up,right_down
         
         nvtx.range_push("binning_allocate")
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        left_up,right_down,tiles_touched,b_visible=craete_2d_AABB(ndc,eigen_val,eigen_vec,opacity,tile_size,img_pixel_shape,img_tile_shape)
+        left_up,right_down=craete_2d_AABB(ndc,eigen_val,eigen_vec,opacity,tile_size,img_pixel_shape,img_tile_shape)
+
+        #splatting area of each points
+        rect_length=right_down-left_up
+        tiles_touched=rect_length[:,0]*rect_length[:,1]
+        b_visible=(tiles_touched!=0)
 
         #sort by depth
         values,point_ids=ndc[:,2].sort(dim=-1)
@@ -628,6 +629,8 @@ class Binning(BaseWrapper):
         rect_length=right_down-left_up
         tiles_touched=rect_length[:,0]*rect_length[:,1]
         b_visible=(tiles_touched!=0)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
 
         #sort by depth
         values,point_ids=ndc[:,2].sort(dim=-1)
