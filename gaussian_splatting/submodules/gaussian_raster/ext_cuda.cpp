@@ -8,6 +8,7 @@
 TORCH_LIBRARY(GaussianRaster, m) {
   m.def("duplicateWithKeys", duplicateWithKeys);
   m.def("tileRange", tileRange);
+  m.def("create_ROI_AABB", create_ROI_AABB);
   m.def("rasterize_forward", rasterize_forward);
   m.def("rasterize_backward", rasterize_backward);
   m.def("jacobianRayspace", jacobianRayspace);

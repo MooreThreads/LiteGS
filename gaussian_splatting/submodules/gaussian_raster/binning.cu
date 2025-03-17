@@ -194,4 +194,85 @@ at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_
     return out;
 }
 
+__global__ void create_ROI_AABB_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_ndc,        //viewnum,4,pointnum
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_eigen_val,  //viewnum,2,pointnum
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> tensor_eigen_vec,  //viewnum,2,2,pointnum
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_opacity,  //viewnum,pointnum
+    int img_h,int img_w,int img_tile_h,int img_tile_w,int tilesize,
+    torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_left_up,
+    torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_right_down
+)
+{
+    int view_id = blockIdx.y;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < tensor_ndc.size(2))
+    {
+        float4 ndc{ tensor_ndc[view_id][0][index],tensor_ndc[view_id][1][index],
+            tensor_ndc[view_id][2][index] ,tensor_ndc[view_id][3][index] };
+        bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (ndc.z > 1.0f) || (ndc.z < 0.0f));
+        if (bVisible)
+        {
+            float opacity = max(tensor_opacity[view_id][index], 1.0f / 255);
+            float coefficient = 2 * log(255 * opacity);
+            float axis_length[2]{ 0,0 };
+            axis_length[0] = sqrt(coefficient * tensor_eigen_val[view_id][0][index]);
+            axis_length[1] = sqrt(coefficient * tensor_eigen_val[view_id][1][index]);
+            float2 axis_dir[2];
+            axis_dir[0].x = tensor_eigen_vec[view_id][0][0][index];
+            axis_dir[0].y = tensor_eigen_vec[view_id][0][1][index];
+            axis_dir[1].x = tensor_eigen_vec[view_id][1][0][index];
+            axis_dir[1].y = tensor_eigen_vec[view_id][1][1][index];
+            float2 axis[2];
+            axis[0].x = axis_dir[0].x * axis_length[0];
+            axis[0].y = axis_dir[0].y * axis_length[0];
+            axis[1].x = axis_dir[1].x * axis_length[1];
+            axis[1].y = axis_dir[1].y * axis_length[1];
+
+            float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
+            float2 coord{ screen_uv.x * img_w - 0.5f,screen_uv.y * img_h - 0.5f };
+            float min_x = coord.x - abs(axis[0].x) - abs(axis[1].x);
+            float max_x = coord.x + abs(axis[0].x) + abs(axis[1].x);
+            float min_y = coord.y - abs(axis[0].y) - abs(axis[1].y);
+            float max_y = coord.y + abs(axis[0].y) + abs(axis[1].y);
+            int2 left_up{ min_x / tilesize,min_y / tilesize };
+            int2 right_down{ ceil(max_x / tilesize),ceil(max_y / tilesize) };
+            tensor_left_up[view_id][0][index] = min(max(left_up.x,0), img_tile_w);
+            tensor_left_up[view_id][1][index] = min(max(left_up.y,0),img_tile_h);
+            tensor_right_down[view_id][0][index] = min(max(right_down.x,0), img_tile_w);
+            tensor_right_down[view_id][1][index] = min(max(right_down.y,0), img_tile_h);
+        }
+        else
+        {
+            tensor_left_up[view_id][0][index] = 0;
+            tensor_left_up[view_id][1][index] = 0;
+            tensor_right_down[view_id][0][index] = 0;
+            tensor_right_down[view_id][1][index] = 0;
+        }
+    }
+}
+
+std::vector<at::Tensor> create_ROI_AABB(at::Tensor ndc, at::Tensor eigen_val, at::Tensor eigen_vec, at::Tensor opacity,
+    int64_t height,int64_t width, int64_t tilesize)
+{
+    at::DeviceGuard guard(ndc.device());
+
+    int views_num = ndc.size(0);
+    int points_num = ndc.size(2);
+    at::Tensor left_up = torch::empty({ views_num,2,points_num }, ndc.options().dtype(torch::kInt32));
+    at::Tensor right_down = torch::empty({ views_num,2,points_num }, ndc.options().dtype(torch::kInt32));
+
+    dim3 Block3d(std::ceil(points_num / 256.0f), views_num, 1);
+    create_ROI_AABB_kernel<<<Block3d,256>>>(ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        eigen_val.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        eigen_vec.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        height, width,ceil(height/(float)tilesize), ceil(width / (float)tilesize), tilesize,
+        left_up.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+        right_down.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>()
+        );
+    CUDA_CHECK_ERRORS;
+    return { left_up ,right_down };
+}
+
 
