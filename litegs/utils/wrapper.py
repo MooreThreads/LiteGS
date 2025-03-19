@@ -4,11 +4,16 @@ import numpy as np
 import math
 from torch.cuda import nvtx
 
-from .platform import load_dynamic_lib
+from .platform import add_cmake_output_path
 from . import spherical_harmonics
 from ..utils.statistic_helper import StatisticsHelperInst
 
-load_dynamic_lib()
+
+try:
+    import litegs_fused
+except:
+    add_cmake_output_path()
+    import litegs_fused
 
 
 class BaseWrapper:
@@ -151,6 +156,11 @@ class BaseWrapper:
     def call(cls, *args, **kwargs):
         return cls._fused(*args, **kwargs)
 
+def check():
+    for wrapper_class in BaseWrapper.__subclasses__():
+        wrapper_class.validate()
+    return
+
 class CreateTransformMatrix(BaseWrapper):
     """
     A wrapped class for creating 3D transformation matrices.
@@ -171,13 +181,13 @@ class CreateTransformMatrix(BaseWrapper):
             @staticmethod
             def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
                 ctx.save_for_backward(quaternion,scale)
-                transform_matrix=torch.ops.GaussianRaster.createTransformMatrix_forward(quaternion,scale)
+                transform_matrix=litegs_fused.createTransformMatrix_forward(quaternion,scale)
                 return transform_matrix
             
             @staticmethod
             def backward(ctx,grad_transform_matrix:torch.Tensor):
                 (quaternion,scale)=ctx.saved_tensors
-                grad_quaternion,grad_scale=torch.ops.GaussianRaster.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
+                grad_quaternion,grad_scale=litegs_fused.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
                 return grad_quaternion,grad_scale
             
         transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
@@ -250,7 +260,7 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
     @torch.no_grad()
     def __create_rayspace_transform_fused(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
         t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
-        J=torch.ops.GaussianRaster.jacobianRayspace(t,proj_matrix,output_shape[0],output_shape[1],bTranspose)
+        J=litegs_fused.jacobianRayspace(t,proj_matrix,output_shape[0],output_shape[1],bTranspose)
         return J
     
     _fused=__create_rayspace_transform_fused
@@ -285,7 +295,7 @@ class World2NdcFunc(torch.autograd.Function):
     @staticmethod
     def backward(ctx,grad_ndc_pos:torch.Tensor):
         (view_project_matrix,ndc_pos,repc_hom_w)=ctx.saved_tensors
-        position_grad=torch.ops.GaussianRaster.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
+        position_grad=litegs_fused.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
         return (position_grad,None)
 
 class CreateCovarianceMatrixFunc(torch.autograd.Function):
@@ -376,13 +386,13 @@ class CreateCov2dDirectly(BaseWrapper):
             @staticmethod
             def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
                 ctx.save_for_backward(J,view_matrix,transform_matrix)
-                cov2d=torch.ops.GaussianRaster.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
+                cov2d=litegs_fused.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
                 return cov2d
             
             @staticmethod
             def backward(ctx,grad_cov2d:torch.Tensor):
                 (J,view_matrix,transform_matrix)=ctx.saved_tensors
-                transform_matrix_grad=torch.ops.GaussianRaster.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
+                transform_matrix_grad=litegs_fused.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
                 return (None,None,transform_matrix_grad)
 
         cov2d=Cov2dCreateV2Func.apply(J,view_matrix,transform_matrix)
@@ -435,8 +445,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
         img_h:int,
         img_w:int
     ):
-        img,transmitance,lst_contributor=torch.ops.GaussianRaster.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
-                                                                                   tile_size,img_h,img_w)
+        img,transmitance,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,tile_size,img_h,img_w)
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,mean2d,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=tile_size
         ctx.img_hw=(img_h,img_w)
@@ -450,7 +459,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
 
 
-        grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=torch.ops.GaussianRaster.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
+        grad_mean2d,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,mean2d,cov2d_inv,color,opacities,tiles,
                                                                                                         transmitance,lst_contributor,grad_out_color,
                                                                                                         tile_size,img_h,img_w)
 
@@ -493,7 +502,7 @@ class SphericalHarmonicToRGB(BaseWrapper):
                 ctx.save_for_backward(dirs,sh_base,sh_rest)
                 ctx.degree=deg
                 ctx.sh_rest_dim=sh_rest.shape[0]
-                rgb=torch.ops.GaussianRaster.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
+                rgb=litegs_fused.sh2rgb_forward(deg,sh_base,sh_rest,dirs)
                 return rgb
             
             @staticmethod
@@ -501,7 +510,7 @@ class SphericalHarmonicToRGB(BaseWrapper):
                 (dirs,sh_base,sh_rest)=ctx.saved_tensors
                 degree=ctx.degree
                 sh_rest_dim=ctx.sh_rest_dim
-                sh_base_grad,sh_reset_grad,dir_grad=torch.ops.GaussianRaster.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs,sh_base,sh_rest)
+                sh_base_grad,sh_reset_grad,dir_grad=litegs_fused.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs,sh_base,sh_rest)
                 return None,sh_base_grad,sh_reset_grad,dir_grad
         return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
     def __sh2rgb_script(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
@@ -528,14 +537,14 @@ class EighAndInverse2x2Matrix(BaseWrapper):
         class EighAndInverse2x2Func(torch.autograd.Function):
             @staticmethod
             def forward(ctx,input_matrix:torch.Tensor):
-                val,vec,inverse_matrix=torch.ops.GaussianRaster.eigh_and_inv_2x2matrix_forward(input_matrix)
+                val,vec,inverse_matrix=litegs_fused.eigh_and_inv_2x2matrix_forward(input_matrix)
                 ctx.save_for_backward(inverse_matrix)
                 return val,vec,inverse_matrix
             
             @staticmethod
             def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
                 (inverse_matrix,)=ctx.saved_tensors
-                matrix_grad:torch.Tensor=torch.ops.GaussianRaster.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+                matrix_grad:torch.Tensor=litegs_fused.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
                 matrix_grad.nan_to_num_(0)
                 return matrix_grad
         return EighAndInverse2x2Func.apply(cov2d)
@@ -604,7 +613,7 @@ class Binning(BaseWrapper):
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         large_points_index=(tiles_touched>=32).nonzero()
-        my_table=torch.ops.GaussianRaster.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
+        my_table=litegs_fused.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
@@ -613,7 +622,7 @@ class Binning(BaseWrapper):
         sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=torch.ops.GaussianRaster.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
         return tile_start_index,sorted_pointId,b_visible
     
@@ -624,7 +633,7 @@ class Binning(BaseWrapper):
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        left_up,right_down=torch.ops.GaussianRaster.create_ROI_AABB(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1],tile_size)
+        left_up,right_down=litegs_fused.create_ROI_AABB(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1],tile_size)
         
         rect_length=right_down-left_up
         tiles_touched=rect_length[:,0]*rect_length[:,1]
@@ -644,7 +653,7 @@ class Binning(BaseWrapper):
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         large_points_index=(tiles_touched>=32).nonzero()
-        my_table=torch.ops.GaussianRaster.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
+        my_table=litegs_fused.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
@@ -653,7 +662,7 @@ class Binning(BaseWrapper):
         sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=torch.ops.GaussianRaster.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
         return tile_start_index,sorted_pointId,b_visible
     
@@ -687,5 +696,5 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
                        lr:float, b1:float, b2:float, eps:float):
-    torch.ops.GaussianRaster.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+    litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
     return

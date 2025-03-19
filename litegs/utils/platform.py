@@ -1,5 +1,6 @@
 import platform
 import torch
+import sys
 plat = platform.system().lower()
 
 #torch.compile
@@ -16,8 +17,10 @@ elif plat == 'linux':
 
 
 #load dynamic library
-def load_dynamic_lib():
+def add_cmake_output_path():
     if plat == 'windows':
-        torch.ops.load_library("litegs/submodules/gaussian_raster/build/Release/GaussianRaster.dll")
+        module_path = "./litegs/submodules/gaussian_raster/build/Release" 
     elif plat == 'linux':
-        torch.ops.load_library("litegs/submodules/gaussian_raster/build/libGaussianRaster.so")
+        module_path = "./litegs/submodules/gaussian_raster/build"
+    sys.path.append(module_path)
+    return

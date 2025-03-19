@@ -139,7 +139,7 @@ std::vector<at::Tensor> rasterize_forward(
     at::Tensor  cov2d_inv,
     at::Tensor  color,
     at::Tensor  opacity,
-    at::Tensor  specific_tiles,
+    std::optional<at::Tensor>  specific_tiles_arg,
     int64_t tilesize,
     int64_t img_h,
     int64_t img_w
@@ -151,8 +151,10 @@ std::vector<at::Tensor> rasterize_forward(
     int tilesnum_x = std::ceil(img_w / float(tilesize));
     int tilesnum_y = std::ceil(img_h / float(tilesize));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
-    if (specific_tiles.defined())
+    at::Tensor specific_tiles;
+    if (specific_tiles_arg.has_value())
     {
+        specific_tiles = *specific_tiles_arg;
         tilesnum = specific_tiles.sizes()[1];
     }
     else
@@ -650,7 +652,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor cov2d_inv,
     at::Tensor color,
     at::Tensor opacity,
-    at::Tensor specific_tiles,
+    std::optional<at::Tensor> specific_tiles_arg,
     at::Tensor final_transmitance,
     at::Tensor last_contributor,
     at::Tensor d_img,
@@ -665,8 +667,10 @@ std::vector<at::Tensor> rasterize_backward(
     int tilesnum_x = std::ceil(img_w / float(tilesize));
     int tilesnum_y = std::ceil(img_h / float(tilesize));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
-    if (specific_tiles.defined())
+    at::Tensor specific_tiles;
+    if (specific_tiles_arg.has_value())
     {
+        specific_tiles = *specific_tiles_arg;
         tilesnum = specific_tiles.sizes()[1];
     }
     else

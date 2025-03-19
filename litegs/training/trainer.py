@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader
 import fused_ssim
 from torchmetrics.image import psnr
 from tqdm import tqdm
-from matplotlib import pyplot as plt 
 import numpy as np
 import os
 import torch.cuda.nvtx as nvtx
