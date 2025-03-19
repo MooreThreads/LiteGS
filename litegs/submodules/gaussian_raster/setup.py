@@ -4,6 +4,7 @@ from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 setup(
     name="litegs_fused",
     packages=['litegs_fused'],
+    package_dir={'litegs_fused':"."},
     ext_modules=[
         CUDAExtension(
             name="litegs_fused",
