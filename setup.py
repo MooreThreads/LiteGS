@@ -4,6 +4,11 @@ def get_cuda_modules():
     from torch.utils.cpp_extension import CUDAExtension
     ext_modules = [
         CUDAExtension(
+            name="fused_ssim_cuda",
+            sources=[
+            "litegs/submodules/fused_ssim/ssim.cu",
+            "litegs/submodules/fused_ssim/ext.cpp"]),
+        CUDAExtension(
                 name="simple_knn._C",
                 sources=[
                 "litegs/submodules/simple-knn/spatial.cu", 
@@ -26,19 +31,19 @@ def get_cmdclass():
     return {'build_ext': BuildExtension}
 
 setup(
-    name="litegs",
-    version="1.0.0",
+    name="lite-gaussian-splatting",
+    version="0.0.6",
     author="Kaimin Liao",
     author_email="kaiminliao@gmail.com",
     description="A High-Performance Modular Framework for Gaussian Splatting Training",
-    long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/MooreThreads/LiteGS",
-    packages=find_packages(where=".", include=["litegs", "litegs.*"]),
-    package_dir={"litegs": "litegs"},
+    packages=find_packages(where=".", include=["litegs", "litegs.*"])+["fused_ssim"],
+    package_dir={"litegs": "litegs","fused_ssim":"litegs/submodules/fused_ssim/fused_ssim"},
     setup_requires=["torch","wheel"],
-    install_requires=["torch","wheel","numpy","fused_ssim","plyfile","tqdm","pillow"],
+    install_requires=["torch","wheel","numpy","plyfile","tqdm","pillow"],
     ext_modules=get_cuda_modules(),
+    include_package_data=True,
     cmdclass=get_cmdclass(),
     python_requires=">=3.8",
     classifiers=[

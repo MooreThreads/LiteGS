@@ -4,19 +4,8 @@
 
 This repository provides a refactored codebase aimed at improving the flexibility and performance of Gaussian splatting. 
 
-## What's New
-We've released a major architectural overhaul featuring:
-
-* Simplified API interfaces
-* Official PyPI package support
-
-## Roadmap
-* Upcoming integration of some 3DGS new features within 1-2 weeks
-* Viewer Integration: Plan to adopt [TurboSplat-Viz](https://github.com/MooreThreads/TurboSplat-Viz), featuring:
-  * Hardware-accelerated rendering via DirectX 12 (120+ FPS rendering)
-* Multi-GPU training
-
-
+## Update
+一个全新的重构版本已经发布，避免了大量碎片化的接口，并支持pip安装。部分主流的3DGS新特性将在1-2周内放出，敬请期待。
 
 ## Background
 Gaussian splatting is a powerful technique used in various computer graphics and vision applications. It involves representing 3D data as Gaussian distributions in space, allowing for efficient and accurate representation of spatial data. However, the original implementation (https://github.com/graphdeco-inria/gaussian-splatting) of Gaussian splatting in PyTorch faced several limitations: 
@@ -37,58 +26,56 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 ## Getting Started
 
-### Via pip
+### Install from pip
 
-` pip install lite-gaussian-splatting `
+安装包已上传至Pypi，您可以通过以下指令完成安装
+`
+pip install lite-gaussian-splatting
+`
 
-### From Source (Recommand for Developers)
+### Or Clone&Build
 
-1. Clone
+有编辑需求的用户，我们更推荐您采用clone&build的方式完成安装，这样可以为核心模块构建cmake工程以便调试:
 
-    ```bash
-    git clone --recursive https://github.com/MooreThreads/LiteGS.git
-    cd LiteGS
-    ```
+1. Install simple-knn
 
-2. Install simple-knn
+    `cd gaussian_splatting/submodules/simple-knn`
 
-    ```bash
-    cd litegs/submodules/simple-knn
-    python install .
-    ```
+    `python install .`
 
-3. Install fused-ssim
+2. Install fused-ssim
 
-    ```bash
-    cd litegs/submodules/fussed_ssim
-    python intsall .
-    ```
+    `cd gaussian_splatting/submodules/fussed_ssim`
+
+    `python intsall .`
     
 
-4. Install litegs_fused
+3. Install litegs_fused
+    `cd gaussian_splatting/submodules/gaussian_raster`
+
+    `python install .`
+
+    在开发中，为了方便调试，您可能需要cmake project。你可以通过以下命令使用cmake构建litegs_fused模块：
+
+    `cd gaussian_splatting/submodules/gaussian_raster`
+
+    `mkdir ./build`
+
+    `cd ./build`
+
+    Windows Powershell:
+    ` $env:CMAKE_PREFIX_PATH = (python -c "import torch; print(torch.utils.cmake_prefix_path)") `
     
-    ```bash
-    cd litegs/submodules/gaussian_raster
-    python install .
-    ```
+    Linux:
+    ` export CMAKE_PREFIX_PATH=$(python -c "import torch; print(torch.utils.cmake_prefix_path)") `
 
-    If you need the cmake project：
+    `cmake ../`
 
-    ```bash
-    cd litegs/submodules/gaussian_raster
-    mkdir ./build
-    cd ./build
-    #for Windows PowerShell: $env:CMAKE_PREFIX_PATH = (python -c "import torch; print(torch.utils.cmake_prefix_path)")
-    export CMAKE_PREFIX_PATH=$(python -c "import torch; print(torch.utils.cmake_prefix_path)")
-    cmake ../
-    cmake --build . --config Release
-    ```
+    `cmake --build . --config Release`
 
-    
-### Train
-Begin training with the following command:
+    Begin training with the following command:
 
-`./example_train.py --sh_degree 3 -s DATA_SOURCE -i IMAGE_FOLDER -m OUTPUT_PATH`
+    `./example_train.py --random_background --sh_degree 0 -s dataset/garden -i images_4 -m output/garden`
 
 ## Faster
 
