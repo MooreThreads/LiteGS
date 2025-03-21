@@ -1,6 +1,9 @@
 *.pyc
 output
 build
+*.egg-info
+dist
+.pypirc
 trace_*.json
 *.trace.json
 *.7z
@@ -8,4 +11,3 @@ trace_*.json
 debug_gradient*
 profiler_input_data
 dataset/*
-gaussian_splatting/submodules/simple-knn

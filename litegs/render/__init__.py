@@ -1,0 +1,57 @@
+import torch
+import math
+import typing
+import torch.cuda.nvtx as nvtx
+
+from .. import utils
+from ..utils.statistic_helper import StatisticsHelperInst,StatisticsHelper
+from .. import arguments
+
+def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
+           xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
+           actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+
+    nvtx.range_push("Activate")
+    pad_one=torch.ones((1,xyz.shape[-1]),dtype=xyz.dtype,device=xyz.device)
+    xyz=torch.concat((xyz,pad_one),dim=0)
+    scale=scale.exp()
+    rot=torch.nn.functional.normalize(rot,dim=0)
+    opacity=opacity.sigmoid()
+    nvtx.range_pop()
+
+    #gs projection
+    nvtx.range_push("Proj")
+    transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot)
+    J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(xyz,view_matrix,proj_matrix,output_shape,False)#todo script
+    cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
+    eigen_val,eigen_vec,inv_cov2d=utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
+    ndc_pos=utils.wrapper.World2NdcFunc.apply(xyz,view_matrix@proj_matrix)
+    nvtx.range_pop()
+
+    #color
+    nvtx.range_push("sh")
+    camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
+    dirs=xyz[:3]-camera_center.unsqueeze(-1)
+    dirs=torch.nn.functional.normalize(dirs,dim=-2)
+    color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,sh_0,sh_rest,dirs)
+    nvtx.range_pop()
+    
+    #visibility table
+    tile_start_index,sorted_pointId,b_visible=utils.wrapper.Binning.call_fused(ndc_pos,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
+    if StatisticsHelperInst.bStart:
+        StatisticsHelperInst.update_visible_count(b_visible)
+        def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
+            return tensor[:,:2].norm(dim=1)
+        StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,gradient_wrapper)
+
+    #raster
+    tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size)))
+    tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size)))
+    #tiles=torch.arange(1,tiles_x*tiles_y+1,device=xyz.device,dtype=torch.int32).unsqueeze(0)#0 is invalid
+    img,transmitance=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
+                                            pp.tile_size,output_shape[0],output_shape[1])
+    img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+    transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+    depth=None
+    normal=None
+    return img,transmitance,depth,normal

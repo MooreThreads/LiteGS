@@ -1,5 +1,4 @@
-numpy
+fused-ssim
 plyfile
 tqdm
-matplotlib
-tensorboard
+pillow
