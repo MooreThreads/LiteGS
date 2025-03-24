@@ -94,10 +94,10 @@ class DensifyParams(ParamGroup):
     densify_until = -1
     prune_interval = 5
     opacity_reset_interval = 10
-    densify_grad_threshold = 0.00017
+    densify_grad_threshold = 0.00015
     opacity_threshold=0.005
     prune_large_point_from=40
-    screen_size_threshold=32#tile
+    screen_size_threshold=128#tile
     percent_dense = 0.01
     def __init__(self, parser):
         super().__init__(parser, "Densify Parameters")

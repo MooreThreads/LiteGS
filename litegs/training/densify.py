@@ -97,7 +97,8 @@ class DensityControllerOfficial(DensityControllerBase):
         invisible.shape[0]
         prune_mask=transparent
         prune_mask[:invisible.shape[0]]|=invisible
-        #remove pruning of large point. simply deleting large point makes img corrupted.
+        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
+        prune_mask[:invisible.shape[0]]|=big_points_vs
         return prune_mask
 
     @torch.no_grad()
@@ -114,9 +115,6 @@ class DensityControllerOfficial(DensityControllerBase):
         abnormal_mask = mean2d_grads >= self.grad_threshold
         large_pts_mask = actived_scale.max(dim=0).values > self.percent_dense*self.screen_extent
         selected_pts_mask=abnormal_mask&large_pts_mask
-        #Do not prune the large point. split it.
-        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-        selected_pts_mask=selected_pts_mask|big_points_vs
         return selected_pts_mask
     
     @torch.no_grad()
@@ -137,6 +135,7 @@ class DensityControllerOfficial(DensityControllerBase):
             prune_mask[del_indices]=True
         #print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
         self._prune_optimizer(~prune_mask,optimizer)
+        optimizer.state.clear()#prune large point damage the img
         return
 
     @torch.no_grad()

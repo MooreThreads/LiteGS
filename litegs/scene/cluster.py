@@ -58,5 +58,5 @@ def get_visible_cluster(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,
 def culling(visible_chunkid:torch.Tensor,*args)->list[torch.Tensor]:
     culled_tensors=[]
     for tensor in args:
-        culled_tensors.append(tensor[...,visible_chunkid,:])
+        culled_tensors.append(tensor[...,visible_chunkid,:].contiguous())
     return *culled_tensors,

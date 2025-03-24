@@ -678,7 +678,7 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
     def forward(ctx,visible_id:torch.Tensor,*args:list[torch.Tensor])->list[torch.Tensor]:
         compacted_tensors=[]
         for tensor in args:
-            compacted_tensors.append(tensor[...,visible_id,:])
+            compacted_tensors.append(tensor[...,visible_id,:].contiguous())
         ctx.chunk_num=args[0].shape[-2]
         ctx.chunk_size=args[0].shape[-1]
         return *compacted_tensors,
