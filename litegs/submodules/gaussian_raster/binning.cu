@@ -20,7 +20,7 @@ namespace cg = cooperative_groups;
     const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> prefix_sum,//viewnum,pointnum
      const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> depth_sorted_pointid,//viewnum,pointnum
     int TileSizeX,
-    torch::PackedTensorAccessor32 < int16_t, 2, torch::RestrictPtrTraits> table_tileId,
+    torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_tileId,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
     )
 {
@@ -61,7 +61,7 @@ namespace cg = cooperative_groups;
      const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> depth_sorted_pointid,//viewnum,pointnum
      const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> large_index,//tasknum,2
      int TileSizeX,
-     torch::PackedTensorAccessor32 < int16_t, 2, torch::RestrictPtrTraits> table_tileId,
+     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_tileId,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
  )
  {
@@ -101,7 +101,7 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
 
     std::vector<int64_t> output_shape{ view_num, allocate_size };
 
-    auto opt = torch::TensorOptions().dtype(torch::kInt16).layout(torch::kStrided).device(LU.device()).requires_grad(false);
+    auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(LU.device()).requires_grad(false);
     auto table_tileId = torch::zeros(output_shape, opt);
     opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(LU.device()).requires_grad(false);
     auto table_pointId= torch::zeros(output_shape, opt);
@@ -115,7 +115,7 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
         prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
         TilesSizeX,
-        table_tileId.packed_accessor32<int16_t, 2, torch::RestrictPtrTraits>(),
+        table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
     
@@ -128,7 +128,7 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
         depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
         large_index.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
         TilesSizeX,
-        table_tileId.packed_accessor32<int16_t, 2, torch::RestrictPtrTraits>(),
+        table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 
@@ -137,7 +137,7 @@ std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tens
 }
 
 __global__ void tile_range_kernel(
-    const torch::PackedTensorAccessor32<int16_t, 2,torch::RestrictPtrTraits> table_tileId,//viewnum,pointnum
+    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> table_tileId,//viewnum,pointnum
     int table_length,
     int max_tileId,
     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tile_range
@@ -188,7 +188,7 @@ at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_
     dim3 Block3d(std::ceil(table_length / 1024.0f), view_num, 1);
 
     tile_range_kernel<<<Block3d, 1024 >>>
-        (table_tileId.packed_accessor32<int16_t, 2, torch::RestrictPtrTraits>(), table_length, max_tileId, out.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+        (table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(), table_length, max_tileId, out.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 
     return out;
