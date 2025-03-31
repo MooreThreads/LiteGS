@@ -72,10 +72,12 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size)))
     tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size)))
     #tiles=torch.arange(1,tiles_x*tiles_y+1,device=xyz.device,dtype=torch.int32).unsqueeze(0)#0 is invalid
-    img,transmitance=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
-                                            pp.tile_size,output_shape[0],output_shape[1])
+    img,transmitance,depth,normal=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
+                                            pp.tile_size,output_shape[0],output_shape[1],pp.enable_depth)
     img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
-    depth=None
-    normal=None
+    if depth is not None:
+        depth=utils.tiles2img_torch(depth,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+    if normal is not None:
+        normal=utils.tiles2img_torch(normal,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     return img,transmitance,depth,normal

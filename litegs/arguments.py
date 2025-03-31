@@ -72,6 +72,7 @@ class PipelineParams(ParamGroup):
     sparse_grad = True
     spatial_refine_interval = 5
     device_preload = True
+    enable_depth=True
     def __init__(self, parser):
         super().__init__(parser, "Pipeline Parameters")
 

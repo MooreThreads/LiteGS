@@ -1,6 +1,19 @@
 #pragma once
 #include <torch/extension.h>
-std::vector<at::Tensor> rasterize_forward(
+std::vector<at::Tensor> rasterize_RGBA_forward(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor ndc,// 
+    at::Tensor cov2d_inv,
+    at::Tensor color,
+    at::Tensor opacity,
+    std::optional<at::Tensor> specific_tiles,
+    int64_t tilesize,
+    int64_t img_h,
+    int64_t img_w
+);
+
+std::vector<at::Tensor> rasterize_RGBAD_forward(
     at::Tensor sorted_points,
     at::Tensor start_index,
     at::Tensor ndc,// 

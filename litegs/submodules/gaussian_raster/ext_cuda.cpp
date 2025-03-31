@@ -10,7 +10,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("duplicateWithKeys", &duplicateWithKeys);
   m.def("tileRange", &tileRange);
   m.def("create_ROI_AABB", &create_ROI_AABB);
-  m.def("rasterize_forward", &rasterize_forward);
+  m.def("rasterize_RGBA_forward", &rasterize_RGBA_forward);
+  m.def("rasterize_RGBAD_forward", &rasterize_RGBAD_forward);
   m.def("rasterize_backward", &rasterize_backward);
   m.def("jacobianRayspace", &jacobianRayspace);
   m.def("createTransformMatrix_forward", &createTransformMatrix_forward);
