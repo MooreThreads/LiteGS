@@ -39,10 +39,17 @@ class PinHoleCameraInfo(CameraInfo):
                   [0,focal_y,0,0],
                   [0,0,(z_far+z_near)/(z_far-z_near),-2*z_far*z_near/(z_far-z_near)],
                   [0,0,1,0]],dtype=np.float32).transpose()
+        self.inv_z_proj_matrix=np.array([[focal_x,0,0,0],
+                  [0,focal_y,0,0],
+                  [0,0,-z_near/(z_far-z_near),z_far*z_near/(z_far-z_near)],
+                  [0,0,1,0]],dtype=np.float32).transpose()
         return
     
     def get_project_matrix(self):
         return self.proj_matrix
+    
+    def get_inv_z_project_matrix(self):
+        return self.inv_z_proj_matrix
     
 WARNED = False
 
@@ -93,7 +100,7 @@ class CameraFrame:
 
                 scale = float(global_down)
                 resolution = (int(orig_w / scale), int(orig_h / scale))  
-            self.image[downsample]=np.array(image.resize(resolution),dtype=np.float32).transpose(2,0,1)/255.0
+            self.image[downsample]=np.array(image.resize(resolution),dtype=np.uint8).transpose(2,0,1)
         return self.image[downsample]
     
     def get_viewmatrix(self)->npt.NDArray:
@@ -153,7 +160,7 @@ class CameraFrameDataset(Dataset):
             for frame in frames:
                 frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
                 for key in frame.image.keys():
-                    frame.image[key]=torch.Tensor(frame.image[key]).cuda()
+                    frame.image[key]=torch.tensor(frame.image[key]).cuda()
         for frame in self.frames:
             frustumplane=self.__get_frustumplane(frame.get_viewmatrix(),self.cameras[frame.camera_id].get_project_matrix())
             if bDevice:
@@ -168,7 +175,7 @@ class CameraFrameDataset(Dataset):
     def __getitem__(self,idx:int)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
         image=self.frames[idx].load_image(self.downsample)
         view_matrix=self.frames[idx].get_viewmatrix()
-        proj_matrix=self.cameras[self.frames[idx].camera_id].get_project_matrix()
+        proj_matrix=self.cameras[self.frames[idx].camera_id].get_inv_z_project_matrix()
         frustumplane=self.frustumplanes[idx]
         return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(frustumplane),torch.Tensor(image)
     

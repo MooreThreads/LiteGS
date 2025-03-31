@@ -601,7 +601,7 @@ class Binning(BaseWrapper):
         b_visible=(tiles_touched!=0)
 
         #sort by depth
-        values,point_ids=ndc[:,2].sort(dim=-1)
+        values,point_ids=ndc[:,2].sort(dim=-1,descending=True)
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
 
@@ -642,7 +642,7 @@ class Binning(BaseWrapper):
             StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
 
         #sort by depth
-        values,point_ids=ndc[:,2].sort(dim=-1)
+        values,point_ids=ndc[:,2].sort(dim=-1,descending=True)
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
 
