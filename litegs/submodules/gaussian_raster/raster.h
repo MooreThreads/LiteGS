@@ -37,6 +37,8 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor final_transmitance,
     at::Tensor last_contributor,
     at::Tensor d_img,
+    at::Tensor d_trans_img,
+    std::optional<at::Tensor> d_depth_img_arg,
     int64_t tilesize,
     int64_t img_h,
     int64_t img_w

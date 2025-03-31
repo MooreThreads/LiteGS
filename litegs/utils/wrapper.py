@@ -462,12 +462,10 @@ class GaussiansRasterFunc(torch.autograd.Function):
         sorted_pointId,tile_start_index,transmitance,lst_contributor,ndc,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
         tile_size=ctx.arg_tile_size
-        breakpoint()
-
-
 
         grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,ndc,cov2d_inv,color,opacities,tiles,
-                                                                                                        transmitance,lst_contributor,grad_rgb_image,
+                                                                                                        transmitance,lst_contributor,
+                                                                                                        grad_rgb_image,grad_transmitance_image,grad_depth_image,
                                                                                                         tile_size,img_h,img_w)
 
         grads = (

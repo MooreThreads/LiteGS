@@ -19,7 +19,7 @@ from ..utils import wrapper
 from ..utils.statistic_helper import StatisticsHelperInst
 from . import densify
 
-def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor):
+def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor)->torch.Tensor:
     return torch.abs((network_output - gt)).mean()
 
 def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.PipelineParams,dp:arguments.DensifyParams,
@@ -103,9 +103,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                             actived_sh_degree,gt_image.shape[2:],pp)
                 
-                l1_loss:torch.Tensor=__l1_loss(img,gt_image)
+                l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=fused_ssim.fused_ssim(img,gt_image)
-                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)
+                #trans_loss=transmitance.square().mean()
+                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)#+trans_loss*0.01
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
