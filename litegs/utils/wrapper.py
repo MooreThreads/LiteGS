@@ -444,17 +444,22 @@ class GaussiansRasterFunc(torch.autograd.Function):
         tile_size:int,
         img_h:int,
         img_w:int,
+        enable_transmitance:bool=False,
         enable_depth:bool=False
     ):
+        transmitance=None
         depth=None
         normal=None
-        if enable_depth:
-            img,transmitance,depth,lst_contributor=litegs_fused.rasterize_RGBAD_forward(sorted_pointId,tile_start_index,ndc,cov2d_inv,color,opacities,tiles,tile_size,img_h,img_w)
-        else:
-            img,transmitance,lst_contributor=litegs_fused.rasterize_RGBA_forward(sorted_pointId,tile_start_index,ndc,cov2d_inv,color,opacities,tiles,tile_size,img_h,img_w)
+
+        img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,ndc,cov2d_inv,color,opacities,tiles,tile_size,img_h,img_w,enable_transmitance,enable_depth)
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,ndc,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=tile_size
         ctx.img_hw=(img_h,img_w)
+        
+        if enable_depth==False:
+            depth=None
+        if enable_transmitance==False:
+            transmitance=None
         return img,transmitance,depth,normal
     
     @staticmethod

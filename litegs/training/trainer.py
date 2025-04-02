@@ -105,8 +105,13 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=fused_ssim.fused_ssim(img,gt_image)
-                #trans_loss=transmitance.square().mean()
-                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)#+trans_loss*0.01
+                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)
+                # if pp.enable_transmitance:#example for transimitance grad
+                #     trans_loss=transmitance.square().mean()*0.01
+                #     loss+=trans_loss
+                # if pp.enable_depth:#example for depth grad
+                #     depth_loss=(1.0-depth).square().mean()*0.01
+                #     loss+=depth_loss
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()

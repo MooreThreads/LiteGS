@@ -1,6 +1,6 @@
 #pragma once
 #include <torch/extension.h>
-std::vector<at::Tensor> rasterize_RGBA_forward(
+std::vector<at::Tensor> rasterize_forward(
     at::Tensor sorted_points,
     at::Tensor start_index,
     at::Tensor ndc,// 
@@ -10,20 +10,9 @@ std::vector<at::Tensor> rasterize_RGBA_forward(
     std::optional<at::Tensor> specific_tiles,
     int64_t tilesize,
     int64_t img_h,
-    int64_t img_w
-);
-
-std::vector<at::Tensor> rasterize_RGBAD_forward(
-    at::Tensor sorted_points,
-    at::Tensor start_index,
-    at::Tensor ndc,// 
-    at::Tensor cov2d_inv,
-    at::Tensor color,
-    at::Tensor opacity,
-    std::optional<at::Tensor> specific_tiles,
-    int64_t tilesize,
-    int64_t img_h,
-    int64_t img_w
+    int64_t img_w,
+    bool enable_trans,
+    bool enable_depth
 );
 
 std::vector<at::Tensor> rasterize_backward(
@@ -37,7 +26,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor final_transmitance,
     at::Tensor last_contributor,
     at::Tensor d_img,
-    at::Tensor d_trans_img,
+    std::optional<at::Tensor> d_trans_img_arg,
     std::optional<at::Tensor> d_depth_img_arg,
     int64_t tilesize,
     int64_t img_h,
