@@ -32,7 +32,7 @@ def get_cmdclass():
 
 setup(
     name="lite-gaussian-splatting",
-    version="1.0.0",
+    version="1.0.1",
     author="Kaimin Liao",
     author_email="kaiminliao@gmail.com",
     description="A High-Performance Modular Framework for Gaussian Splatting Training",
