@@ -38,9 +38,9 @@ if __name__ == "__main__":
     training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
     test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
     trainingset=litegs.data.CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
-    train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
+    train_loader = DataLoader(trainingset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
     testset=litegs.data.CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
-    test_loader = DataLoader(testset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
+    test_loader = DataLoader(testset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
     norm_trans,norm_radius=trainingset.get_norm()
 
     #model
@@ -73,7 +73,7 @@ if __name__ == "__main__":
             view_matrix=view_matrix.cuda()
             proj_matrix=proj_matrix.cuda()
             frustumplane=frustumplane.cuda()
-            gt_image=gt_image.cuda()
+            gt_image=gt_image.cuda()/255.0
             _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=litegs.render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
                                                                                                     xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
             img,transmitance,depth,normal=litegs.render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
