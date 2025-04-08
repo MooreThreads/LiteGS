@@ -644,8 +644,10 @@ class Binning(BaseWrapper):
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        left_up,right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1],tile_size)
-        rect_length=right_down-left_up
+        pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
+        tile_left_up=(pixel_left_up/float(tile_size)).int()
+        tile_right_down=(pixel_right_down/float(tile_size)).ceil().int()
+        rect_length=tile_right_down-tile_left_up
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
 
@@ -665,7 +667,7 @@ class Binning(BaseWrapper):
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         large_points_index=(tiles_touched>=32).nonzero()
-        my_table=litegs_fused.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,
+        my_table=litegs_fused.duplicateWithKeys(tile_left_up,tile_right_down,prefix_sum,point_ids,large_points_index,
                                                 ellipse_f,ellipse_a,
                                                 int(allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size)
         tileId_table:torch.Tensor=my_table[0]

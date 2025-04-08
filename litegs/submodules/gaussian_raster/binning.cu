@@ -227,7 +227,7 @@ __global__ void create_ROI_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_eigen_val,  //viewnum,2,pointnum
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> tensor_eigen_vec,  //viewnum,2,2,pointnum
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_opacity,  //viewnum,pointnum
-    int img_h,int img_w,int img_tile_h,int img_tile_w,int tilesize,
+    int img_h,int img_w,
     torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_left_up,//viewnum,2,pointnum
     torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_right_down,//viewnum,2,pointnum
     torch::PackedTensorAccessor32 < float, 4, torch::RestrictPtrTraits> tensor_ellipse_f,//viewnum,2,2,pointnum
@@ -283,16 +283,16 @@ __global__ void create_ROI_kernel(
 
             {
                 //2d AABB
-                float min_x = coord.x - abs(axis[0].x) - abs(axis[1].x);
-                float max_x = coord.x + abs(axis[0].x) + abs(axis[1].x);
-                float min_y = coord.y - abs(axis[0].y) - abs(axis[1].y);
-                float max_y = coord.y + abs(axis[0].y) + abs(axis[1].y);
-                int2 left_up{ min_x / tilesize,min_y / tilesize };
-                int2 right_down{ ceil(max_x / tilesize),ceil(max_y / tilesize) };
-                tensor_left_up[view_id][0][index] = min(max(left_up.x, 0), img_tile_w);
-                tensor_left_up[view_id][1][index] = min(max(left_up.y, 0), img_tile_h);
-                tensor_right_down[view_id][0][index] = min(max(right_down.x, 0), img_tile_w);
-                tensor_right_down[view_id][1][index] = min(max(right_down.y, 0), img_tile_h);
+                int min_x = floor(coord.x - abs(axis[0].x) - abs(axis[1].x));
+                int max_x = ceil(coord.x + abs(axis[0].x) + abs(axis[1].x));
+                int min_y = floor(coord.y - abs(axis[0].y) - abs(axis[1].y));
+                int max_y = ceil(coord.y + abs(axis[0].y) + abs(axis[1].y));
+                int2 left_up{ min_x ,min_y };
+                int2 right_down{ max_x ,max_y };
+                tensor_left_up[view_id][0][index] = min(max(left_up.x, 0), img_w);
+                tensor_left_up[view_id][1][index] = min(max(left_up.y, 0), img_h);
+                tensor_right_down[view_id][0][index] = min(max(right_down.x, 0), img_w);
+                tensor_right_down[view_id][1][index] = min(max(right_down.y, 0), img_h);
             }
             
         }
@@ -307,7 +307,7 @@ __global__ void create_ROI_kernel(
 }
 
 std::vector<at::Tensor> create_2d_gaussian_ROI(at::Tensor ndc, at::Tensor eigen_val, at::Tensor eigen_vec, at::Tensor opacity,
-    int64_t height,int64_t width, int64_t tilesize)
+    int64_t height,int64_t width)
 {
     at::DeviceGuard guard(ndc.device());
 
@@ -323,7 +323,7 @@ std::vector<at::Tensor> create_2d_gaussian_ROI(at::Tensor ndc, at::Tensor eigen_
         eigen_val.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         eigen_vec.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        height, width,ceil(height/(float)tilesize), ceil(width / (float)tilesize), tilesize,
+        height, width,
         left_up.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         right_down.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         ellipse_f.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
