@@ -73,7 +73,7 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size)))
     #tiles=torch.arange(1,tiles_x*tiles_y+1,device=xyz.device,dtype=torch.int32).unsqueeze(0)#0 is invalid
     img,transmitance,depth,normal=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
-                                            pp.tile_size,output_shape[0],output_shape[1],pp.enable_transmitance,pp.enable_depth)
+                                            output_shape[0],output_shape[1],pp.tile_size,pp.tile_size,pp.enable_transmitance,pp.enable_depth)
     img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     if transmitance is not None:
         transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()

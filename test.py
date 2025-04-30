@@ -22,13 +22,10 @@ if __name__ == "__main__":
     for i in range(10):
         eigen_val,eigen_vec,inv_cov2d=litegs.utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
         tile_start_index,sorted_pointId,b_visible=litegs.utils.wrapper.Binning.call_fused(ndc_pos,eigen_val,eigen_vec,opacity,output_shape,tile_size)
-        tiles_x=int(math.ceil(output_shape[1]/float(tile_size)))
-        tiles_y=int(math.ceil(output_shape[0]/float(tile_size)))
-        valid_tile=((tile_start_index[0,2:]-tile_start_index[0,1:-1])>0).nonzero()[:,0]
         img,transmitance,depth,normal=litegs.utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
-                                                tile_size,output_shape[0],output_shape[1],False,False)
-        img.mean().backward()
-    # plt_img=litegs.utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
-    # plt.imshow(plt_img.detach().cpu()[0].permute(1,2,0))
-    # plt.show()
-    pass
+                                                output_shape[0],output_shape[1],tile_size,tile_size,False,False)
+        #img.mean().backward()
+        plt_img=litegs.utils.tiles2img_torch(img,math.ceil(output_shape[1]/tile_size),math.ceil(output_shape[0]/tile_size))[...,:output_shape[0],:output_shape[1]].contiguous()
+        plt.imshow(plt_img.detach().cpu()[0].permute(1,2,0))
+        plt.show()
+        pass

@@ -441,9 +441,10 @@ class GaussiansRasterFunc(torch.autograd.Function):
         color:torch.Tensor,
         opacities:torch.Tensor,
         tiles:torch.Tensor,
-        tile_size:int,
         img_h:int,
         img_w:int,
+        tile_h:int,
+        tile_w:int,
         enable_transmitance:bool=False,
         enable_depth:bool=False
     ):
@@ -451,27 +452,38 @@ class GaussiansRasterFunc(torch.autograd.Function):
         depth=None
         normal=None
 
-        img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,ndc,cov2d_inv,color,opacities,tiles,tile_size,img_h,img_w,enable_transmitance,enable_depth)
-        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,ndc,cov2d_inv,color,opacities,tiles)
-        ctx.arg_tile_size=tile_size
+        views_num=ndc.shape[0]
+        points_num=ndc.shape[-1]
+        packed_params=torch.concat([
+            ndc[:,:3,:],
+            cov2d_inv.reshape(views_num,4,points_num)[:,(0,1,3),:],
+            color,
+            opacities.unsqueeze(0).repeat(views_num,1,1)
+            ],dim=-2).permute(0,2,1).contiguous()
+
+        img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,packed_params,
+                                                                              tiles,img_h,img_w,tile_h,tile_w,
+                                                                              enable_transmitance,enable_depth)
+        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,ndc,cov2d_inv,color,opacities,tiles)
+        ctx.arg_tile_size=(tile_h,tile_w)
         ctx.img_hw=(img_h,img_w)
-        
+
         if enable_depth==False:
             depth=None
         if enable_transmitance==False:
             transmitance=None
         return img,transmitance,depth,normal
-    
+
     @staticmethod
     def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor):
-        sorted_pointId,tile_start_index,transmitance,lst_contributor,ndc,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
+        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,ndc,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
-        tile_size=ctx.arg_tile_size
+        tile_h,tile_w=ctx.arg_tile_size
 
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,ndc,cov2d_inv,color,opacities,tiles,
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,ndc,cov2d_inv,color,opacities,tiles,
                                                                                                         transmitance,lst_contributor,
                                                                                                         grad_rgb_image,grad_transmitance_image,grad_depth_image,
-                                                                                                        tile_size,img_h,img_w)
+                                                                                                        img_h,img_w,tile_h,tile_w)
 
         grads = (
             None,
