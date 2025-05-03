@@ -132,10 +132,10 @@ namespace cg = cooperative_groups;
     opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(LU.device()).requires_grad(false);
     auto table_pointId= torch::zeros(output_shape, opt);
 
-    dim3 Block3d(std::ceil(points_num/1024.0f), view_num, 1);
+    dim3 Block3d(std::ceil(points_num/512.0f), view_num, 1);
     
 
-    duplicate_with_keys_kernel<<<Block3d ,1024>>>(
+    duplicate_with_keys_kernel<<<Block3d ,512>>>(
         LU.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -146,8 +146,8 @@ namespace cg = cooperative_groups;
     CUDA_CHECK_ERRORS;
     
     int large_points_num = large_index.size(0);
-    int blocksnum = std::ceil((large_points_num * 32) / 1024.0f);
-    large_points_duplicate_with_keys_kernel << <blocksnum, 1024 >> > (
+    int blocksnum = std::ceil((large_points_num * 32) / 512.0f);
+    large_points_duplicate_with_keys_kernel << <blocksnum, 512 >> > (
         LU.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -213,9 +213,9 @@ at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(table_tileId.device()).requires_grad(false);
     auto out = torch::ones(output_shape, opt)*-1;
 
-    dim3 Block3d(std::ceil(table_length / 1024.0f), view_num, 1);
+    dim3 Block3d(std::ceil(table_length / 512.0f), view_num, 1);
 
-    tile_range_kernel<<<Block3d, 1024 >>>
+    tile_range_kernel<<<Block3d, 512 >>>
         (table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(), table_length, max_tileId, out.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 

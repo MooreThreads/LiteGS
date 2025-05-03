@@ -62,6 +62,7 @@ __global__ void raster_forward_kernel(
         if (start_index_in_tile != -1)
         {
             float4 rgba_buffer[pixels_per_thread];
+            int lst_contributor[pixels_per_thread];
             float alpha[pixels_per_thread];
 #pragma unroll
             for (int i = 0; i < pixels_per_thread; i++)
@@ -71,10 +72,8 @@ __global__ void raster_forward_kernel(
 
             int finish_pixel = 0;
             int index_in_tile = start_index_in_tile;
-            for (; (index_in_tile < end_index_in_tile) && (finish_pixel < pixels_per_thread); index_in_tile++)
+            for (; (index_in_tile < end_index_in_tile) && (finish_pixel < (1<<pixels_per_thread)-1); index_in_tile++)
             {
-                finish_pixel = 0;
-
                 int point_id = sorted_points[batch_id][index_in_tile];
                 PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
                 float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
@@ -99,14 +98,30 @@ __global__ void raster_forward_kernel(
 #pragma unroll
                 for (int i = 0; i < pixels_per_thread; i++)
                 {
-                    if (alpha[i] > (1 / 255.0f))
+                    if (alpha[i] >= (1 / 255.0f)&& (finish_pixel & (1 << i))==0)
                     {
-                        float transmitance = rgba_buffer[i].w;
-                        rgba_buffer[i].x += (float(params.color_r) * alpha[i] * transmitance);
-                        rgba_buffer[i].y += (float(params.color_g) * alpha[i] * transmitance);
-                        rgba_buffer[i].z += (float(params.color_b) * alpha[i] * transmitance);
-                        rgba_buffer[i].w = (transmitance * (1 - alpha[i]));
-                        finish_pixel += (rgba_buffer[i].w < 0.0001f);
+                        float test_t = rgba_buffer[i].w * (1 - alpha[i]);
+                        if (blockIdx.x * blockDim.y + threadIdx.y == 10531 && threadIdx.x == 6 && i == 0 && lst_contributor[i]==5222315)
+                        {
+                            printf("test_t:%f lst:%d\n", test_t,lst_contributor[i]);
+                        }
+                        if (test_t < 0.0001f)
+                        {
+                            if (blockIdx.x * blockDim.y + threadIdx.y == 10531 && threadIdx.x == 6)
+                            {
+                                printf("finish test_t:%f lst:%d\n", test_t, lst_contributor[i]);
+                            }
+                            finish_pixel = (finish_pixel|(1<<i));
+                        }
+                        else
+                        {
+                            float weight = rgba_buffer[i].w * alpha[i];
+                            rgba_buffer[i].x += (float(params.color_r) * weight);
+                            rgba_buffer[i].y += (float(params.color_g) * weight);
+                            rgba_buffer[i].z += (float(params.color_b) * weight);
+                            rgba_buffer[i].w = test_t;
+                            lst_contributor[i] = index_in_tile;
+                        }
                     }
                 }
 
@@ -128,7 +143,7 @@ __global__ void raster_forward_kernel(
                 ourput_g[output_y][output_x] = rgba_buffer[i].y;
                 ourput_b[output_y][output_x] = rgba_buffer[i].z;
                 ourput_t[output_y][output_x] = rgba_buffer[i].w;
-                output_last_index[output_y][output_x] = index_in_tile;
+                output_last_index[output_y][output_x] = lst_contributor[i];
             }
 
         }

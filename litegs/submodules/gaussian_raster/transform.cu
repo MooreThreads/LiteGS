@@ -469,7 +469,7 @@ at::Tensor createCov2dDirectly_forward(
     assert(J.size(3) == P);
     at::Tensor cov2d = torch::empty({ N,2,2,P }, transform_matrix.options());
 
-    int threadsnum = 1024;
+    int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(transform_matrix.type(), __FUNCTION__, [&] {
@@ -571,7 +571,7 @@ at::Tensor createCov2dDirectly_backward(
     assert(cov2d_grad.size(3) == P);
     at::Tensor transform_matrix_grad = torch::empty({ 3,3,P }, cov2d_grad.options());
 
-    int threadsnum = 1024;
+    int threadsnum = 512;
     int blocknum=std::ceil(P / (float)threadsnum);
 
 
@@ -703,7 +703,7 @@ at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest
     int P = dir.size(2);
     at::Tensor rgb = torch::empty({ N,3,P }, sh_base.options());
 
-    int threadsnum = 1024;
+    int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
     switch (degree)
@@ -1121,7 +1121,7 @@ std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
     at::Tensor val = torch::empty({ N,2,P }, input.options().requires_grad(false));
     at::Tensor inv = torch::empty({ N,2,2,P }, input.options());
 
-    int threadsnum = 1024;
+    int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.type(), __FUNCTION__, [&] {eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
@@ -1139,7 +1139,7 @@ at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix
     int P = inv_matrix.size(3);
     at::Tensor dL_dMatrix = torch::empty_like(dL_dInvMatrix);
 
-    int threadsnum = 1024;
+    int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(inv_matrix.type(), __FUNCTION__, [&] {inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
