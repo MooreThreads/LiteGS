@@ -101,16 +101,8 @@ __global__ void raster_forward_kernel(
                     if (alpha[i] >= (1 / 255.0f)&& (finish_pixel & (1 << i))==0)
                     {
                         float test_t = rgba_buffer[i].w * (1 - alpha[i]);
-                        if (blockIdx.x * blockDim.y + threadIdx.y == 10531 && threadIdx.x == 6 && i == 0 && lst_contributor[i]==5222315)
-                        {
-                            printf("test_t:%f lst:%d\n", test_t,lst_contributor[i]);
-                        }
                         if (test_t < 0.0001f)
                         {
-                            if (blockIdx.x * blockDim.y + threadIdx.y == 10531 && threadIdx.x == 6)
-                            {
-                                printf("finish test_t:%f lst:%d\n", test_t, lst_contributor[i]);
-                            }
                             finish_pixel = (finish_pixel|(1<<i));
                         }
                         else

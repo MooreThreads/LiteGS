@@ -465,9 +465,9 @@ class GaussiansRasterFunc(torch.autograd.Function):
                                                                               tiles,img_h,img_w,tile_h,tile_w,
                                                                               enable_transmitance,enable_depth)
         
-        _img=torch.tensor(np.load('./profiler_input_data/img.npy'),device='cuda')
-        _transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
-        _lst_contributor=torch.tensor(np.load('./profiler_input_data/lst_contributor.npy'),device='cuda')
+        # _img=torch.tensor(np.load('./profiler_input_data/img.npy'),device='cuda')
+        # _transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
+        # _lst_contributor=torch.tensor(np.load('./profiler_input_data/lst_contributor.npy'),device='cuda')
 
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,ndc,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=(tile_h,tile_w)
