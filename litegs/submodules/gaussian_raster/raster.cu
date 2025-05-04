@@ -68,6 +68,7 @@ __global__ void raster_forward_kernel(
             for (int i = 0; i < pixels_per_thread; i++)
             {
                 rgba_buffer[i] = float4{ 0.0f,0.0f,0.0f,1.0f };
+                lst_contributor[i] = start_index_in_tile-1;
             }
 
             int finish_pixel = 0;
@@ -226,6 +227,8 @@ __global__ void raster_backward_kernel(
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
     int tiles_num_x, int img_h, int img_w)
 {
+    auto block = cg::this_thread_block();
+    auto warp = cg::tiled_partition<32>(block);
     const int pixels_per_thread = tile_size_x * tile_size_y / 32;
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
@@ -238,48 +241,37 @@ __global__ void raster_backward_kernel(
     {
 
         int start_index_in_tile = start_index[batch_id][tile_id];
-        int end_index_in_tile = start_index[batch_id][tile_id + 1];
+        int end_index_in_tile = start_index_in_tile;
 
         if (start_index_in_tile != -1)
         {
             float4 rgba_buffer[pixels_per_thread];
-            float4 grad_img_buffer[pixels_per_thread];
-            const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
-            const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
+            const int in_tile_x = threadIdx.x % tile_size_x;
+            const int in_tile_y = threadIdx.x / tile_size_x * pixels_per_thread;
 #pragma unroll
             for (int i = 0; i < pixels_per_thread; i++)
             {
-                float t = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][pixel_y + i][pixel_x];
-                float dL_dr = d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][pixel_y + i][pixel_x];
-                float dL_dg = d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][pixel_y + i][pixel_x];
-                float dL_db = d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][pixel_y + i][pixel_x];
-                float dL_da = 0;
-                if (enable_trans_grad)
-                    float dL_da = d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][pixel_y + i][pixel_x];
-
+                float t = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
                 rgba_buffer[i] = float4{ 0.0f,0.0f,0.0f,t };
-                grad_img_buffer[i] = float4{ dL_dr ,dL_dg ,dL_db,dL_da };
+                end_index_in_tile = max(end_index_in_tile, last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x]+1);
             }
+            end_index_in_tile = cg::reduce(warp, end_index_in_tile, cg::greater<int>());
 
             int index_in_tile = end_index_in_tile - 1;
             for (; (index_in_tile >= start_index_in_tile); index_in_tile--)
             {
-                int pixel_lst_index = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][pixel_y][pixel_x];
-                if (index_in_tile > pixel_lst_index)
-                {
-                    continue;
-                }
 
                 int point_id = sorted_points[batch_id][index_in_tile];
                 PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
                 float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
+                const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + in_tile_x;
+                const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + in_tile_y;
                 float2 d = { xy.x - pixel_x,xy.y - pixel_y };
                 float exponent = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
                 float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
                 float neg_half_c = -0.5f * params.inv_cov11;
                 //exponent+=(cy+bx)*delta - 0.5*c*delta*delta
 
-                float d_alpha = 0;
                 float3 grad_color{ 0,0,0 };
                 float grad_opacity = 0;
                 float d_bxcy = 0;
@@ -288,42 +280,53 @@ __global__ void raster_backward_kernel(
 #pragma unroll
                 for (int i = 0; i < pixels_per_thread; i++)
                 {
-                    float power = exponent + i * bxcy + i * i * neg_half_c;
-                    float G = __expf(power);
-                    float alpha = min(0.99f, params.opacity * power);
-                    if (alpha > (1 / 255.0f))
+                    int pixel_lst_index = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                    if (index_in_tile <= pixel_lst_index)
                     {
-                        rgba_buffer[i].w /= (1 - alpha);
-                        grad_color.x += alpha * rgba_buffer[i].w * grad_img_buffer[i].x;
-                        grad_color.y += alpha * rgba_buffer[i].w * grad_img_buffer[i].y;
-                        grad_color.z += alpha * rgba_buffer[i].w * grad_img_buffer[i].z;
-
-
-                        d_alpha += (params.color_r - grad_img_buffer[i].x) * rgba_buffer[i].w * grad_img_buffer[i].x;
-                        d_alpha += (params.color_g - grad_img_buffer[i].y) * rgba_buffer[i].w * grad_img_buffer[i].y;
-                        d_alpha += (params.color_b - grad_img_buffer[i].z) * rgba_buffer[i].w * grad_img_buffer[i].z;
-                        grad_img_buffer[i].x = alpha * params.color_r + (1.0f - alpha) * grad_img_buffer[i].x;
-                        grad_img_buffer[i].y = alpha * params.color_g + (1.0f - alpha) * grad_img_buffer[i].y;
-                        grad_img_buffer[i].z = alpha * params.color_b + (1.0f - alpha) * grad_img_buffer[i].z;
+                        float dL_dr = d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                        float dL_dg = d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                        float dL_db = d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                        float dL_da = 0;
                         if (enable_trans_grad)
-                        {
-                            d_alpha -= grad_img_buffer[i].w * final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][pixel_y + i][pixel_x] / (1 - alpha);
-                        }
+                            float dL_da = d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
 
-                        grad_opacity += d_alpha * G;
-                        float d_G = params.opacity * d_alpha;
-                        float d_power = power * d_G;
-                        d_bxcy += d_power * i;
-                        d_neg_half_c += d_power * i * i;
-                        d_exponent += d_power;
+                        float power = exponent + i * bxcy + i * i * neg_half_c;
+                        power = power > 0 ? -10.0f : power;
+                        float G = __expf(power);
+                        float alpha = min(0.99f, params.opacity * G);
+                        if (alpha >= (1 / 255.0f))
+                        {
+                            rgba_buffer[i].w /= (1 - alpha);
+                            grad_color.x += alpha * rgba_buffer[i].w * dL_dr;
+                            grad_color.y += alpha * rgba_buffer[i].w * dL_dg;
+                            grad_color.z += alpha * rgba_buffer[i].w * dL_db;
+
+                            float d_alpha = 0;
+                            d_alpha += (params.color_r - rgba_buffer[i].x) * rgba_buffer[i].w * dL_dr;
+                            d_alpha += (params.color_g - rgba_buffer[i].y) * rgba_buffer[i].w * dL_dg;
+                            d_alpha += (params.color_b - rgba_buffer[i].z) * rgba_buffer[i].w * dL_db;
+                            rgba_buffer[i].x = alpha * params.color_r + (1.0f - alpha) * rgba_buffer[i].x;
+                            rgba_buffer[i].y = alpha * params.color_g + (1.0f - alpha) * rgba_buffer[i].y;
+                            rgba_buffer[i].z = alpha * params.color_b + (1.0f - alpha) * rgba_buffer[i].z;
+                            if (enable_trans_grad)
+                            {
+                                d_alpha -= dL_da * final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x] / (1 - alpha);
+                            }
+
+                            grad_opacity += d_alpha * G;
+                            float d_G = params.opacity * d_alpha;
+                            float d_power = power * d_G;
+                            d_bxcy += d_power * i;
+                            d_neg_half_c += d_power * i * i;
+                            d_exponent += d_power;
+                        }
                     }
                 }
-
-                //grad color&opacity
-                //grad_color.x = WarpReduce(temp_storage[threadIdx.y]).Sum(grad_color.x);
-                //grad_color.y = WarpReduce(temp_storage[threadIdx.y]).Sum(grad_color.y);
-                //grad_color.z = WarpReduce(temp_storage[threadIdx.y]).Sum(grad_color.z);
-                //grad_opacity = WarpReduce(temp_storage[threadIdx.y]).Sum(grad_opacity);
+                //__syncwarp();
+                grad_color.x = cg::reduce(warp, grad_color.x, cg::plus<float>());
+                grad_color.y = cg::reduce(warp, grad_color.y, cg::plus<float>());
+                grad_color.z = cg::reduce(warp, grad_color.z, cg::plus<float>());
+                grad_opacity = cg::reduce(warp, grad_opacity, cg::plus<float>());
                 if (threadIdx.x == 0)
                 {
                     atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
@@ -335,193 +338,14 @@ __global__ void raster_backward_kernel(
                 grad_invcov.x = -0.5f * d.x * d.x * d_exponent;
                 grad_invcov.y = -0.5f * d.x * d.y * d_exponent + d.x * d_bxcy;
                 grad_invcov.z = -0.5f * d.y * d.y * d_exponent - 0.5f * d_neg_half_c;
-
-
-            }
-        }
-    }
-}
-
-template <int tile_size_y, int tile_size_x, bool enable_trans_grad, bool enable_depth_grad>
-__global__ void raster_backward_kernel_warp_reduction(
-    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_params,         // //[batch,point_num,10]
-    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
-    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> final_transmitance,    //[batch,1,tile,tilesize,tilesize]
-    const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
-    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
-    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
-    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,3,point_num]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
-    int tiles_num_x, int img_h, int img_w
-)
-{
-
-    auto block = cg::this_thread_block();
-    auto warp = cg::tiled_partition<32>(block);
-    const int x_in_tile = (threadIdx.y * blockDim.x + threadIdx.x) % tile_size_x;
-    const int y_in_tile = (threadIdx.y * blockDim.x + threadIdx.x) / tile_size_x;
-
-    const int batch_id = blockIdx.y;
-    const int tile_index = blockIdx.x;
-    int tile_id = blockIdx.x + 1;// +1, tile_id 0 is invalid
-    if (specific_tiles.size(1) != 0)
-    {
-        tile_id = specific_tiles[batch_id][blockIdx.x];
-    }
-
-
-    if (tile_id != 0 && tile_id < start_index.size(1) - 1)
-    {
-        int start_index_in_tile = start_index[batch_id][tile_id];
-        int end_index_in_tile = start_index[batch_id][tile_id + 1];
-        if (start_index_in_tile != -1)
-        {
-            float f_transmittance = final_transmitance[batch_id][0][tile_index][y_in_tile][x_in_tile];
-            float transmittance = f_transmittance;
-            int pixel_lst_index = last_contributor[batch_id][tile_index][y_in_tile][x_in_tile];
-
-            float3 d_pixel{ 0,0,0 };
-            float d_trans_pixel = 0;
-            float d_depth_pixel = 0;
-            int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + x_in_tile;
-            int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + y_in_tile;
-            if (pixel_x < img_w && pixel_y < img_h)
-            {
-                d_pixel.x = d_img[batch_id][0][tile_index][y_in_tile][x_in_tile];
-                d_pixel.y = d_img[batch_id][1][tile_index][y_in_tile][x_in_tile];
-                d_pixel.z = d_img[batch_id][2][tile_index][y_in_tile][x_in_tile];
-                if (enable_trans_grad)
+                if (threadIdx.x == 0)
                 {
-                    d_trans_pixel = d_trans_img[batch_id][0][tile_index][y_in_tile][x_in_tile];
-                }
-                if (enable_depth_grad)
-                {
-                    d_depth_pixel = d_depth_img[batch_id][0][tile_index][y_in_tile][x_in_tile];
+                    atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
+                    atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
+                    atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
+                    atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
                 }
             }
-            //loop points
-            float3 accum_rec{ 0,0,0 };
-            float accum_depth = 0;
-            for (int offset = end_index_in_tile - 1; offset >= start_index_in_tile; offset--)
-            {
-
-                int point_index = offset;
-                bool skip = point_index > pixel_lst_index;
-                float3 grad_color{ 0,0,0 };
-                float3 grad_invcov{ 0,0,0 };
-                float2 grad_ndc_xy{ 0,0 };
-                float grad_ndc_z = 0;
-                float grad_opacity{ 0 };
-
-                if (skip == false)
-                {
-                    int point_id = sorted_points[batch_id][point_index];
-                    PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
-                    float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
-                    float2 d{ xy.x - pixel_x,xy.y - pixel_y };
-
-
-                    float power = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y) - params.inv_cov01 * d.x * d.y;
-                    skip |= power > 0.0f;
-
-                    float G = __expf(power);
-                    float alpha = min(0.99f, params.opacity * G);
-                    skip |= (alpha < 1.0f / 255.0f);
-                    if (skip == false)
-                    {
-                        transmittance /= (1 - alpha);
-                        //color
-                        grad_color.x = alpha * transmittance * d_pixel.x;
-                        grad_color.y = alpha * transmittance * d_pixel.y;
-                        grad_color.z = alpha * transmittance * d_pixel.z;
-                        grad_ndc_z = alpha * transmittance * d_depth_pixel;
-
-
-                        //alpha
-                        float d_alpha = 0;
-                        d_alpha += (params.color_r - accum_rec.x) * transmittance * d_pixel.x;
-                        d_alpha += (params.color_g - accum_rec.y) * transmittance * d_pixel.y;
-                        d_alpha += (params.color_b - accum_rec.z) * transmittance * d_pixel.z;
-                        accum_rec.x = alpha * params.color_r + (1.0f - alpha) * accum_rec.x;
-                        accum_rec.y = alpha * params.color_g + (1.0f - alpha) * accum_rec.y;
-                        accum_rec.z = alpha * params.color_b + (1.0f - alpha) * accum_rec.z;
-                        if (enable_trans_grad)
-                        {
-                            d_alpha -= d_trans_pixel * f_transmittance / (1 - alpha);
-                        }
-                        if (enable_depth_grad)
-                        {
-                            d_alpha += (params.ndc_z - accum_depth) * transmittance * d_depth_pixel;
-                            accum_depth = alpha * params.ndc_z + (1.0f - alpha) * accum_depth;
-                        }
-
-                        //opacity
-                        grad_opacity = G * d_alpha;
-
-                        //cov2d_inv
-                        float d_G = params.opacity * d_alpha;
-                        float d_power = G * d_G;
-                        grad_invcov.x = -0.5f * d.x * d.x * d_power;
-                        grad_invcov.y = -0.5f * d.x * d.y * d_power;
-                        grad_invcov.z = -0.5f * d.y * d.y * d_power;
-
-                        //mean2d
-                        float d_deltax = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * d_power;
-                        float d_deltay = (-params.inv_cov11 * d.y - params.inv_cov01 * d.x) * d_power;
-                        grad_ndc_xy.x = d_deltax;
-                        grad_ndc_xy.y = d_deltay;
-                    }
-
-                }
-
-
-                if (warp.all(skip) == false)
-                {
-                    grad_color.x = cg::reduce(warp, grad_color.x, cg::plus<float>());
-                    grad_color.y = cg::reduce(warp, grad_color.y, cg::plus<float>());
-                    grad_color.z = cg::reduce(warp, grad_color.z, cg::plus<float>());
-
-                    grad_invcov.x = cg::reduce(warp, grad_invcov.x, cg::plus<float>());
-                    grad_invcov.y = cg::reduce(warp, grad_invcov.y, cg::plus<float>());
-                    grad_invcov.z = cg::reduce(warp, grad_invcov.z, cg::plus<float>());
-
-                    grad_ndc_xy.x = cg::reduce(warp, grad_ndc_xy.x, cg::plus<float>());
-                    grad_ndc_xy.y = cg::reduce(warp, grad_ndc_xy.y, cg::plus<float>());
-                    if (enable_depth_grad)
-                        grad_ndc_z = cg::reduce(warp, grad_ndc_z, cg::plus<float>());
-
-                    grad_opacity = cg::reduce(warp, grad_opacity, cg::plus<float>());
-
-                    if (warp.thread_rank() == 0)
-                    {
-                        int point_id = sorted_points[batch_id][point_index];
-                        atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
-                        atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
-                        atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
-
-                        atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
-                        atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
-                        atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
-                        atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
-
-                        atomicAdd(&d_ndc[batch_id][0][point_id], grad_ndc_xy.x * 0.5f * img_w);
-                        atomicAdd(&d_ndc[batch_id][1][point_id], grad_ndc_xy.y * 0.5f * img_h);
-                        if (enable_depth_grad)
-                        {
-                            atomicAdd(&d_ndc[batch_id][2][point_id], grad_ndc_z);
-                        }
-
-                        atomicAdd(&d_opacity[0][point_id], grad_opacity);
-                    }
-                }
-            }
-
-
         }
     }
 }
@@ -747,6 +571,7 @@ __global__ void raster_backward_kernel_multibatch_reduction(
 
                     //opacity
                     grad_opacity[shared_mem_offset] = G * d_alpha;
+                    
 
                     //cov2d_inv
                     float d_G = cur_color.w * d_alpha;
@@ -864,13 +689,13 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor d_color = torch::zeros({ batch_num,3,points_num }, packed_params.options());
     at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
 
+    
     //int tiles_per_block = 4;
     //dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     //dim3 Thread3d(32, tiles_per_block);
-    //raster_backward_kernel_warp_reduction<16, 8, false, false> << <Block3d, Thread3d >> > (
-
-    /*dim3 Block3d(tilesnum, viewsnum, 1);
-    raster_backward_kernel_warp_reduction<8, 8, false, false> << <Block3d, 8 * 8 >> > (
+    dim3 Block3d(1, viewsnum, 1);
+    dim3 Thread3d(32, 1);
+    raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -885,9 +710,11 @@ std::vector<at::Tensor> rasterize_backward(
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
-    );*/
-    cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
-    dim3 Block3d(tilesnum, viewsnum, 1);
+    );
+    //cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
+    //dim3 Block3d(tilesnum, viewsnum, 1);
+    //dim3 Thread3d(8, 8, 1);
+    /*dim3 Block3d(1, 1, 1);
     dim3 Thread3d(8, 8, 1);
     raster_backward_kernel_multibatch_reduction<8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -907,7 +734,7 @@ std::vector<at::Tensor> rasterize_backward(
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
-        );
+        );*/
 
 
     return { d_ndc ,d_cov2d_inv ,d_color,d_opacity };

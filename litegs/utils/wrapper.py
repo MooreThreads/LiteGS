@@ -489,6 +489,11 @@ class GaussiansRasterFunc(torch.autograd.Function):
                                                                                                         transmitance,lst_contributor,
                                                                                                         grad_rgb_image,grad_transmitance_image,grad_depth_image,
                                                                                                         img_h,img_w,tile_h,tile_w)
+        
+        _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
+        _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
+        _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')
+        breakpoint()
 
         grads = (
             None,
