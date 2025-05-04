@@ -464,10 +464,6 @@ class GaussiansRasterFunc(torch.autograd.Function):
         img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,packed_params,
                                                                               tiles,img_h,img_w,tile_h,tile_w,
                                                                               enable_transmitance,enable_depth)
-        
-        # _img=torch.tensor(np.load('./profiler_input_data/img.npy'),device='cuda')
-        # _transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
-        # _lst_contributor=torch.tensor(np.load('./profiler_input_data/lst_contributor.npy'),device='cuda')
 
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,ndc,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=(tile_h,tile_w)
@@ -490,10 +486,11 @@ class GaussiansRasterFunc(torch.autograd.Function):
                                                                                                         grad_rgb_image,grad_transmitance_image,grad_depth_image,
                                                                                                         img_h,img_w,tile_h,tile_w)
         
-        _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
-        _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
-        _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')
-        breakpoint()
+        # _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
+        # _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
+        # _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')
+        # _grad_ndc=torch.tensor(np.load('./profiler_input_data/grad_ndc.npy'),device='cuda')
+        # breakpoint()
 
         grads = (
             None,
