@@ -344,8 +344,8 @@ __global__ void raster_backward_kernel(
                     }
                 }
                 
-                unsigned mask = __ballot_sync(0xffffff, valid);
-                if (__any_sync(0xffffff, valid))
+                unsigned mask = __ballot_sync(0xffffffff, valid);
+                if (__any_sync(0xffffffff, valid))
                 {
                     int point_id = sorted_points[batch_id][index_in_tile];
                     grad_color_x = cg::reduce(warp, grad_color_x, cg::plus<float>());//__reduce_add_sync for int or unsign int
@@ -366,9 +366,12 @@ __global__ void raster_backward_kernel(
                     float2 d = { xy.x - pixel_x,xy.y - pixel_y };
 
                     float3 grad_invcov{ 0,0,0 };
+                    //basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
+                    //bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
+                    //neg_half_c = -0.5f * params.inv_cov11;
                     grad_invcov.x = -0.5f * d.x * d.x * grad_basic;
-                    grad_invcov.y = -0.5f * d.x * d.y * grad_basic + d.x * grad_bxcy;
-                    grad_invcov.z = -0.5f * d.y * d.y * grad_basic - 0.5f * grad_neg_half_c;
+                    grad_invcov.y = (-d.x * d.y * grad_basic + d.x * grad_bxcy) * 0.5f;
+                    grad_invcov.z = -0.5f * d.y * d.y * grad_basic + d.y * grad_bxcy - 0.5f * grad_neg_half_c;
                     grad_invcov.x = cg::reduce(warp, grad_invcov.x, cg::plus<float>());
                     grad_invcov.y = cg::reduce(warp, grad_invcov.y, cg::plus<float>());
                     grad_invcov.z = cg::reduce(warp, grad_invcov.z, cg::plus<float>());
@@ -741,7 +744,7 @@ std::vector<at::Tensor> rasterize_backward(
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
-    //dim3 Thread3d(32, 1);
+    //dim3 Thread3d(32, 4);
     raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -759,11 +762,11 @@ std::vector<at::Tensor> rasterize_backward(
         tilesnum_x, img_h, img_w
     );
     
-    /*cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
-    dim3 Block3d(tilesnum, viewsnum, 1);
-    dim3 Thread3d(8, 8, 1);
-    //dim3 Block3d(1, 1, 1);
+    //cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
+    //dim3 Block3d(tilesnum, viewsnum, 1);
     //dim3 Thread3d(8, 8, 1);
+    /*dim3 Block3d(1, 1, 1);
+    dim3 Thread3d(8, 8, 1);
     raster_backward_kernel_multibatch_reduction<8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
