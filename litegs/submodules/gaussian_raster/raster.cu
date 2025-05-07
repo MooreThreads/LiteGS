@@ -222,7 +222,27 @@ inline __device__ void warp_reduce_sum(T& data)
     if (boardcast)
         data = __shfl_sync(0xffffffff, data, 0);
 }
+union FloatBits
+{
+    float value;
+    unsigned int bits;
+};
+template<>
+inline __device__ void warp_reduce_sum<float,false>(float& data)
+{
+    FloatBits float_data{ data };
+    int exponent = (float_data.bits >> 23) & 0xff;
+    exponent = __reduce_max_sync(0xffffffff,exponent)-127;
+    int scale_exponent = 23 - exponent;
+    int inv_scale_exponent = - scale_exponent;
+    float scaler = __uint_as_float( 0 | ((scale_exponent+127) << 23));
+    float inv_scaler= __uint_as_float(0 | ((inv_scale_exponent+127) << 23));
+    int scaled_value = static_cast<int>(data * scaler);
+    scaled_value = __reduce_add_sync(0xffffffff,scaled_value);
+    bool valid = (exponent > -127) && (scale_exponent < 128);
 
+    data = scaled_value * inv_scaler * valid;
+}
 template <int tile_size_y, int tile_size_x, bool enable_trans_grad, bool enable_depth_grad>
 __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
@@ -273,7 +293,7 @@ __global__ void raster_backward_kernel(
         if (start_index_in_tile != -1)
         {
             float4 rgba_buffer[pixels_per_thread];
-            float4 dL_drbgaimg[pixels_per_thread];
+            float3 dL_drbgaimg[pixels_per_thread];
             int lst[pixels_per_thread];
             #pragma unroll
             for (int i = 0; i < pixels_per_thread; i++)
@@ -282,11 +302,10 @@ __global__ void raster_backward_kernel(
                 const int in_tile_y = threadIdx.x / tile_size_x * pixels_per_thread;
                 float t = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
                 rgba_buffer[i] = float4{ 0.0f,0.0f,0.0f,t };
-                dL_drbgaimg[i] = float4{
+                dL_drbgaimg[i] = float3{
                     d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
                     d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
-                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
-                    d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x]
+                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x]
                 };
                 lst[i] = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
                 index_in_tile = max(index_in_tile, lst[i]);
@@ -298,12 +317,15 @@ __global__ void raster_backward_kernel(
                 float basic = 0;
                 float bxcy = 0;
                 float neg_half_c = 0;
-                PackedParams params = *((PackedParams*)&packed_params[batch_id][sorted_points[batch_id][index_in_tile]][0]);
+                float2 d{ 0,0 };
+                int point_id = sorted_points[batch_id][index_in_tile];
+                PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
                 {
                     float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
                     const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
                     const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
-                    float2 d = { xy.x - pixel_x,xy.y - pixel_y };
+                    d.x = xy.x - pixel_x;
+                    d.y = xy.y - pixel_y;
                     basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
                     bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
                     neg_half_c = -0.5f * params.inv_cov11;
@@ -356,10 +378,9 @@ __global__ void raster_backward_kernel(
                     }
                 }
                 
-                unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
+                //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
                 if (__any_sync(0xffffffff, grad_opacity != 0))
                 {
-                    int point_id = sorted_points[batch_id][index_in_tile];
                     //grad_color_x = __reduce_add_sync(mask, reinterpret_cast<int>(grad_color_x));
                     //grad_color_y = __reduce_add_sync(mask, reinterpret_cast<int>(grad_color_y));
                     //grad_color_z = __reduce_add_sync(mask, reinterpret_cast<int>(grad_color_z));
@@ -375,11 +396,6 @@ __global__ void raster_backward_kernel(
                         atomicAdd(&d_color[batch_id][2][point_id], grad_color_z);
                         atomicAdd(&d_opacity[0][point_id], grad_opacity);
                     }
-
-                    float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
-                    const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
-                    const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
-                    float2 d = { xy.x - pixel_x,xy.y - pixel_y };
 
                     float3 grad_invcov{ 0,0,0 };
                     //basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
