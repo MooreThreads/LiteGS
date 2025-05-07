@@ -222,27 +222,67 @@ inline __device__ void warp_reduce_sum(T& data)
     if (boardcast)
         data = __shfl_sync(0xffffffff, data, 0);
 }
-union FloatBits
-{
-    float value;
-    unsigned int bits;
-};
+
 template<>
-inline __device__ void warp_reduce_sum<float,false>(float& data)
+inline __device__ void warp_reduce_sum<float, false>(float& data)
 {
-    FloatBits float_data{ data };
-    int exponent = (float_data.bits >> 23) & 0xff;
-    exponent = __reduce_max_sync(0xffffffff,exponent)-127;
+    int exponent = (__float_as_uint(data) >> 23) & 0xff;
+    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
     int scale_exponent = 23 - exponent;
-    int inv_scale_exponent = - scale_exponent;
-    float scaler = __uint_as_float( 0 | ((scale_exponent+127) << 23));
-    float inv_scaler= __uint_as_float(0 | ((inv_scale_exponent+127) << 23));
-    int scaled_value = static_cast<int>(data * scaler);
-    scaled_value = __reduce_add_sync(0xffffffff,scaled_value);
     bool valid = (exponent > -127) && (scale_exponent < 128);
 
-    data = scaled_value * inv_scaler * valid;
+    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
+    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
+    int scaled_value = static_cast<int>(data * scaler);
+    scaled_value = __reduce_add_sync(0xffffffff, scaled_value) * valid;
+
+    data = scaled_value * inv_scaler;
 }
+
+template<>
+inline __device__ void warp_reduce_sum<float2, false>(float2& data)
+{
+    int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
+    exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
+    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    int scale_exponent = 23 - exponent;
+    bool valid = (exponent > -127) && (scale_exponent < 128);
+
+    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
+    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
+
+    int scaled_value_x = static_cast<int>(data.x * scaler);
+    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
+    data.x = scaled_value_x * inv_scaler;
+    int scaled_value_y = static_cast<int>(data.y * scaler);
+    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
+    data.y = scaled_value_y * inv_scaler;
+}
+
+template<>
+inline __device__ void warp_reduce_sum<float3, false>(float3& data)
+{
+    int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
+    exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
+    exponent = max(exponent, (__float_as_uint(data.z) >> 23) & 0xff);
+    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    int scale_exponent = 23 - exponent;
+    bool valid = (exponent > -127) && (scale_exponent < 128);
+
+    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
+    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
+
+    int scaled_value_x = static_cast<int>(data.x * scaler);
+    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
+    data.x = scaled_value_x * inv_scaler;
+    int scaled_value_y = static_cast<int>(data.y * scaler);
+    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
+    data.y = scaled_value_y * inv_scaler;
+    int scaled_value_z = static_cast<int>(data.z * scaler);
+    scaled_value_z = __reduce_add_sync(0xffffffff, scaled_value_z) * valid;
+    data.z = scaled_value_z * inv_scaler;
+}
+
 template <int tile_size_y, int tile_size_x, bool enable_trans_grad, bool enable_depth_grad>
 __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
@@ -260,23 +300,10 @@ __global__ void raster_backward_kernel(
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
     int tiles_num_x, int img_h, int img_w)
 {
-    /*constexpr int property_num = 7;
-
-    __shared__ float gradient_buffer[property_num * 32 * 4];//"+threadsnum_per_property" to avoid bank conflict
-    float* const grad_color_x = gradient_buffer;
-    float* const grad_color_y = gradient_buffer + 1 * ( 32 * 4);
-    float* const grad_color_z = gradient_buffer + 2 * ( 32 * 4);
-    float* const grad_opacity = gradient_buffer + 3 * ( 32 * 4);
-    float* const grad_bxcy = gradient_buffer + 4 * ( 32 * 4);
-    float* const grad_neg_half_c = gradient_buffer + 5 * ( 32 * 4);
-    float* const grad_basic = gradient_buffer + 6 * ( 32 * 4);*/
-
-
-
-
-    //auto block = cg::this_thread_block();
-    //auto warp = cg::tiled_partition<32>(block);
     constexpr int pixels_per_thread = tile_size_x * tile_size_y / 32;
+    __shared__ float shared_img_grad[3][pixels_per_thread][4 * 32];
+    __shared__ int shared_last_contributor[pixels_per_thread][4 * 32];
+
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
     if (specific_tiles.size(1) != 0 && (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1)))
@@ -293,8 +320,7 @@ __global__ void raster_backward_kernel(
         if (start_index_in_tile != -1)
         {
             float4 rgba_buffer[pixels_per_thread];
-            float3 dL_drbgaimg[pixels_per_thread];
-            int lst[pixels_per_thread];
+            //int lst[pixels_per_thread];
             #pragma unroll
             for (int i = 0; i < pixels_per_thread; i++)
             {
@@ -302,13 +328,12 @@ __global__ void raster_backward_kernel(
                 const int in_tile_y = threadIdx.x / tile_size_x * pixels_per_thread;
                 float t = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
                 rgba_buffer[i] = float4{ 0.0f,0.0f,0.0f,t };
-                dL_drbgaimg[i] = float3{
-                    d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
-                    d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
-                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x]
-                };
-                lst[i] = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
-                index_in_tile = max(index_in_tile, lst[i]);
+                shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x] = d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] = d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                int lst = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                index_in_tile = max(index_in_tile, lst);
+                shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = lst;
             }
             index_in_tile = __reduce_max_sync(0xffffffff, index_in_tile);
 
@@ -332,9 +357,7 @@ __global__ void raster_backward_kernel(
                 }
                 //basic+=(cy+bx)*delta - 0.5*c*delta*delta
 
-                float grad_color_x = 0;
-                float grad_color_y = 0;
-                float grad_color_z = 0;
+                float3 grad_color = { 0,0,0 };
                 float grad_opacity = 0;
                 float grad_bxcy = 0;
                 float grad_neg_half_c = 0;
@@ -346,21 +369,22 @@ __global__ void raster_backward_kernel(
                     power = power > 0 ? -10.0f : power;
                     float G = __expf(power);
                     float alpha = min(0.99f, params.opacity * G);
-                    bool valid = (index_in_tile <= lst[i])&&(alpha >= (1 / 255.0f));
+                    bool valid = (index_in_tile <= shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x])
+                        &&(alpha >= (1 / 255.0f));
                     if (__any_sync(0xffffffff, valid))
                     {
                         alpha = valid ? alpha : 0;
                         G = valid ? G : 0;
 
                         rgba_buffer[i].w = __fdividef(rgba_buffer[i].w,(1 - alpha));
-                        grad_color_x += alpha * rgba_buffer[i].w * dL_drbgaimg[i].x;
-                        grad_color_y += alpha * rgba_buffer[i].w * dL_drbgaimg[i].y;
-                        grad_color_z += alpha * rgba_buffer[i].w * dL_drbgaimg[i].z;
+                        grad_color.x += alpha * rgba_buffer[i].w * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        grad_color.y += alpha * rgba_buffer[i].w * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        grad_color.z += alpha * rgba_buffer[i].w * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
 
                         float d_alpha = 0;
-                        d_alpha += (params.color_r - rgba_buffer[i].x) * rgba_buffer[i].w * dL_drbgaimg[i].x;
-                        d_alpha += (params.color_g - rgba_buffer[i].y) * rgba_buffer[i].w * dL_drbgaimg[i].y;
-                        d_alpha += (params.color_b - rgba_buffer[i].z) * rgba_buffer[i].w * dL_drbgaimg[i].z;
+                        d_alpha += (params.color_r - rgba_buffer[i].x) * rgba_buffer[i].w * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        d_alpha += (params.color_g - rgba_buffer[i].y) * rgba_buffer[i].w * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        d_alpha += (params.color_b - rgba_buffer[i].z) * rgba_buffer[i].w * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
                         rgba_buffer[i].x += alpha * (params.color_r - rgba_buffer[i].x);
                         rgba_buffer[i].y += alpha * (params.color_g - rgba_buffer[i].y);
                         rgba_buffer[i].z += alpha * (params.color_b - rgba_buffer[i].z);
@@ -381,19 +405,13 @@ __global__ void raster_backward_kernel(
                 //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
                 if (__any_sync(0xffffffff, grad_opacity != 0))
                 {
-                    //grad_color_x = __reduce_add_sync(mask, reinterpret_cast<int>(grad_color_x));
-                    //grad_color_y = __reduce_add_sync(mask, reinterpret_cast<int>(grad_color_y));
-                    //grad_color_z = __reduce_add_sync(mask, reinterpret_cast<int>(grad_color_z));
-                    //grad_opacity = __reduce_add_sync(mask, reinterpret_cast<int>(grad_opacity));
-                    warp_reduce_sum<float, false>(grad_color_x);
-                    warp_reduce_sum<float, false>(grad_color_y);
-                    warp_reduce_sum<float, false>(grad_color_z);
+                    warp_reduce_sum<float3, false>(grad_color);
                     warp_reduce_sum<float, false>(grad_opacity);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_color[batch_id][0][point_id], grad_color_x);
-                        atomicAdd(&d_color[batch_id][1][point_id], grad_color_y);
-                        atomicAdd(&d_color[batch_id][2][point_id], grad_color_z);
+                        atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
+                        atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
+                        atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
                         atomicAdd(&d_opacity[0][point_id], grad_opacity);
                     }
 
@@ -417,14 +435,12 @@ __global__ void raster_backward_kernel(
 
                     float d_dx = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * grad_basic + params.inv_cov01 * grad_bxcy;
                     float d_dy = (-params.inv_cov11 * d.y - params.inv_cov01 * d.x) * grad_basic + params.inv_cov11 * grad_bxcy;
-                    float d_ndc_x = d_dx * 0.5f * img_w;
-                    float d_ndc_y = d_dy * 0.5f * img_h;
-                    warp_reduce_sum<float, false>(d_ndc_x);
-                    warp_reduce_sum<float, false>(d_ndc_y);
+                    float2 d_ndc_xy{ d_dx * 0.5f * img_w,d_dy * 0.5f * img_h };
+                    warp_reduce_sum<float2, false>(d_ndc_xy);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_ndc[batch_id][0][point_id], d_ndc_x);
-                        atomicAdd(&d_ndc[batch_id][1][point_id], d_ndc_y);
+                        atomicAdd(&d_ndc[batch_id][0][point_id], d_ndc_xy.x);
+                        atomicAdd(&d_ndc[batch_id][1][point_id], d_ndc_xy.y);
                     }
                 }
             }
