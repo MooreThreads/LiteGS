@@ -103,67 +103,17 @@ namespace cg = cooperative_groups;
              float square_dist1 = (tile_center_x - ellipse_f[1].x) * (tile_center_x - ellipse_f[1].x)
                  + (tile_center_y - ellipse_f[1].y) * (tile_center_y - ellipse_f[1].y);
              const float radius = sqrt(2.0f)* tilesize/2;
-             if (sqrt(square_dist0) + sqrt(square_dist1) <= 2 * ellipse_a)
+             if (sqrt(square_dist0) + sqrt(square_dist1) - 2 * radius <= 2 * ellipse_a)
              {
                  int tile_id = tile_row * ceil(img_w / (float)tilesize) + tile_col;
                  table_tileId[view_id][end - 1 - i] = tile_id + 1;// tile_id 0 means invalid!
                  table_pointId[view_id][end - 1 - i] = point_id;
              }
-             else if (sqrt(square_dist0) + sqrt(square_dist1) - 2 * radius > 2 * ellipse_a)
+             else
              {
                  table_tileId[view_id][end - 1 - i] = 0;
              }
-             else
-             {
-                 bool inside = false;
-                 {
-                     float x = tile_col * tilesize;
-                     float y = tile_row * tilesize;
-                     square_dist0 = (x - ellipse_f[0].x) * (x - ellipse_f[0].x)
-                         + (y - ellipse_f[0].y) * (y - ellipse_f[0].y);
-                     square_dist1 = (x - ellipse_f[1].x) * (x - ellipse_f[1].x)
-                         + (y - ellipse_f[1].y) * (y - ellipse_f[1].y);
-                     inside = inside || (sqrt(square_dist0) + sqrt(square_dist1) <= 2 * ellipse_a);
-                 }
-                 {
-                     float x = (tile_col + 1) * tilesize;
-                     float y = tile_row * tilesize;
-                     square_dist0 = (x - ellipse_f[0].x) * (x - ellipse_f[0].x)
-                         + (y - ellipse_f[0].y) * (y - ellipse_f[0].y);
-                     square_dist1 = (x - ellipse_f[1].x) * (x - ellipse_f[1].x)
-                         + (y - ellipse_f[1].y) * (y - ellipse_f[1].y);
-                     inside = inside || (sqrt(square_dist0) + sqrt(square_dist1) <= 2 * ellipse_a);
-                 }
-                 {
-                     float x = tile_col * tilesize;
-                     float y = (tile_row + 1) * tilesize;
-                     square_dist0 = (x - ellipse_f[0].x) * (x - ellipse_f[0].x)
-                         + (y - ellipse_f[0].y) * (y - ellipse_f[0].y);
-                     square_dist1 = (x - ellipse_f[1].x) * (x - ellipse_f[1].x)
-                         + (y - ellipse_f[1].y) * (y - ellipse_f[1].y);
-                     inside = inside || (sqrt(square_dist0) + sqrt(square_dist1) <= 2 * ellipse_a);
-                 }
-                 {
-                     float x = (tile_col + 1) * tilesize;
-                     float y = (tile_row + 1) * tilesize;
-                     square_dist0 = (x - ellipse_f[0].x) * (x - ellipse_f[0].x)
-                         + (y - ellipse_f[0].y) * (y - ellipse_f[0].y);
-                     square_dist1 = (x - ellipse_f[1].x) * (x - ellipse_f[1].x)
-                         + (y - ellipse_f[1].y) * (y - ellipse_f[1].y);
-                     inside = inside || (sqrt(square_dist0) + sqrt(square_dist1) <= 2 * ellipse_a);
-                 }
-                 if (inside)
-                 {
-                     int tile_id = tile_row * ceil(img_w / (float)tilesize) + tile_col;
-                     table_tileId[view_id][end - 1 - i] = tile_id + 1;// tile_id 0 means invalid!
-                     table_pointId[view_id][end - 1 - i] = point_id;
-                 }
-                 else
-                 {
-                     table_tileId[view_id][end - 1 - i] = 0;
-                 }
-
-             }
+             
          }
      }
  }
