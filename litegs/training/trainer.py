@@ -146,6 +146,12 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         progress_bar.update()  
 
         if epoch in save_ply or epoch==total_epoch-1:
+            if epoch==total_epoch-1:
+                progress_bar.close()
+                ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
+            else:
+                ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")    
+
             if pp.cluster_size:
                 tensors=scene.cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
             else:
@@ -153,10 +159,6 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             param_nyp=[]
             for tensor in tensors:
                 param_nyp.append(tensor.detach().cpu().numpy())
-            if epoch==total_epoch-1:
-                ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
-            else:
-                ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")
             io_manager.save_ply(ply_path,*param_nyp)
             pass
 
