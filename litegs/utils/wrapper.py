@@ -481,11 +481,16 @@ class GaussiansRasterFunc(torch.autograd.Function):
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
 
+        grad_rgb_image_max=grad_rgb_image.abs().max()
+        grad_rgb_image=grad_rgb_image/grad_rgb_image_max
         grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,ndc,cov2d_inv,color,opacities,tiles,
                                                                                                         transmitance,lst_contributor,
                                                                                                         grad_rgb_image,grad_transmitance_image,grad_depth_image,
                                                                                                         img_h,img_w,tile_h,tile_w)
-        
+        grad_ndc*=grad_rgb_image_max
+        grad_cov2d_inv*=grad_rgb_image_max
+        grad_color*=grad_rgb_image_max
+        grad_opacities*=grad_rgb_image_max
         # _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
         # _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
         # _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')

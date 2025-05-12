@@ -69,6 +69,7 @@ class ModelParams(ParamGroup):
 class PipelineParams(ParamGroup):
     cluster_size = 128
     tile_size = 8
+    half_color = True
     sparse_grad = True
     spatial_refine_interval = 5
     device_preload = True

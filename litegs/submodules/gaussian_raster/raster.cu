@@ -89,8 +89,8 @@ __global__ void raster_forward_kernel(
                 for (int i = 0; i < pixels_per_thread; i++)
                 {
                     float power = exponent + i * bxcy + i * i * neg_half_c;
-                    power = power > 0 ? -10.0f : power;
-                    alpha[i] = min(0.99f, params.opacity * __expf(power));
+                    power = power > 0 ? -6.0f : power;
+                    alpha[i] = min(255.0f/256, params.opacity * __expf(power));
                 }
                 //alpha[1] = (2 * alpha[0] + alpha[3]) * (1 / 3.0f);
                 //alpha[2] = (alpha[0] + 2 * alpha[3]) * (1 / 3.0f);
@@ -98,10 +98,10 @@ __global__ void raster_forward_kernel(
 #pragma unroll
                 for (int i = 0; i < pixels_per_thread; i++)
                 {
-                    if (alpha[i] >= (1 / 255.0f)&& (finish_pixel & (1 << i))==0)
+                    if (alpha[i] >= (1.0f / 256)&& (finish_pixel & (1 << i))==0)
                     {
                         float test_t = rgba_buffer[i].w * (1 - alpha[i]);
-                        if (test_t < 0.0001f)
+                        if (test_t < (1.0f/8192))
                         {
                             finish_pixel = (finish_pixel|(1<<i));
                         }
@@ -223,6 +223,12 @@ inline __device__ void warp_reduce_sum(T& data)
         data = __shfl_sync(0xffffffff, data, 0);
 }
 
+inline __device__ int get_float_exponent(float data)
+{
+    int exponent = (__float_as_uint(data) >> 23) & 0xff;
+    return exponent - 127;
+}
+
 template<>
 inline __device__ void warp_reduce_sum<float, false>(float& data)
 {
@@ -316,6 +322,7 @@ __global__ void raster_backward_kernel(
 
         int start_index_in_tile = start_index[batch_id][tile_id];
         int index_in_tile = start_index_in_tile;
+        int img_grad_exponent = 0;
 
         if (start_index_in_tile != -1)
         {
@@ -366,17 +373,17 @@ __global__ void raster_backward_kernel(
                 for (int i = 0; i < pixels_per_thread; i++)
                 {
                     float power = basic + i * bxcy + i * i * neg_half_c;
-                    power = power > 0 ? -10.0f : power;
+                    power = power > 0 ? -6.0f : power;
                     float G = __expf(power);
-                    float alpha = min(0.99f, params.opacity * G);
+                    float alpha = min(255.0f/256, params.opacity * G);
                     bool valid = (index_in_tile <= shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x])
-                        &&(alpha >= (1 / 255.0f));
+                        &&(alpha >= (1.0f / 256));
                     if (__any_sync(0xffffffff, valid))
                     {
-                        alpha = valid ? alpha : 0;
+                        alpha = valid ? alpha : 0;//0-2^-8
                         G = valid ? G : 0;
 
-                        rgba_buffer[i].w = __fdividef(rgba_buffer[i].w,(1 - alpha));
+                        rgba_buffer[i].w = __fdividef(rgba_buffer[i].w,(1 - alpha));//0-2^(-10)
                         grad_color.x += alpha * rgba_buffer[i].w * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_color.y += alpha * rgba_buffer[i].w * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_color.z += alpha * rgba_buffer[i].w * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
@@ -385,7 +392,7 @@ __global__ void raster_backward_kernel(
                         d_alpha += (params.color_r - rgba_buffer[i].x) * rgba_buffer[i].w * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         d_alpha += (params.color_g - rgba_buffer[i].y) * rgba_buffer[i].w * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         d_alpha += (params.color_b - rgba_buffer[i].z) * rgba_buffer[i].w * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        rgba_buffer[i].x += alpha * (params.color_r - rgba_buffer[i].x);
+                        rgba_buffer[i].x += alpha * (params.color_r - rgba_buffer[i].x);//0-256
                         rgba_buffer[i].y += alpha * (params.color_g - rgba_buffer[i].y);
                         rgba_buffer[i].z += alpha * (params.color_b - rgba_buffer[i].z);
                         if (enable_trans_grad)
@@ -405,13 +412,20 @@ __global__ void raster_backward_kernel(
                 //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
                 if (__any_sync(0xffffffff, grad_opacity != 0))
                 {
-                    warp_reduce_sum<float3, false>(grad_color);
+                    half2 rg{ grad_color.x ,grad_color.y };
+                    half2 ba{ grad_color.z ,grad_opacity };
+                    warp_reduce_sum<half2, false>(rg);
+                    warp_reduce_sum<half2, false>(ba);
+                    //warp_reduce_sum<float3, false>(grad_color);
                     warp_reduce_sum<float, false>(grad_opacity);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
-                        atomicAdd(&d_color[batch_id][1][point_id], grad_color.y);
-                        atomicAdd(&d_color[batch_id][2][point_id], grad_color.z);
+                        atomicAdd(&d_color[batch_id][0][point_id], float(rg.x));
+                        atomicAdd(&d_color[batch_id][1][point_id], float(rg.y));
+                        atomicAdd(&d_color[batch_id][2][point_id], float(ba.x));
+                        //atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
+                        //atomicAdd(&d_color[batch_id][0][point_id], grad_color.y);
+                        //atomicAdd(&d_color[batch_id][0][point_id], grad_color.z);
                         atomicAdd(&d_opacity[0][point_id], grad_opacity);
                     }
 
