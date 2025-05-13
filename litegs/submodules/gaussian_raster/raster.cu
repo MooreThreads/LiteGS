@@ -7,6 +7,7 @@
 #include <cooperative_groups/reduce.h>
 #include <cuda/atomic>
 #include <math.h>
+#include <cuda_fp16.h>
 namespace cg = cooperative_groups;
 
 #include <c10/cuda/CUDAException.h>
@@ -30,6 +31,26 @@ struct PackedParams
     float opacity;
 };
 
+struct RegisterBuffer
+{
+    half2 r;
+    half2 g;
+    half2 b;
+    half2 t;
+    unsigned int lst_contributor;//simd ushort2
+    half2 alpha;
+};
+
+#define __HALF2_TO_UI(var) *(reinterpret_cast<unsigned int *>(&(var)))
+#define __HALF2_TO_CUI(var) *(reinterpret_cast<const unsigned int *>(&(var)))
+inline __device__ half2 fast_exp_approx(half2 input) {
+    half2 output;
+    half2 log2_e(1.4426950409f, 1.4426950409f);
+    half2 scaled_input = input * log2_e;
+    asm("ex2.approx.f16x2 %0, %1;" : "=r"(__HALF2_TO_UI(output)) : "r"(__HALF2_TO_CUI(scaled_input)));
+    return output;
+}
+
 template <int tile_size_y, int tile_size_x, bool enable_trans, bool enable_depth>
 __global__ void raster_forward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
@@ -39,12 +60,15 @@ __global__ void raster_forward_kernel(
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_img,    //[batch,3,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_transmitance,    //[batch,1,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_depth,     //[batch,1,tile,tilesize, tilesize]
-    torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> output_last_contributor,    //[batch,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<short, 4, torch::RestrictPtrTraits> output_last_contributor,    //[batch,tile,tilesize,tilesize]
     int tiles_num_x, int img_h, int img_w
 )
 {
     //assert blockDim.x==32
-    const int pixels_per_thread = tile_size_x * tile_size_y / 32;
+    constexpr int VECTOR_SIZE = 2;
+    constexpr int PIXELS_PER_THREAD = (tile_size_x * tile_size_y) / (32* VECTOR_SIZE);//half2:32 pixel per warp->64 pixel per warp
+    constexpr unsigned int TILE_FINISH = (((1 << PIXELS_PER_THREAD) - 1) << 16) | ((1 << PIXELS_PER_THREAD) - 1);
+
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
     if (specific_tiles.size(1) != 0 && (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1)))
@@ -60,63 +84,84 @@ __global__ void raster_forward_kernel(
 
         if (start_index_in_tile != -1)
         {
-            float4 rgba_buffer[pixels_per_thread];
-            int lst_contributor[pixels_per_thread];
-            float alpha[pixels_per_thread];
+            RegisterBuffer reg_buffer[PIXELS_PER_THREAD];
 #pragma unroll
-            for (int i = 0; i < pixels_per_thread; i++)
+            for (int i = 0; i < PIXELS_PER_THREAD; i++)
             {
-                rgba_buffer[i] = float4{ 0.0f,0.0f,0.0f,1.0f };
-                lst_contributor[i] = start_index_in_tile-1;
+                reg_buffer[i].r = half2(0, 0);
+                reg_buffer[i].g = half2(0, 0);
+                reg_buffer[i].b = half2(0, 0);
+                reg_buffer[i].t = half2(1.0f, 1.0f);
+                reg_buffer[i].lst_contributor = 0;//simd ushort2
             }
 
-            int finish_pixel = 0;
-            int index_in_tile = start_index_in_tile;
-            for (; (index_in_tile < end_index_in_tile) && (finish_pixel < (1<<pixels_per_thread)-1); index_in_tile++)
+            unsigned int finished_mask = 0;
+            int index_in_tile = 0;
+            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && (finished_mask != TILE_FINISH); index_in_tile++)
             {
-                int point_id = sorted_points[batch_id][index_in_tile];
+                int point_id = sorted_points[batch_id][index_in_tile+ start_index_in_tile];
                 PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
-                float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
+                float2 xy{ (params.ndc_x + 1.0f) * 0.5f * img_w - 0.5f ,(params.ndc_y + 1.0f) * 0.5f * img_h - 0.5f };
 
-                const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
-                const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
-                float2 d = { xy.x - pixel_x,xy.y - pixel_y };
-                float exponent = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
-                float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
-                float neg_half_c = -0.5f * params.inv_cov11;
+                const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + (threadIdx.x * VECTOR_SIZE) % tile_size_x ;
+                const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD;
+                float2 d { xy.x - pixel_x,xy.y - pixel_y };
+                float temp = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
+                float2 exponent{
+                    -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y),
+                    -0.5f * (params.inv_cov00 * (d.x - 1) * (d.x - 1) + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * (d.x - 1) * d.y)
+                    //temp,
+                    //temp + params.inv_cov00 * d.x - params.inv_cov00 * 0.5f + params.inv_cov01 * d.y
+                };
+                temp = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
+                float2 bxcy{
+                    params.inv_cov11 * d.y + params.inv_cov01 * d.x,
+                    params.inv_cov11 * d.y + params.inv_cov01 * (d.x - 1)
+                    //temp,
+                    //temp - params.inv_cov01
+                };
+                float2 neg_half_c{
+                    -0.5f * params.inv_cov11,
+                    -0.5f * params.inv_cov11
+                };
                 //exponent+=(cy+bx)*delta - 0.5*c*delta*delta
 #pragma unroll
-                for (int i = 0; i < pixels_per_thread; i++)
+                for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
-                    float power = exponent + i * bxcy + i * i * neg_half_c;
-                    power = power > 0 ? -6.0f : power;
-                    alpha[i] = min(255.0f/256, params.opacity * __expf(power));
+                    half2 power{
+                        exponent.x + i * bxcy.x + i * i * neg_half_c.x,
+                        exponent.y + i * bxcy.y + i * i * neg_half_c.y 
+                    };
+                    half2 greater_mask = __hge2(power, half2(0, 0));
+                    power = greater_mask * half2(-6.0f, -6.0f) + (half2(1.0f, 1.0f) - greater_mask) * power;
+                    reg_buffer[i].alpha = half2(params.opacity, params.opacity) * h2exp(power);
+                    reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
+                    greater_mask = __hge2(reg_buffer[i].alpha,half2(1.0f / 256, 1.0f / 256));
+                    reg_buffer[i].alpha *= greater_mask;
                 }
-                //alpha[1] = (2 * alpha[0] + alpha[3]) * (1 / 3.0f);
-                //alpha[2] = (alpha[0] + 2 * alpha[3]) * (1 / 3.0f);
+                //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
+                //reg_buffer[2].alpha = (reg_buffer[0].alpha + half2(2.0f, 2.0f) * reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
 
 #pragma unroll
-                for (int i = 0; i < pixels_per_thread; i++)
+                for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
-                    if (alpha[i] >= (1.0f / 256)&& (finish_pixel & (1 << i))==0)
+                    unsigned int pixel_test = (0x00010001 << i);
+                    unsigned int test_result = __vcmpne2(finished_mask & pixel_test, pixel_test);
+                    reinterpret_cast<unsigned int*>(& reg_buffer[i].alpha)[0] &= test_result;
+                    
+                    //if (__any_sync(0xffffffff, reg_buffer[i].alpha!=half2(0,0)))
                     {
-                        float test_t = rgba_buffer[i].w * (1 - alpha[i]);
-                        if (test_t < (1.0f/8192))
-                        {
-                            finish_pixel = (finish_pixel|(1<<i));
-                        }
-                        else
-                        {
-                            float weight = rgba_buffer[i].w * alpha[i];
-                            rgba_buffer[i].x += (float(params.color_r) * weight);
-                            rgba_buffer[i].y += (float(params.color_g) * weight);
-                            rgba_buffer[i].z += (float(params.color_b) * weight);
-                            rgba_buffer[i].w = test_t;
-                            lst_contributor[i] = index_in_tile;
-                        }
+                        half2 test_t = reg_buffer[i].t * (half2(1.0f, 1.0f) - reg_buffer[i].alpha);
+                        unsigned int pixel_finished = __hle2_mask(test_t, half2(1.0f / 8192, 1.0f / 8192));
+                        finished_mask |= (pixel_finished& pixel_test);
+                        half2 weight = reg_buffer[i].t * reg_buffer[i].alpha;
+                        reg_buffer[i].r += (half2(params.color_r, params.color_r) * weight);
+                        reg_buffer[i].g += (half2(params.color_g, params.color_g) * weight);
+                        reg_buffer[i].b += (half2(params.color_b, params.color_b) * weight);
+                        reg_buffer[i].t = test_t;
                     }
+                    reg_buffer[i].lst_contributor += (0x00010001 & test_result);
                 }
-
             }
 
 
@@ -127,15 +172,15 @@ __global__ void raster_forward_kernel(
             auto ourput_t = output_transmitance[batch_id][0][tile_index];
             auto output_last_index = output_last_contributor[batch_id][tile_index];
 #pragma unroll
-            for (int i = 0; i < pixels_per_thread; i++)
+            for (int i = 0; i < PIXELS_PER_THREAD; i++)
             {
-                const int output_x = threadIdx.x % tile_size_x;
-                const int output_y = threadIdx.x / tile_size_x * pixels_per_thread + i;
-                ourput_r[output_y][output_x] = rgba_buffer[i].x;
-                ourput_g[output_y][output_x] = rgba_buffer[i].y;
-                ourput_b[output_y][output_x] = rgba_buffer[i].z;
-                ourput_t[output_y][output_x] = rgba_buffer[i].w;
-                output_last_index[output_y][output_x] = lst_contributor[i];
+                const int output_x = (threadIdx.x * VECTOR_SIZE) % tile_size_x;
+                const int output_y = (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD + i;
+                reinterpret_cast<float2*>(&ourput_r[output_y][output_x])[0] = __half22float2(reg_buffer[i].r);
+                reinterpret_cast<float2*>(&ourput_g[output_y][output_x])[0] = __half22float2(reg_buffer[i].g);
+                reinterpret_cast<float2*>(&ourput_b[output_y][output_x])[0] = __half22float2(reg_buffer[i].b);
+                reinterpret_cast<float2*>(&ourput_t[output_y][output_x])[0] = __half22float2(reg_buffer[i].t);
+                reinterpret_cast<unsigned int*>(&output_last_index[output_y][output_x])[0] = reg_buffer[i].lst_contributor;//ushort2
             }
 
         }
@@ -186,7 +231,7 @@ std::vector<at::Tensor> rasterize_forward(
         output_depth = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t.requires_grad(true));
     }
 
-    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
+    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kShort).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
     at::Tensor output_last_contributor = torch::empty({ viewsnum, tilesnum, tile_h, tile_w }, opt_c);
 
 
@@ -201,7 +246,7 @@ std::vector<at::Tensor> rasterize_forward(
         output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-        output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+        output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
         tilesnum_x, img_h, img_w);
 
     CUDA_CHECK_ERRORS;
