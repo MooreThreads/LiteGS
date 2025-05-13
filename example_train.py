@@ -12,7 +12,7 @@ if __name__ == "__main__":
     litegs.arguments.PipelineParams.add_cmdline_arg(pp_cdo,parser)
     litegs.arguments.DensifyParams.add_cmdline_arg(dp_cdo,parser)
     
-    parser.add_argument("--test_epochs", nargs="+", type=int, default=[])
+    parser.add_argument("--test_epochs", nargs="+", type=int, default=[i for i in range(0,181,10)])
     parser.add_argument("--save_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
