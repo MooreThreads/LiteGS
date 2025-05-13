@@ -134,7 +134,7 @@ __global__ void raster_forward_kernel(
                     };
                     half2 greater_mask = __hge2(power, half2(0, 0));
                     power = greater_mask * half2(-6.0f, -6.0f) + (half2(1.0f, 1.0f) - greater_mask) * power;
-                    reg_buffer[i].alpha = half2(params.opacity, params.opacity) * h2exp(power);
+                    reg_buffer[i].alpha = half2(params.opacity, params.opacity) * fast_exp_approx(power);
                     reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
                     greater_mask = __hge2(reg_buffer[i].alpha,half2(1.0f / 256, 1.0f / 256));
                     reg_buffer[i].alpha *= greater_mask;
