@@ -456,12 +456,14 @@ class GaussiansRasterFunc(torch.autograd.Function):
         points_num=ndc.shape[-1]
         packed_params=torch.concat([
             ndc[:,:3,:],
-            cov2d_inv.reshape(views_num,4,points_num)[:,(0,1,3),:],
-            color,
-            opacities.unsqueeze(0).repeat(views_num,1,1)
+            cov2d_inv.reshape(views_num,4,points_num)[:,(0,1,3),:]
             ],dim=-2).permute(0,2,1).contiguous()
+        
+        packed_color=torch.concat([color,
+            opacities.unsqueeze(0).repeat(views_num,1,1)
+            ],dim=-2).permute(0,2,1).half().contiguous()
 
-        img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,packed_params,
+        img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,packed_params,packed_color,
                                                                               tiles,img_h,img_w,tile_h,tile_w,
                                                                               enable_transmitance,enable_depth)
 
