@@ -70,9 +70,11 @@ __global__ void raster_forward_kernel(
 )
 {
     //assert blockDim.x==32
+
     constexpr int VECTOR_SIZE = 2;
-    constexpr int PIXELS_PER_THREAD = (tile_size_x * tile_size_y) / (32* VECTOR_SIZE);//half2:32 pixel per warp->64 pixel per warp
-    constexpr unsigned int TILE_FINISH = (((1 << PIXELS_PER_THREAD) - 1) << 16) | ((1 << PIXELS_PER_THREAD) - 1);
+    constexpr int PIXELS_PER_THREAD = (tile_size_x * tile_size_y) / (32* VECTOR_SIZE);//half2: 32 pixel per warp->64 pixel per warp
+    constexpr float SCALER = 128.0f;
+    constexpr float INV_SCALER = 1.0f / 128;
 
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
@@ -96,14 +98,17 @@ __global__ void raster_forward_kernel(
                 reg_buffer[i].r = half2(0, 0);
                 reg_buffer[i].g = half2(0, 0);
                 reg_buffer[i].b = half2(0, 0);
-                reg_buffer[i].t = half2(1.0f, 1.0f);
+                //alpha_min 1/256
+                //t_min 1/8192
+                //-> t_mul_alpha_min 1/(256*8192) -> half underflow
+                reg_buffer[i].t = half2(SCALER, SCALER);//mul 128.0f to avoid underflow; t_max * 128 * color_max < half_max;
                 reg_buffer[i].lst_contributor = 0;//simd ushort2
             }
 
-            unsigned int finished_mask = 0;
+            unsigned int any_active = 0xffffffffu;
             int index_in_tile = 0;
             auto points_id_in_tile = &sorted_points[batch_id][start_index_in_tile];
-            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && (finished_mask != TILE_FINISH); index_in_tile++)
+            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
             {
                 int point_id = points_id_in_tile[index_in_tile];
                 PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
@@ -113,64 +118,50 @@ __global__ void raster_forward_kernel(
                 const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + (threadIdx.x * VECTOR_SIZE) % tile_size_x ;
                 const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD;
                 float2 d { xy.x - pixel_x,xy.y - pixel_y };
-                float temp = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
-                float2 exponent{
+                float2 basic{
                     -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y),
                     -0.5f * (params.inv_cov00 * (d.x - 1) * (d.x - 1) + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * (d.x - 1) * d.y)
-                    //temp,
-                    //temp + params.inv_cov00 * d.x - params.inv_cov00 * 0.5f + params.inv_cov01 * d.y
                 };
-                temp = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
                 float2 bxcy{
                     params.inv_cov11 * d.y + params.inv_cov01 * d.x,
                     params.inv_cov11 * d.y + params.inv_cov01 * (d.x - 1)
-                    //temp,
-                    //temp - params.inv_cov01
                 };
                 float2 neg_half_c{
                     -0.5f * params.inv_cov11,
                     -0.5f * params.inv_cov11
                 };
-                //exponent+=(cy+bx)*delta - 0.5*c*delta*delta
+                //basic+=(cy+bx)*delta - 0.5*c*delta*delta
+
+                any_active = 0xffffffffu;
 #pragma unroll
                 for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
                     half2 power{
-                        exponent.x + i * bxcy.x + i * i * neg_half_c.x,
-                        exponent.y + i * bxcy.y + i * i * neg_half_c.y 
+                        basic.x + i * bxcy.x + i * i * neg_half_c.x,
+                        basic.y + i * bxcy.y + i * i * neg_half_c.y
                     };
-                    half2 greater_mask = __hge2(power, half2(0, 0));
-                    power = greater_mask * half2(-6.0f, -6.0f) + (half2(1.0f, 1.0f) - greater_mask) * power;
-                    reg_buffer[i].alpha = half2(point_color.a, point_color.a) * fast_exp_approx(power);
-                    reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
-                    greater_mask = __hge2(reg_buffer[i].alpha,half2(1.0f / 256, 1.0f / 256));
-                    reg_buffer[i].alpha *= greater_mask;
+                    unsigned int active_mask = 0xffffffffu;
+                    active_mask = __hgt2_mask(reg_buffer[i].t, half2(SCALER / 8192, SCALER / 8192));
+                    any_active &= active_mask;
 
-                    //finish test
-                    unsigned int pixel_test = (0x00010001 << i);
-                    unsigned int test_result = __vcmpne2(finished_mask & pixel_test, pixel_test);
-                    reinterpret_cast<unsigned int*>(&reg_buffer[i].alpha)[0] &= test_result;
-                    reg_buffer[i].lst_contributor += (0x00010001 & test_result);
+                    unsigned int alpha_valid_mask = 0xffffffffu;
+                    alpha_valid_mask &= __hle2_mask(power, half2(0, 0));
+                    reg_buffer[i].alpha = half2(point_color.a, point_color.a) * fast_exp_approx(power);
+                    alpha_valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
+                    reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
+
+                    reg_buffer[i].lst_contributor += (0x00010001 & active_mask);
+                    reinterpret_cast<unsigned int*>(&reg_buffer[i].alpha)[0] &= (active_mask & alpha_valid_mask);
+
+                    half2 weight = reg_buffer[i].t * reg_buffer[i].alpha;
+                    reg_buffer[i].r += (half2(point_color.r, point_color.r) * weight);
+                    reg_buffer[i].g += (half2(point_color.g, point_color.g) * weight);
+                    reg_buffer[i].b += (half2(point_color.b, point_color.b) * weight);
+                    reg_buffer[i].t = reg_buffer[i].t * (half2(1.0f, 1.0f) - reg_buffer[i].alpha);
                 }
                 //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
                 //reg_buffer[2].alpha = (reg_buffer[0].alpha + half2(2.0f, 2.0f) * reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
 
-#pragma unroll
-                for (int i = 0; i < PIXELS_PER_THREAD; i++)
-                {
-                    //if (!(reg_buffer[i].alpha == half2(0.0f, 0.0f)))
-                    {
-                        half2 test_t = reg_buffer[i].t * (half2(1.0f, 1.0f) - reg_buffer[i].alpha);
-                        unsigned int pixel_finished = __hle2_mask(test_t, half2(1.0f / 8192, 1.0f / 8192));
-                        unsigned int pixel_test = (0x00010001 << i);
-                        finished_mask |= (pixel_finished& pixel_test);
-                        half2 weight = reg_buffer[i].t * reg_buffer[i].alpha;
-                        reg_buffer[i].r += (half2(point_color.r, point_color.r) * weight);
-                        reg_buffer[i].g += (half2(point_color.g, point_color.g) * weight);
-                        reg_buffer[i].b += (half2(point_color.b, point_color.b) * weight);
-                        reg_buffer[i].t = test_t;
-                    }
-                }
             }
 
 
@@ -185,10 +176,23 @@ __global__ void raster_forward_kernel(
             {
                 const int output_x = (threadIdx.x * VECTOR_SIZE) % tile_size_x;
                 const int output_y = (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD + i;
-                reinterpret_cast<float2*>(&ourput_r[output_y][output_x])[0] = __half22float2(reg_buffer[i].r);
-                reinterpret_cast<float2*>(&ourput_g[output_y][output_x])[0] = __half22float2(reg_buffer[i].g);
-                reinterpret_cast<float2*>(&ourput_b[output_y][output_x])[0] = __half22float2(reg_buffer[i].b);
-                reinterpret_cast<float2*>(&ourput_t[output_y][output_x])[0] = __half22float2(reg_buffer[i].t);
+
+                reinterpret_cast<float2*>(&ourput_r[output_y][output_x])[0] = float2{
+                    float(reg_buffer[i].r.x) * INV_SCALER,
+                    float(reg_buffer[i].r.y) * INV_SCALER };
+
+                reinterpret_cast<float2*>(&ourput_g[output_y][output_x])[0] = float2{
+                    float(reg_buffer[i].g.x) * INV_SCALER,
+                    float(reg_buffer[i].g.y) * INV_SCALER };
+
+                reinterpret_cast<float2*>(&ourput_b[output_y][output_x])[0] = float2{
+                    float(reg_buffer[i].b.x) * INV_SCALER,
+                    float(reg_buffer[i].b.y) * INV_SCALER };
+
+                reinterpret_cast<float2*>(&ourput_t[output_y][output_x])[0] = float2{
+                    float(reg_buffer[i].t.x) * INV_SCALER,
+                    float(reg_buffer[i].t.y) * INV_SCALER };
+
                 reinterpret_cast<unsigned int*>(&output_last_index[output_y][output_x])[0] = reg_buffer[i].lst_contributor;//ushort2
             }
 
@@ -266,6 +270,15 @@ std::vector<at::Tensor> rasterize_forward(
 }
 
 
+struct BackwardRegisterBuffer
+{
+    half2 r;
+    half2 g;
+    half2 b;
+    half2 t;
+    half2 alpha;
+};
+
 
 template<class T, bool boardcast>
 inline __device__ void warp_reduce_sum(T& data)
@@ -277,12 +290,6 @@ inline __device__ void warp_reduce_sum(T& data)
     data += __shfl_down_sync(0xffffffff, data, 1);
     if (boardcast)
         data = __shfl_sync(0xffffffff, data, 0);
-}
-
-inline __device__ int get_float_exponent(float data)
-{
-    int exponent = (__float_as_uint(data) >> 23) & 0xff;
-    return exponent - 127;
 }
 
 template<>
@@ -349,10 +356,11 @@ template <int tile_size_y, int tile_size_x, bool enable_trans_grad, bool enable_
 __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_params,         // //[batch,point_num,10]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_params,         // //[batch,point_num,6]
+    const torch::PackedTensorAccessor32<torch::Half, 3, torch::RestrictPtrTraits> packed_rgba16,         // //[batch,point_num,6]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> final_transmitance,    //[batch,1,tile,tilesize,tilesize]
-    const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<short, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
@@ -362,9 +370,13 @@ __global__ void raster_backward_kernel(
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity,          //[1,point_num]
     int tiles_num_x, int img_h, int img_w)
 {
-    constexpr int pixels_per_thread = tile_size_x * tile_size_y / 32;
-    __shared__ float shared_img_grad[3][pixels_per_thread][4 * 32];
-    __shared__ int shared_last_contributor[pixels_per_thread][4 * 32];
+    constexpr int VECTOR_SIZE = 2;
+    constexpr int PIXELS_PER_THREAD = (tile_size_x * tile_size_y) / (32 * VECTOR_SIZE);//half2: 32 pixel per warp->64 pixel per warp
+    constexpr float SCALER = 128.0f;
+    constexpr float INV_SCALER = 1.0f / 128;
+
+    __shared__ half2 shared_img_grad[3][PIXELS_PER_THREAD][4 * 32];
+    __shared__ unsigned int shared_last_contributor[PIXELS_PER_THREAD][4 * 32];//ushort2
 
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
@@ -377,121 +389,152 @@ __global__ void raster_backward_kernel(
     {
 
         int start_index_in_tile = start_index[batch_id][tile_id];
-        int index_in_tile = start_index_in_tile;
-        int img_grad_exponent = 0;
+        int index_in_tile = 0;
 
         if (start_index_in_tile != -1)
         {
-            float4 rgba_buffer[pixels_per_thread];
+            BackwardRegisterBuffer reg_buffer[PIXELS_PER_THREAD];
             //int lst[pixels_per_thread];
             #pragma unroll
-            for (int i = 0; i < pixels_per_thread; i++)
+            for (int i = 0; i < PIXELS_PER_THREAD; i++)
             {
-                const int in_tile_x = threadIdx.x % tile_size_x;
-                const int in_tile_y = threadIdx.x / tile_size_x * pixels_per_thread;
-                float t = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
-                rgba_buffer[i] = float4{ 0.0f,0.0f,0.0f,t };
-                shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
-                shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x] = d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
-                shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] = d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
-                int lst = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
-                index_in_tile = max(index_in_tile, lst);
-                shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = lst;
+                reg_buffer[i].r = half2(0.0f, 0.0f);
+                reg_buffer[i].g = half2(0.0f, 0.0f);
+                reg_buffer[i].b = half2(0.0f, 0.0f);
+
+                const int in_tile_x = (threadIdx.x * VECTOR_SIZE) % tile_size_x;
+                const int in_tile_y = (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD;
+                float t0 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                float t1 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x+1];
+                reg_buffer[i].t = half2(t0 * SCALER, t1 * SCALER);
+
+                shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
+                    d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
+                    d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x + 1]);
+                shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
+                    d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
+                    d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x + 1]); 
+                shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
+                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x],
+                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x + 1]); 
+                
+                int last0 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x] - 1;
+                int last1 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x + 1] - 1;
+                index_in_tile = max(max(index_in_tile, last0), last1);
+                shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = (last1 << 16 | last0);
             }
             index_in_tile = __reduce_max_sync(0xffffffff, index_in_tile);
 
-            for (; (index_in_tile >= start_index_in_tile); index_in_tile--)
+            for (; (index_in_tile >= 0); index_in_tile--)
             {
-                float basic = 0;
-                float bxcy = 0;
-                float neg_half_c = 0;
+                float2 basic;
+                float2 bxcy;
+                float2 neg_half_c;
                 float2 d{ 0,0 };
                 int point_id = sorted_points[batch_id][index_in_tile];
                 PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
                 {
                     float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
-                    const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
-                    const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
+                    const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + (threadIdx.x * VECTOR_SIZE) % tile_size_x;
+                    const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD;
                     d.x = xy.x - pixel_x;
                     d.y = xy.y - pixel_y;
-                    basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
-                    bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
-                    neg_half_c = -0.5f * params.inv_cov11;
+                    basic=float2{
+                    -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y),
+                    -0.5f * (params.inv_cov00 * (d.x - 1) * (d.x - 1) + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * (d.x - 1) * d.y)
+                    };
+                    bxcy=float2{
+                        params.inv_cov11 * d.y + params.inv_cov01 * d.x,
+                        params.inv_cov11 * d.y + params.inv_cov01 * (d.x - 1)
+                    };
+                    neg_half_c=float2{
+                        -0.5f * params.inv_cov11,
+                        -0.5f * params.inv_cov11
+                    };
                 }
+                RGBA16 point_color = *((RGBA16*)&packed_rgba16[batch_id][point_id][0]);
                 //basic+=(cy+bx)*delta - 0.5*c*delta*delta
 
-                float3 grad_color = { 0,0,0 };
-                float grad_opacity = 0;
-                float grad_bxcy = 0;
-                float grad_neg_half_c = 0;
-                float grad_basic = 0;
+                half2 grad_r = half2(0, 0);
+                half2 grad_g = half2(0, 0);
+                half2 grad_b = half2(0, 0);
+                half2 grad_a = half2(0, 0);
+                half2 grad_bxcy = half2(0, 0);
+                half2 grad_neg_half_c = half2(0, 0);
+                half2 grad_basic = half2(0, 0);
                 #pragma unroll
-                for (int i = 0; i < pixels_per_thread; i++)
+                for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
-                    float power = basic + i * bxcy + i * i * neg_half_c;
-                    power = power > 0 ? -6.0f : power;
-                    float G = __expf(power);
-                    float alpha = 0;// min(255.0f / 256, params.opacity * G);
-                    bool valid = (index_in_tile <= shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x])
-                        &&(alpha >= (1.0f / 256));
-                    if (__any_sync(0xffffffff, valid))
+                    half2 power{ basic.x + i * bxcy.x + i * i * neg_half_c.x,
+                        basic.y + i * bxcy.y + i * i * neg_half_c.y };
+                    half2 G = fast_exp_approx(power);
+                    half2 alpha = half2(point_color.a, point_color.a) * G;
+
+                    unsigned int valid_mask = 0xffffffffu;
+                    valid_mask &= __hle2_mask(power, half2(0, 0));
+                    valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
+                    valid_mask &= __vcmpltu2(index_in_tile << 16 | index_in_tile, shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x]);
+
+                    if (__any_sync(0xffffffff, valid_mask!=0))
                     {
-                        alpha = valid ? alpha : 0;//0-2^-8
-                        G = valid ? G : 0;
+                        reinterpret_cast<unsigned int*>(&alpha)[0] &= valid_mask;
+                        reinterpret_cast<unsigned int*>(&G)[0] &= valid_mask;
 
-                        rgba_buffer[i].w = __fdividef(rgba_buffer[i].w,(1 - alpha));//0-2^(-10)
-                        grad_color.x += alpha * rgba_buffer[i].w * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        grad_color.y += alpha * rgba_buffer[i].w * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        grad_color.z += alpha * rgba_buffer[i].w * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        reg_buffer[i].t = reg_buffer[i].t/(half2(1.0f,1.0f) - alpha);//0-2^(-10)
+                        grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
 
-                        float d_alpha = 0;
-                        //d_alpha += (params.color_r - rgba_buffer[i].x) * rgba_buffer[i].w * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        //d_alpha += (params.color_g - rgba_buffer[i].y) * rgba_buffer[i].w * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        //d_alpha += (params.color_b - rgba_buffer[i].z) * rgba_buffer[i].w * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        //rgba_buffer[i].x += alpha * (params.color_r - rgba_buffer[i].x);//0-256
-                        //rgba_buffer[i].y += alpha * (params.color_g - rgba_buffer[i].y);
-                        //rgba_buffer[i].z += alpha * (params.color_b - rgba_buffer[i].z);
+                        half2 d_alpha = half2(0,0);
+                        d_alpha += (half2(point_color.r, point_color.r) - reg_buffer[i].r) * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        d_alpha += (half2(point_color.g, point_color.g) - reg_buffer[i].g) * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        d_alpha += (half2(point_color.b, point_color.b) - reg_buffer[i].b) * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        reg_buffer[i].r += alpha * (half2(point_color.r, point_color.r) - reg_buffer[i].r);//0-256
+                        reg_buffer[i].g += alpha * (half2(point_color.g, point_color.g) - reg_buffer[i].g);
+                        reg_buffer[i].b += alpha * (half2(point_color.b, point_color.b) - reg_buffer[i].b);
                         if (enable_trans_grad)
                         {
                             //d_alpha -= dL_drbgaimg.z * final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x] / (1 - alpha);
                         }
 
-                        grad_opacity += d_alpha * G;
-                        float d_G = 0;// params.opacity* d_alpha;
-                        float d_power = G * d_G;
-                        grad_bxcy += d_power * i;
-                        grad_neg_half_c += d_power * i * i;
+                        grad_a += d_alpha * G;
+                        half2 d_G = half2(point_color.a, point_color.a) * d_alpha;
+                        half2 d_power = G * d_G;
+                        grad_bxcy += d_power * half2(i,i);
+                        grad_neg_half_c += d_power * half2(i, i) * half2(i, i);
                         grad_basic += d_power;
                     }
                 }
                 
                 //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
-                if (__any_sync(0xffffffff, grad_opacity != 0))
+                if (__any_sync(0xffffffff, !(grad_a == half2(0,0))))
                 {
-                    half2 rg{ grad_color.x ,grad_color.y };
-                    half2 ba{ grad_color.z ,grad_opacity };
+                    half2 rg{ grad_r.x + grad_r.y ,grad_g.x + grad_g.y };
+                    half2 ba{ grad_b.x + grad_b.y ,grad_a.x + grad_a.y };
                     warp_reduce_sum<half2, false>(rg);
                     warp_reduce_sum<half2, false>(ba);
-                    //warp_reduce_sum<float3, false>(grad_color);
-                    warp_reduce_sum<float, false>(grad_opacity);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_color[batch_id][0][point_id], float(rg.x));
-                        atomicAdd(&d_color[batch_id][1][point_id], float(rg.y));
-                        atomicAdd(&d_color[batch_id][2][point_id], float(ba.x));
-                        //atomicAdd(&d_color[batch_id][0][point_id], grad_color.x);
-                        //atomicAdd(&d_color[batch_id][0][point_id], grad_color.y);
-                        //atomicAdd(&d_color[batch_id][0][point_id], grad_color.z);
-                        atomicAdd(&d_opacity[0][point_id], grad_opacity);
+                        atomicAdd(&d_color[batch_id][0][point_id], float(rg.x)* INV_SCALER);
+                        atomicAdd(&d_color[batch_id][1][point_id], float(rg.y)* INV_SCALER);
+                        atomicAdd(&d_color[batch_id][2][point_id], float(ba.x)* INV_SCALER);
+                        atomicAdd(&d_opacity[0][point_id], float(ba.y)* INV_SCALER);
                     }
 
                     float3 grad_invcov{ 0,0,0 };
                     //basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
                     //bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
                     //neg_half_c = -0.5f * params.inv_cov11;
-                    grad_invcov.x = -0.5f * d.x * d.x * grad_basic;
-                    grad_invcov.y = (-d.x * d.y * grad_basic + d.x * grad_bxcy) * 0.5f;
-                    grad_invcov.z = -0.5f * d.y * d.y * grad_basic + d.y * grad_bxcy - 0.5f * grad_neg_half_c;
+                    grad_invcov.x = -0.5f * d.x * d.x * float(grad_basic.x);
+                    grad_invcov.x += -0.5f * (d.x-1) * (d.x-1) * float(grad_basic.y);
+                    grad_invcov.x *= INV_SCALER;
+                    grad_invcov.y = (-d.x * d.y * float(grad_basic.x) + d.x * float(grad_bxcy.x)) * 0.5f;
+                    grad_invcov.y += (-(d.x-1) * d.y * float(grad_basic.y) + (d.x-1) * float(grad_bxcy.y)) * 0.5f;
+                    grad_invcov.y *= INV_SCALER;
+                    grad_invcov.z = -0.5f * d.y * d.y * float(grad_basic.x) + d.y * float(grad_bxcy.x) - 0.5f * float(grad_neg_half_c.x);
+                    grad_invcov.z += -0.5f * d.y * d.y * float(grad_basic.y) + d.y * float(grad_bxcy.y) - 0.5f * float(grad_neg_half_c.y);
+                    grad_invcov.z *= INV_SCALER;
+
                     warp_reduce_sum<float, false>(grad_invcov.x);
                     warp_reduce_sum<float, false>(grad_invcov.y);
                     warp_reduce_sum<float, false>(grad_invcov.z);
@@ -503,8 +546,12 @@ __global__ void raster_backward_kernel(
                         atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
                     }
 
-                    float d_dx = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * grad_basic + params.inv_cov01 * grad_bxcy;
-                    float d_dy = (-params.inv_cov11 * d.y - params.inv_cov01 * d.x) * grad_basic + params.inv_cov11 * grad_bxcy;
+                    float d_dx = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * float(grad_basic.x) + params.inv_cov01 * float(grad_bxcy.x);
+                    d_dx += (-params.inv_cov00 * (d.x-1) - params.inv_cov01 * d.y) * float(grad_basic.y) + params.inv_cov01 * float(grad_bxcy.y);
+                    d_dx *= INV_SCALER;
+                    float d_dy = (-params.inv_cov11 * d.y - params.inv_cov01 * d.x) * float(grad_basic.x) + params.inv_cov11 * float(grad_bxcy.x);
+                    d_dy += (-params.inv_cov11 * d.y - params.inv_cov01 * (d.x-1)) * float(grad_basic.y) + params.inv_cov11 * float(grad_bxcy.y);
+                    d_dy *= INV_SCALER;
                     float2 d_ndc_xy{ d_dx * 0.5f * img_w,d_dy * 0.5f * img_h };
                     warp_reduce_sum<float2, false>(d_ndc_xy);
                     if (threadIdx.x == 0)
@@ -800,6 +847,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,
     at::Tensor packed_params,// 
+    at::Tensor packed_rgba16,// 
     at::Tensor ndc,// 
     at::Tensor cov2d_inv,
     at::Tensor color,
@@ -863,13 +911,14 @@ std::vector<at::Tensor> rasterize_backward(
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
     //dim3 Thread3d(32, 4);
-    raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
+    raster_backward_kernel<16, 16, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        packed_rgba16.packed_accessor32<torch::Half, 3, torch::RestrictPtrTraits>(),
         specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),
-        last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+        last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
         d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),

@@ -18,6 +18,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,
     at::Tensor packed_params,
+    at::Tensor packed_rgba16,
     at::Tensor ndc,
     at::Tensor cov2d_inv,
     at::Tensor color,

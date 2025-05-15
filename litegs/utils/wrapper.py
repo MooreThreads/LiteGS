@@ -467,7 +467,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
                                                                               tiles,img_h,img_w,tile_h,tile_w,
                                                                               enable_transmitance,enable_depth)
 
-        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,ndc,cov2d_inv,color,opacities,tiles)
+        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,packed_color,ndc,cov2d_inv,color,opacities,tiles)
         ctx.arg_tile_size=(tile_h,tile_w)
         ctx.img_hw=(img_h,img_w)
 
@@ -479,13 +479,13 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor):
-        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,ndc,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
+        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,packed_color,ndc,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,ndc,cov2d_inv,color,opacities,tiles,
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,packed_color,ndc,cov2d_inv,color,opacities,tiles,
                                                                                                         transmitance,lst_contributor,
                                                                                                         grad_rgb_image,grad_transmitance_image,grad_depth_image,
                                                                                                         img_h,img_w,tile_h,tile_w)
