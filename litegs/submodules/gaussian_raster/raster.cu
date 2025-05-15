@@ -585,13 +585,11 @@ template <int tilesize, bool enable_trans_grad, bool enable_depth_grad>
 __global__ void raster_backward_kernel_multibatch_reduction(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc,         //[batch,2,point_num]
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,2,2,point_num]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> color,          //[batch,3,point_num]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> opacity,          //[1,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_params,         // //[batch,point_num,6]
+    const torch::PackedTensorAccessor32<torch::Half, 3, torch::RestrictPtrTraits> packed_rgba16,         // //[batch,point_num,4]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> final_transmitance,    //[batch,1,tile,tilesize,tilesize]
-    const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<short, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
@@ -691,7 +689,7 @@ __global__ void raster_backward_kernel_multibatch_reduction(
 
         float f_transmittance = final_transmitance[batch_id][0][blockIdx.x][y_in_tile][x_in_tile];
         float transmittance = f_transmittance;
-        int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile];
+        int pixel_lst_index = last_contributor[batch_id][blockIdx.x][y_in_tile][x_in_tile]-1;
         float3 d_pixel{ 0,0,0 };
         float d_trans_pixel = 0;
         float d_depth_pixel = 0;
@@ -720,19 +718,22 @@ __global__ void raster_backward_kernel_multibatch_reduction(
                 int index = offset - threadidx;
                 int point_id = sorted_points[batch_id][index];
 
-                collected_mean[threadidx].x = (ndc[batch_id][0][point_id] + 1.0f) * 0.5f * img_w - 0.5f;
-                collected_mean[threadidx].y = (ndc[batch_id][1][point_id] + 1.0f) * 0.5f * img_h - 0.5f;
+                PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
+                RGBA16 point_color = *((RGBA16*)&packed_rgba16[batch_id][point_id][0]);
+
+                collected_mean[threadidx].x = (params.ndc_x + 1.0f) * 0.5f * img_w - 0.5f;
+                collected_mean[threadidx].y = (params.ndc_y + 1.0f) * 0.5f * img_h - 0.5f;
                 if (enable_depth_grad)
                 {
-                    collected_depth[threadidx] = ndc[batch_id][2][point_id];
+                    collected_depth[threadidx] = params.ndc_z;
                 }
-                collected_invcov[threadidx].x = cov2d_inv[batch_id][0][0][point_id];
-                collected_invcov[threadidx].y = cov2d_inv[batch_id][0][1][point_id];
-                collected_invcov[threadidx].z = cov2d_inv[batch_id][1][1][point_id];
-                collected_color[threadidx].x = color[batch_id][0][point_id];
-                collected_color[threadidx].y = color[batch_id][1][point_id];
-                collected_color[threadidx].z = color[batch_id][2][point_id];
-                collected_color[threadidx].w = opacity[0][point_id];
+                collected_invcov[threadidx].x = params.inv_cov00;
+                collected_invcov[threadidx].y = params.inv_cov01;
+                collected_invcov[threadidx].z = params.inv_cov11;
+                collected_color[threadidx].x = point_color.r;
+                collected_color[threadidx].y = point_color.g;
+                collected_color[threadidx].z = point_color.b;
+                collected_color[threadidx].w = point_color.a;
             }
             __syncthreads();
             for (int i = 0; i < collected_num; i++)
@@ -745,7 +746,7 @@ __global__ void raster_backward_kernel_multibatch_reduction(
                 float2 d{ xy.x - pixel_x,xy.y - pixel_y };
                 float4 cur_color = collected_color[i];
                 float3 cur_cov2d_inv = collected_invcov[i];
-                if (index <= pixel_lst_index)
+                if (index - start_index_in_tile <= pixel_lst_index)
                 {
                     float power = -0.5f * (cur_cov2d_inv.x * d.x * d.x + cur_cov2d_inv.z * d.y * d.y) - cur_cov2d_inv.y * d.x * d.y;
                     G = __expf(power);
@@ -906,7 +907,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
 
     
-    int tiles_per_block = 4;
+    /*int tiles_per_block = 4;
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
@@ -927,23 +928,20 @@ std::vector<at::Tensor> rasterize_backward(
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
-    );
+    );*/
     
-    /*cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
+    cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
     dim3 Block3d(tilesnum, viewsnum, 1);
-    dim3 Thread3d(8, 8, 1);
-    //dim3 Block3d(1, 1, 1);
-    //dim3 Thread3d(8, 8, 1);
-    raster_backward_kernel_multibatch_reduction<8, false, false> << <Block3d, Thread3d >> > (
+    dim3 Thread3d(16, 16, 1);
+
+    raster_backward_kernel_multibatch_reduction<16, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        color.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        packed_rgba16.packed_accessor32<torch::Half, 3, torch::RestrictPtrTraits>(),
         specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),
-        last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),
+        last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
         d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
@@ -952,7 +950,7 @@ std::vector<at::Tensor> rasterize_backward(
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
-        );*/
+        );
 
     CUDA_CHECK_ERRORS;
     return { d_ndc ,d_cov2d_inv ,d_color,d_opacity };
