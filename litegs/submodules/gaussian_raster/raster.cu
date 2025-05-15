@@ -132,7 +132,7 @@ __global__ void raster_forward_kernel(
                 };
                 //basic+=(cy+bx)*delta - 0.5*c*delta*delta
 
-                any_active = 0xffffffffu;
+                any_active = 0;
 #pragma unroll
                 for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
@@ -142,7 +142,7 @@ __global__ void raster_forward_kernel(
                     };
                     unsigned int active_mask = 0xffffffffu;
                     active_mask = __hgt2_mask(reg_buffer[i].t, half2(SCALER / 8192, SCALER / 8192));
-                    any_active &= active_mask;
+                    any_active |= active_mask;
 
                     unsigned int alpha_valid_mask = 0xffffffffu;
                     alpha_valid_mask &= __hle2_mask(power, half2(0, 0));
@@ -907,7 +907,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
 
     
-    /*int tiles_per_block = 4;
+    int tiles_per_block = 4;
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
@@ -928,9 +928,9 @@ std::vector<at::Tensor> rasterize_backward(
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
-    );*/
+    );
     
-    cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<16, false, false>, cudaFuncCachePreferShared);
+    /*cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<16, false, false>, cudaFuncCachePreferShared);
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(16, 16, 1);
 
@@ -950,7 +950,7 @@ std::vector<at::Tensor> rasterize_backward(
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
-        );
+        );*/
 
     CUDA_CHECK_ERRORS;
     return { d_ndc ,d_cov2d_inv ,d_color,d_opacity };

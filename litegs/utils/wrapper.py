@@ -462,8 +462,9 @@ class GaussiansRasterFunc(torch.autograd.Function):
         packed_color=torch.concat([color,
             opacities.unsqueeze(0).repeat(views_num,1,1)
             ],dim=-2).permute(0,2,1).half().contiguous()
-        _img=torch.tensor(np.load('./profiler_input_data/img.npy'),device='cuda')
-        _transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
+        
+        # _img=torch.tensor(np.load('./profiler_input_data/img.npy'),device='cuda')
+        # _transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
         img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,packed_params,packed_color,
                                                                               tiles,img_h,img_w,tile_h,tile_w,
                                                                               enable_transmitance,enable_depth)
