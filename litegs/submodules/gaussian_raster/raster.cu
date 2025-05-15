@@ -930,7 +930,7 @@ std::vector<at::Tensor> rasterize_backward(
         tilesnum_x, img_h, img_w
     );*/
     
-    cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<8, false, false>, cudaFuncCachePreferShared);
+    cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<16, false, false>, cudaFuncCachePreferShared);
     dim3 Block3d(tilesnum, viewsnum, 1);
     dim3 Thread3d(16, 16, 1);
 
