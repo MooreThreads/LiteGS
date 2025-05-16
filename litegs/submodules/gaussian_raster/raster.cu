@@ -136,21 +136,12 @@ __global__ void raster_forward_kernel(
                 point_color_x2.a = half2(temp.a, temp.a);
                 float2 xy{ (params.ndc_x + 1.0f) * 0.5f * img_w - 0.5f ,(params.ndc_y + 1.0f) * 0.5f * img_h - 0.5f };
 
-                const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + (threadIdx.x * VECTOR_SIZE) % tile_size_x ;
-                const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD;
+                const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x ;
+                const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
                 float2 d { xy.x - pixel_x,xy.y - pixel_y };
-                float2 basic{
-                    -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y),
-                    -0.5f * (params.inv_cov00 * (d.x - 1) * (d.x - 1) + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * (d.x - 1) * d.y)
-                };
-                float2 bxcy{
-                    params.inv_cov11 * d.y + params.inv_cov01 * d.x,
-                    params.inv_cov11 * d.y + params.inv_cov01 * (d.x - 1)
-                };
-                float2 neg_half_c{
-                    -0.5f * params.inv_cov11,
-                    -0.5f * params.inv_cov11
-                };
+                float basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
+                float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
+                float neg_half_c = -0.5f * params.inv_cov11;
                 //basic+=(cy+bx)*delta - 0.5*c*delta*delta
 
                 any_active = 0;
@@ -158,8 +149,8 @@ __global__ void raster_forward_kernel(
                 for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
                     half2 power{
-                        basic.x + i * bxcy.x + i * i * neg_half_c.x,
-                        basic.y + i * bxcy.y + i * i * neg_half_c.y
+                        basic + 2 * i * bxcy + 4 * i * i * neg_half_c,
+                        basic + 2 * (i + 1) * bxcy + 4 * (i + 1) * (i + 1) * neg_half_c
                     };
                     unsigned int active_mask = 0xffffffffu;
                     active_mask = __hgt2_mask(reg_buffer[i].t, half2(SCALER / 8192, SCALER / 8192));
@@ -195,28 +186,24 @@ __global__ void raster_forward_kernel(
 #pragma unroll
             for (int i = 0; i < PIXELS_PER_THREAD; i++)
             {
-                const int output_x = (threadIdx.x * VECTOR_SIZE) % tile_size_x;
-                const int output_y = (threadIdx.x * VECTOR_SIZE) / tile_size_x * PIXELS_PER_THREAD + i;
+                const int output_x = threadIdx.x % tile_size_x;
+                const int output_y = threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE + 2 * i;
 
-                reinterpret_cast<float2*>(&ourput_r[output_y][output_x])[0] = float2{
-                    float(reg_buffer[i].r.x) * INV_SCALER,
-                    float(reg_buffer[i].r.y) * INV_SCALER };
+                ourput_r[output_y][output_x] = float(reg_buffer[i].r.x) * INV_SCALER;
+                ourput_r[output_y + 1][output_x] = float(reg_buffer[i].r.y) * INV_SCALER;
 
-                reinterpret_cast<float2*>(&ourput_g[output_y][output_x])[0] = float2{
-                    float(reg_buffer[i].g.x) * INV_SCALER,
-                    float(reg_buffer[i].g.y) * INV_SCALER };
+                ourput_g[output_y][output_x] = float(reg_buffer[i].g.x) * INV_SCALER;
+                ourput_g[output_y + 1][output_x] = float(reg_buffer[i].g.y) * INV_SCALER;
 
-                reinterpret_cast<float2*>(&ourput_b[output_y][output_x])[0] = float2{
-                    float(reg_buffer[i].b.x) * INV_SCALER,
-                    float(reg_buffer[i].b.y) * INV_SCALER };
+                ourput_b[output_y][output_x] = float(reg_buffer[i].b.x) * INV_SCALER;
+                ourput_b[output_y + 1][output_x] = float(reg_buffer[i].b.y) * INV_SCALER;
 
-                reinterpret_cast<float2*>(&ourput_t[output_y][output_x])[0] = float2{
-                    float(reg_buffer[i].t.x) * INV_SCALER,
-                    float(reg_buffer[i].t.y) * INV_SCALER };
+                ourput_t[output_y][output_x] = float(reg_buffer[i].t.x) * INV_SCALER;
+                ourput_t[output_y + 1][output_x] = float(reg_buffer[i].t.y) * INV_SCALER;
 
-                reinterpret_cast<unsigned int*>(&output_last_index[output_y][output_x])[0] = reg_buffer[i].lst_contributor;//ushort2
+                output_last_index[output_y][output_x] = reg_buffer[i].lst_contributor&0xff;
+                output_last_index[output_y + 1][output_x] = (reg_buffer[i].lst_contributor >> 16) & 0xff;
             }
-
         }
     }
 }
@@ -274,7 +261,7 @@ std::vector<at::Tensor> rasterize_forward(
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
 
-    raster_forward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+    raster_forward_kernel<16, 16, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         rgba16.packed_accessor32<torch::Half, 3, torch::RestrictPtrTraits>(),
@@ -844,7 +831,7 @@ std::vector<at::Tensor> rasterize_backward(
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
     //dim3 Thread3d(32, 1);
-    float_raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
+    raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
