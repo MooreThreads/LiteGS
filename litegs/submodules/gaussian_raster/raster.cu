@@ -859,28 +859,6 @@ std::vector<at::Tensor> rasterize_backward(
         d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
         tilesnum_x, img_h, img_w
     );
-    
-    /*cudaFuncSetCacheConfig(raster_backward_kernel_multibatch_reduction<16, false, false>, cudaFuncCachePreferShared);
-    dim3 Block3d(tilesnum, viewsnum, 1);
-    dim3 Thread3d(16, 16, 1);
-
-    raster_backward_kernel_multibatch_reduction<16, false, false> << <Block3d, Thread3d >> > (
-        sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        packed_rgba16.packed_accessor32<torch::Half, 3, torch::RestrictPtrTraits>(),
-        specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),
-        last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-        d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-        d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-        d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-        d_ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-        d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
-        d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-        d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >(),
-        tilesnum_x, img_h, img_w
-        );*/
 
     CUDA_CHECK_ERRORS;
     return { d_ndc ,d_cov2d_inv ,d_color,d_opacity };
