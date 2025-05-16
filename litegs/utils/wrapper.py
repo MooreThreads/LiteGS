@@ -485,13 +485,6 @@ class GaussiansRasterFunc(torch.autograd.Function):
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
         
-        grad_rgb_image=torch.tensor(np.load('./profiler_input_data/grad_rgb_image.npy'),device='cuda')
-        _transmitance=transmitance
-        transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
-        _lst_contributor=lst_contributor
-        lst_contributor=torch.tensor(np.load('./profiler_input_data/lst_contributor.npy'),device='cuda')
-        lst_contributor=(lst_contributor-tile_start_index[0,1:-1].unsqueeze(-1).unsqueeze(-1)+1).short()
-        breakpoint()
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
