@@ -650,18 +650,20 @@ __global__ void float_raster_backward_kernel(
             }
             index_in_tile = __reduce_max_sync(0xffffffff, index_in_tile);
 
+            const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
+            const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
+            auto points_in_tile = &sorted_points[batch_id][start_index_in_tile];
             for (; (index_in_tile >= 0); index_in_tile--)
             {
                 float basic = 0;
                 float bxcy = 0;
                 float neg_half_c = 0;
                 float2 d{ 0,0 };
-                int point_id = sorted_points[batch_id][start_index_in_tile+index_in_tile];
+                int point_id = points_in_tile[index_in_tile];
                 PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
                 {
                     float2 xy{ (float(params.ndc_x) + 1.0f) * 0.5f * img_w - 0.5f ,(float(params.ndc_y) + 1.0f) * 0.5f * img_h - 0.5f };
-                    const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
-                    const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * pixels_per_thread;
+
                     d.x = xy.x - pixel_x;
                     d.y = xy.y - pixel_y;
                     basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
@@ -842,7 +844,7 @@ std::vector<at::Tensor> rasterize_backward(
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
     //dim3 Thread3d(32, 1);
-    float_raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
+    raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
