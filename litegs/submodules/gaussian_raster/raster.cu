@@ -149,8 +149,8 @@ __global__ void raster_forward_kernel(
                 for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
                     half2 power{
-                        basic + 2 * i * bxcy + 4 * i * i * neg_half_c,
-                        basic + 2 * (i + 1) * bxcy + 4 * (i + 1) * (i + 1) * neg_half_c
+                        basic + 2 * i * bxcy + 2 * i * 2 * i * neg_half_c,
+                        basic + (2 * i + 1) * bxcy + (2 * i + 1) * (2 * i + 1) * neg_half_c
                     };
                     unsigned int active_mask = 0xffffffffu;
                     active_mask = __hgt2_mask(reg_buffer[i].t, half2(SCALER / 8192, SCALER / 8192));
