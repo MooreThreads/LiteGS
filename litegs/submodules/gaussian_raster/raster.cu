@@ -27,6 +27,19 @@ struct PackedParams
     float inv_cov11;
 };
 
+struct PackedGrad
+{
+    float ndc_x;
+    float ndc_y;
+    float inv_cov00;
+    float inv_cov01;
+    float inv_cov11;
+    float r;
+    float g;
+    float b;
+    float a;
+};
+
 struct RGBA16
 {
     half r;
@@ -372,6 +385,7 @@ __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,         //[batch,3,point_num]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,3,point_num]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
@@ -507,12 +521,13 @@ __global__ void raster_backward_kernel(
                         half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
                         half2 grad_neg_half_c_x2 = d_power * half2(2 * i, 2 * i + 1) * half2(2 * i, 2 * i + 1);
                         half2 grad_basic_x2 = d_power;
-                        grad_bxcy += ((float)grad_bxcy_x2.x + (float)grad_bxcy_x2.y) * INV_SCALER;
-                        grad_neg_half_c+= ((float)grad_neg_half_c_x2.x + (float)grad_neg_half_c_x2.y)* INV_SCALER;
-                        grad_basic += ((float)grad_basic_x2.x + (float)grad_basic_x2.y)* INV_SCALER;
+                        grad_bxcy += ((float)grad_bxcy_x2.x + (float)grad_bxcy_x2.y);
+                        grad_neg_half_c+= ((float)grad_neg_half_c_x2.x + (float)grad_neg_half_c_x2.y);
+                        grad_basic += ((float)grad_basic_x2.x + (float)grad_basic_x2.y);
                     }
                 }
                 
+                PackedGrad* grad_addr = (PackedGrad*)&packed_grad[batch_id][0][point_id];
                 //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
                 if (__any_sync(0xffffffff, grad_a.x!=half(0)|| grad_a.y!=half(0)))
                 {
@@ -522,12 +537,15 @@ __global__ void raster_backward_kernel(
                     warp_reduce_sum<half2, false>(ba);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_color[batch_id][0][point_id], float(rg.x)* INV_SCALER);
-                        atomicAdd(&d_color[batch_id][1][point_id], float(rg.y)* INV_SCALER);
-                        atomicAdd(&d_color[batch_id][2][point_id], float(ba.x)* INV_SCALER);
-                        atomicAdd(&d_opacity[0][point_id], float(ba.y)* INV_SCALER);
+                        atomicAdd(&grad_addr->r, float(rg.x)* INV_SCALER);
+                        atomicAdd(&grad_addr->g, float(rg.y)* INV_SCALER);
+                        atomicAdd(&grad_addr->b, float(ba.x)* INV_SCALER);
+                        atomicAdd(&grad_addr->a, float(ba.y)* INV_SCALER);
                     }
 
+                    grad_bxcy *= INV_SCALER;
+                    grad_neg_half_c *= INV_SCALER;
+                    grad_basic *= INV_SCALER;
                     float3 grad_invcov{ 0,0,0 };
                     //basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
                     //bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
@@ -536,15 +554,12 @@ __global__ void raster_backward_kernel(
                     grad_invcov.y = (-d.x * d.y * grad_basic + d.x * grad_bxcy) * 0.5f;
                     grad_invcov.z = -0.5f * d.y * d.y * grad_basic + d.y * grad_bxcy - 0.5f * grad_neg_half_c;
 
-                    warp_reduce_sum<float, false>(grad_invcov.x);
-                    warp_reduce_sum<float, false>(grad_invcov.y);
-                    warp_reduce_sum<float, false>(grad_invcov.z);
+                    warp_reduce_sum<float3, false>(grad_invcov);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_cov2d_inv[batch_id][0][0][point_id], grad_invcov.x);
-                        atomicAdd(&d_cov2d_inv[batch_id][0][1][point_id], grad_invcov.y);
-                        atomicAdd(&d_cov2d_inv[batch_id][1][0][point_id], grad_invcov.y);
-                        atomicAdd(&d_cov2d_inv[batch_id][1][1][point_id], grad_invcov.z);
+                        atomicAdd(&grad_addr->inv_cov00, grad_invcov.x);
+                        atomicAdd(&grad_addr->inv_cov01, grad_invcov.y);
+                        atomicAdd(&grad_addr->inv_cov11, grad_invcov.z);
                     }
 
                     float d_dx = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * grad_basic + params.inv_cov01 * grad_bxcy;
@@ -553,8 +568,8 @@ __global__ void raster_backward_kernel(
                     warp_reduce_sum<float2, false>(d_ndc_xy);
                     if (threadIdx.x == 0)
                     {
-                        atomicAdd(&d_ndc[batch_id][0][point_id], d_ndc_xy.x);
-                        atomicAdd(&d_ndc[batch_id][1][point_id], d_ndc_xy.y);
+                        atomicAdd(&grad_addr->ndc_x, d_ndc_xy.x);
+                        atomicAdd(&grad_addr->ndc_y, d_ndc_xy.y);
                     }
                 }
             }
@@ -805,13 +820,14 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor d_color = torch::zeros({ batch_num,3,points_num }, packed_params.options());
     at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
 
+    at::Tensor packed_grad = torch::zeros({ batch_num,points_num,9 }, packed_params.options());
     
     int tiles_per_block = 4;
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
     //dim3 Thread3d(32, 1);
-    raster_backward_kernel<16, 16, false, false> << <Block3d, Thread3d >> > (
+    raster_backward_kernel<8, 16, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -822,6 +838,7 @@ std::vector<at::Tensor> rasterize_backward(
         d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
         d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+        packed_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         d_ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
         d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
         d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
