@@ -19,7 +19,7 @@ namespace cg = cooperative_groups;
     const torch::PackedTensorAccessor32<int32_t, 3,torch::RestrictPtrTraits> RD,//viewnum,2,pointnum
     const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> prefix_sum,//viewnum,pointnum
      const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> depth_sorted_pointid,//viewnum,pointnum
-    int TileSizeX,
+    int TilesNumX,
     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_tileId,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
     )
@@ -44,7 +44,7 @@ namespace cg = cooperative_groups;
             {
                 for (int j = l; j < r; j++)
                 {
-                    int tile_id = i * TileSizeX + j;
+                    int tile_id = i * TilesNumX + j;
                     table_tileId[view_id][end - 1 - count] = tile_id + 1;// tile_id 0 means invalid!
                     table_pointId[view_id][end - 1 - count] = point_id;
                     count++;
@@ -62,7 +62,7 @@ namespace cg = cooperative_groups;
      const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> large_index,//tasknum,2
      const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> tensor_ellipse_f,//viewnum,2,2,pointnum
      const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_ellipse_a,//viewnum,pointnum
-     int img_h,int img_w,int tilesize,
+     int img_h, int img_w, int tilesize_h, int tilesize_w,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_tileId,
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
  )
@@ -95,17 +95,17 @@ namespace cg = cooperative_groups;
          {
              int tile_col = l + (i % width);
              int tile_row = u + (i / width);
-             int tile_center_x = (tile_col + 0.5f) * tilesize;
-             int tile_center_y = (tile_row + 0.5f) * tilesize;
+             int tile_center_x = (tile_col + 0.5f) * tilesize_w;
+             int tile_center_y = (tile_row + 0.5f) * tilesize_h;
 
              float square_dist0 = (tile_center_x - ellipse_f[0].x) * (tile_center_x - ellipse_f[0].x) 
                  + (tile_center_y - ellipse_f[0].y) * (tile_center_y - ellipse_f[0].y);
              float square_dist1 = (tile_center_x - ellipse_f[1].x) * (tile_center_x - ellipse_f[1].x)
                  + (tile_center_y - ellipse_f[1].y) * (tile_center_y - ellipse_f[1].y);
-             const float radius = sqrt(2.0f)* tilesize/2;
+             const float radius = sqrt(2.0f)* max(tilesize_w,tilesize_h)/2;
              if (sqrt(square_dist0) + sqrt(square_dist1) - 2 * radius <= 2 * ellipse_a)
              {
-                 int tile_id = tile_row * ceil(img_w / (float)tilesize) + tile_col;
+                 int tile_id = tile_row * ceil(img_w / (float)tilesize_w) + tile_col;
                  table_tileId[view_id][end - 1 - i] = tile_id + 1;// tile_id 0 means invalid!
                  table_pointId[view_id][end - 1 - i] = point_id;
              }
@@ -120,7 +120,7 @@ namespace cg = cooperative_groups;
 
  std::vector<at::Tensor> duplicateWithKeys(at::Tensor LU, at::Tensor RD, at::Tensor prefix_sum, at::Tensor depth_sorted_pointid,
      at::Tensor large_index, at::Tensor ellipse_f, at::Tensor ellipse_a,
-     int64_t allocate_size, int64_t img_h, int64_t img_w, int64_t tilesize)
+     int64_t allocate_size, int64_t img_h, int64_t img_w, int64_t tilesize_h,int64_t tilesize_w)
 {
     at::DeviceGuard guard(LU.device());
     int64_t view_num = LU.sizes()[0];
@@ -141,7 +141,7 @@ namespace cg = cooperative_groups;
         RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
-        int(std::ceil(img_w/(float)tilesize)),
+        int(std::ceil(img_w/(float)tilesize_w)),
         table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
@@ -156,7 +156,7 @@ namespace cg = cooperative_groups;
         large_index.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
         ellipse_f.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         ellipse_a.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        img_h,img_w, tilesize,
+        img_h,img_w, tilesize_h,tilesize_w,
         table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;

@@ -274,7 +274,7 @@ std::vector<at::Tensor> rasterize_forward(
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
 
-    raster_forward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+    raster_forward_kernel<8, 16, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         rgba16.packed_accessor32<torch::Half, 3, torch::RestrictPtrTraits>(),
@@ -554,7 +554,9 @@ __global__ void raster_backward_kernel(
                     grad_invcov.y = (-d.x * d.y * grad_basic + d.x * grad_bxcy) * 0.5f;
                     grad_invcov.z = -0.5f * d.y * d.y * grad_basic + d.y * grad_bxcy - 0.5f * grad_neg_half_c;
 
-                    warp_reduce_sum<float3, false>(grad_invcov);
+                    warp_reduce_sum<float, false>(grad_invcov.x);
+                    warp_reduce_sum<float, false>(grad_invcov.y);
+                    warp_reduce_sum<float, false>(grad_invcov.z);
                     if (threadIdx.x == 0)
                     {
                         atomicAdd(&grad_addr->inv_cov00, grad_invcov.x);
@@ -855,7 +857,7 @@ std::vector<at::Tensor> rasterize_backward(
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
     //dim3 Thread3d(32, 1);
-    raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
+    raster_backward_kernel<8, 16, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),

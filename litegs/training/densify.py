@@ -126,6 +126,8 @@ class DensityControllerOfficial(DensityControllerBase):
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
 
         prune_mask=self.get_prune_mask(opacity.sigmoid(),scale.exp())
+        if prune_mask.sum()>0.8*opacity.shape[1]:
+            assert(False) #debug
         if self.bCluster:
             N=prune_mask.sum()
             chunk_num=int(N/chunk_size)

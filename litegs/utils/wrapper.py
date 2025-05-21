@@ -567,7 +567,7 @@ class SphericalHarmonicToRGB(BaseWrapper):
         ([1,3,1024*512],torch.float32,True)]
 
 class EighAndInverse2x2Matrix(BaseWrapper):
-    def __eight_inverse_2x2matrix_script(cov2d:torch.Tensor):
+    def __eigh_inverse_2x2matrix_script(cov2d:torch.Tensor):
         with torch.no_grad():
             eigen_val,eigen_vec=torch.linalg.eigh(cov2d.permute(0,3,1,2).reshape(-1,2,2))
             eigen_val=eigen_val.reshape(cov2d.shape[0],cov2d.shape[3],2).permute(0,2,1)
@@ -577,7 +577,7 @@ class EighAndInverse2x2Matrix(BaseWrapper):
         cov2d_inv=cov2d_inv.reshape(cov2d.shape[0],cov2d.shape[3],2,2).permute(0,2,3,1)
         return eigen_val,eigen_vec,cov2d_inv
 
-    def __eight_inverse_2x2matrix_fused(cov2d:torch.Tensor):
+    def __eigh_inverse_2x2matrix_fused(cov2d:torch.Tensor):
         class EighAndInverse2x2Func(torch.autograd.Function):
             @staticmethod
             def forward(ctx,input_matrix:torch.Tensor):
@@ -602,8 +602,8 @@ class EighAndInverse2x2Matrix(BaseWrapper):
         cov2d.requires_grad_(True)
         return [cov2d,]
     
-    _fused=__eight_inverse_2x2matrix_fused
-    _script=__eight_inverse_2x2matrix_script
+    _fused=__eigh_inverse_2x2matrix_fused
+    _script=__eigh_inverse_2x2matrix_script
     test_inputs=None
     _relative_error_threshold=1e-2
 
@@ -611,7 +611,7 @@ class EighAndInverse2x2Matrix(BaseWrapper):
 class Binning(BaseWrapper):
     @torch.no_grad()
     def __binning_script(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
-            img_pixel_shape:tuple[int,int],tile_size:int):
+            img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
         def craete_2d_AABB(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,tile_size:int,img_pixel_shape:tuple[int,int],img_tile_shape:tuple[int,int]):
             # Major and minor axes -> AABB extensions
             opacity_clamped=opacity.unsqueeze(0).clamp_min(1/255)
@@ -672,14 +672,18 @@ class Binning(BaseWrapper):
     
     @torch.no_grad()
     def __binning_fused(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
-            img_pixel_shape:tuple[int,int],tile_size:int):
+            img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
         
-        img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
+        img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size[0]))),int(math.ceil(img_pixel_shape[1]/float(tile_size[1]))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
         pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
-        tile_left_up=(pixel_left_up/float(tile_size)).int()
-        tile_right_down=(pixel_right_down/float(tile_size)).ceil().int()
+        tile_left_up=torch.empty_like(pixel_left_up)
+        tile_right_down=torch.empty_like(pixel_right_down)
+        tile_left_up[:,0,:]=(pixel_left_up[:,0,:]/float(tile_size[1])).int()
+        tile_right_down[:,0,:]=(pixel_right_down[:,0,:]/float(tile_size[1])).ceil().int()
+        tile_left_up[:,1,:]=(pixel_left_up[:,1,:]/float(tile_size[0])).int()
+        tile_right_down[:,1,:]=(pixel_right_down[:,1,:]/float(tile_size[0])).ceil().int()
         rect_length=tile_right_down-tile_left_up
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
@@ -702,7 +706,7 @@ class Binning(BaseWrapper):
         large_points_index=(tiles_touched>=32).nonzero()
         my_table=litegs_fused.duplicateWithKeys(tile_left_up,tile_right_down,prefix_sum,point_ids,large_points_index,
                                                 ellipse_f,ellipse_a,
-                                                int(allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size)
+                                                int(allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 

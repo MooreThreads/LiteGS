@@ -10,7 +10,7 @@ if __name__ == "__main__":
     color=torch.tensor(np.load('./profiler_input_data/color.npy'),device='cuda').requires_grad_(True)
     opacity=torch.tensor(np.load('./profiler_input_data/opacity.npy'),device='cuda').requires_grad_(True)
     output_shape=[1036,1600]
-    tile_size=8
+    tile_size=(8,16)
 
 
     # test 87526
@@ -24,9 +24,9 @@ if __name__ == "__main__":
         eigen_val,eigen_vec,inv_cov2d=litegs.utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
         tile_start_index,sorted_pointId,b_visible=litegs.utils.wrapper.Binning.call_fused(ndc_pos,eigen_val,eigen_vec,opacity,output_shape,tile_size)
         img,transmitance,depth,normal=litegs.utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
-                                                output_shape[0],output_shape[1],tile_size,tile_size,False,False)
+                                                output_shape[0],output_shape[1],tile_size[0],tile_size[1],False,False)
         img.mean().backward()
-        # plt_img=litegs.utils.tiles2img_torch(img,math.ceil(output_shape[1]/tile_size),math.ceil(output_shape[0]/tile_size))[...,:output_shape[0],:output_shape[1]].contiguous()
-        # plt.imshow(plt_img.detach().cpu()[0].permute(1,2,0))
-        # plt.show()
-        # pass
+        plt_img=litegs.utils.tiles2img_torch(img,math.ceil(output_shape[1]/tile_size[1]),math.ceil(output_shape[0]/tile_size[0]))[...,:output_shape[0],:output_shape[1]].contiguous()
+        plt.imshow(plt_img.detach().cpu()[0].permute(1,2,0))
+        plt.show()
+        pass
