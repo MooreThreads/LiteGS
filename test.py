@@ -10,7 +10,7 @@ if __name__ == "__main__":
     color=torch.tensor(np.load('./profiler_input_data/color.npy'),device='cuda').requires_grad_(True)
     opacity=torch.tensor(np.load('./profiler_input_data/opacity.npy'),device='cuda').requires_grad_(True)
     output_shape=[1036,1600]
-    tile_size=16
+    tile_size=8
 
 
     # test 87526

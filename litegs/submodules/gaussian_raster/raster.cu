@@ -274,7 +274,7 @@ std::vector<at::Tensor> rasterize_forward(
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
 
-    raster_forward_kernel<16, 16, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+    raster_forward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         rgba16.packed_accessor32<torch::Half, 3, torch::RestrictPtrTraits>(),
@@ -385,7 +385,7 @@ __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,         //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,         //[batch,point_num,9]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,3,point_num]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
@@ -527,7 +527,7 @@ __global__ void raster_backward_kernel(
                     }
                 }
                 
-                PackedGrad* grad_addr = (PackedGrad*)&packed_grad[batch_id][0][point_id];
+                PackedGrad* grad_addr = (PackedGrad*)&packed_grad[batch_id][point_id][0];
                 //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
                 if (__any_sync(0xffffffff, grad_a.x!=half(0)|| grad_a.y!=half(0)))
                 {
@@ -758,6 +758,34 @@ __global__ void float_raster_backward_kernel(
     }
 }
 
+__global__ void unpack_gradient(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,//[batch,point_num,property_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity          //[1,point_num]
+)
+{
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (index < packed_grad.size(1))
+    {
+        PackedGrad* grads = (PackedGrad*)&packed_grad[blockIdx.y][index][0];
+        d_ndc[blockIdx.y][0][index] = grads->ndc_x;
+        d_ndc[blockIdx.y][1][index] = grads->ndc_y;
+        d_cov2d_inv[blockIdx.y][0][0][index] = grads->inv_cov00;
+        d_cov2d_inv[blockIdx.y][0][1][index] = grads->inv_cov01;
+        d_cov2d_inv[blockIdx.y][1][0][index] = grads->inv_cov01;
+        d_cov2d_inv[blockIdx.y][1][1][index] = grads->inv_cov11;
+        d_color[blockIdx.y][0][index] = grads->r;
+        d_color[blockIdx.y][1][index] = grads->g;
+        d_color[blockIdx.y][2][index] = grads->b;
+        if (blockIdx.y == 0)//todo fix
+        {
+            d_opacity[0][index] = grads->a;
+        }
+    }
+}
+
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,
@@ -820,14 +848,14 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor d_color = torch::zeros({ batch_num,3,points_num }, packed_params.options());
     at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
 
-    at::Tensor packed_grad = torch::zeros({ batch_num,points_num,9 }, packed_params.options());
+    at::Tensor packed_grad = torch::zeros({ batch_num,points_num,sizeof(PackedGrad)/sizeof(float)}, packed_params.options());
     
     int tiles_per_block = 4;
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     //dim3 Block3d(1, viewsnum, 1);
     //dim3 Thread3d(32, 1);
-    raster_backward_kernel<16, 16, false, false> << <Block3d, Thread3d >> > (
+    raster_backward_kernel<8, 8, false, false> << <Block3d, Thread3d >> > (
         sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -847,5 +875,15 @@ std::vector<at::Tensor> rasterize_backward(
     );
 
     CUDA_CHECK_ERRORS;
+
+    dim3 UnpackBlock3d(std::ceil(points_num / 512.0f), batch_num, 1);
+    unpack_gradient<<<UnpackBlock3d,512>>>(
+        packed_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        d_ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+        d_cov2d_inv.packed_accessor32<float, 4, torch::RestrictPtrTraits >(),
+        d_color.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
+        d_opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits >());
+    CUDA_CHECK_ERRORS;
+
     return { d_ndc ,d_cov2d_inv ,d_color,d_opacity };
 }
