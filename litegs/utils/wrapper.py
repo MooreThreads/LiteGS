@@ -451,25 +451,13 @@ class GaussiansRasterFunc(torch.autograd.Function):
         transmitance=None
         depth=None
         normal=None
+   
+        img,transmitance,depth,lst_contributor,packed_params=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,
+                                                                                            ndc,cov2d_inv,color,opacities,
+                                                                                            tiles,img_h,img_w,tile_h,tile_w,
+                                                                                            enable_transmitance,enable_depth)
 
-        views_num=ndc.shape[0]
-        points_num=ndc.shape[-1]
-        packed_params=torch.concat([
-            ndc[:,:3,:],
-            cov2d_inv.reshape(views_num,4,points_num)[:,(0,1,3),:]
-            ],dim=-2).permute(0,2,1).contiguous()
-        
-        packed_color=torch.concat([color,
-            opacities.unsqueeze(0).repeat(views_num,1,1)
-            ],dim=-2).permute(0,2,1).half().contiguous()
-        
-        # _img=torch.tensor(np.load('./profiler_input_data/img.npy'),device='cuda')
-        # _transmitance=torch.tensor(np.load('./profiler_input_data/transmitance.npy'),device='cuda')
-        img,transmitance,depth,lst_contributor=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,packed_params,packed_color,
-                                                                              tiles,img_h,img_w,tile_h,tile_w,
-                                                                              enable_transmitance,enable_depth)
-
-        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,packed_color,ndc,cov2d_inv,color,opacities,tiles)
+        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles)
         ctx.arg_tile_size=(tile_h,tile_w)
         ctx.img_hw=(img_h,img_w)
 
@@ -481,30 +469,27 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor):
-        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,packed_color,ndc,cov2d_inv,color,opacities,tiles=ctx.saved_tensors
+        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
         
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,packed_color,ndc,cov2d_inv,color,opacities,tiles,
-                                                                                                        transmitance,lst_contributor,
-                                                                                                        grad_rgb_image,grad_transmitance_image,grad_depth_image,
-                                                                                                        img_h,img_w,tile_h,tile_w)
-        grad_ndc*=grad_rgb_image_max
-        grad_cov2d_inv*=grad_rgb_image_max
-        grad_color*=grad_rgb_image_max
-        grad_opacities*=grad_rgb_image_max
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
+                                                                                          transmitance,lst_contributor,
+                                                                                          grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
+                                                                                          img_h,img_w,tile_h,tile_w)
+
         # _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
         # _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
         # _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')
         # _grad_ndc=torch.tensor(np.load('./profiler_input_data/grad_ndc.npy'),device='cuda')
-        # if grad_color.isnan().any() or grad_color.isinf().any() \
-        #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
-        #         or grad_cov2d_inv.isnan().any() or grad_cov2d_inv.isinf().any() \
-        #             or grad_ndc.isnan().any() or grad_ndc.isinf().any():
-        #     breakpoint()
+        if grad_color.isnan().any() or grad_color.isinf().any() \
+            or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
+                or grad_cov2d_inv.isnan().any() or grad_cov2d_inv.isinf().any() \
+                    or grad_ndc.isnan().any() or grad_ndc.isinf().any():
+            breakpoint()
 
         grads = (
             None,

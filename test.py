@@ -26,7 +26,7 @@ if __name__ == "__main__":
         img,transmitance,depth,normal=litegs.utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
                                                 output_shape[0],output_shape[1],tile_size[0],tile_size[1],False,False)
         img.mean().backward()
-        plt_img=litegs.utils.tiles2img_torch(img,math.ceil(output_shape[1]/tile_size[1]),math.ceil(output_shape[0]/tile_size[0]))[...,:output_shape[0],:output_shape[1]].contiguous()
-        plt.imshow(plt_img.detach().cpu()[0].permute(1,2,0))
-        plt.show()
+        # plt_img=litegs.utils.tiles2img_torch(img,math.ceil(output_shape[1]/tile_size[1]),math.ceil(output_shape[0]/tile_size[0]))[...,:output_shape[0],:output_shape[1]].contiguous()
+        # plt.imshow(plt_img.detach().cpu()[0].permute(1,2,0))
+        # plt.show()
         pass
