@@ -472,6 +472,9 @@ class GaussiansRasterFunc(torch.autograd.Function):
         sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
+
+        if grad_rgb_image.isnan().any():
+            breakpoint()
         
 
         grad_rgb_image_max=grad_rgb_image.abs().max()

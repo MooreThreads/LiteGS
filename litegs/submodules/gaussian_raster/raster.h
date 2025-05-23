@@ -16,6 +16,19 @@ std::vector<at::Tensor> rasterize_forward(
     bool enable_depth
 );
 
+std::vector<at::Tensor> rasterize_forward_packed(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor packed_params,
+    std::optional<at::Tensor>  specific_tiles_arg,
+    int64_t img_h,
+    int64_t img_w,
+    int64_t tile_h,
+    int64_t tile_w,
+    bool enable_trans,
+    bool enable_depth
+);
+
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,

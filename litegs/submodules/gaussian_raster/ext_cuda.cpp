@@ -11,6 +11,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("tileRange", &tileRange);
   m.def("create_2d_gaussian_ROI", &create_2d_gaussian_ROI);
   m.def("rasterize_forward", &rasterize_forward);
+  m.def("rasterize_forward_packed", &rasterize_forward_packed);
   m.def("rasterize_backward", &rasterize_backward);
   m.def("jacobianRayspace", &jacobianRayspace);
   m.def("createTransformMatrix_forward", &createTransformMatrix_forward);

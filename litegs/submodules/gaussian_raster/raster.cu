@@ -117,22 +117,22 @@ __global__ void raster_forward_kernel(
 
         int start_index_in_tile = start_index[batch_id][tile_id];
         int end_index_in_tile = start_index[batch_id][tile_id + 1];
+        RegisterBuffer reg_buffer[PIXELS_PER_THREAD];
+        #pragma unroll
+        for (int i = 0; i < PIXELS_PER_THREAD; i++)
+        {
+            reg_buffer[i].r = half2(0, 0);
+            reg_buffer[i].g = half2(0, 0);
+            reg_buffer[i].b = half2(0, 0);
+            //alpha_min 1/256
+            //t_min 1/8192
+            //-> t_mul_alpha_min 1/(256*8192) -> half underflow
+            reg_buffer[i].t = half2(SCALER, SCALER);//mul 128.0f to avoid underflow; t_max * 128 * color_max < half_max;
+            reg_buffer[i].lst_contributor = 0;//simd ushort2
+        }
 
         if (start_index_in_tile != -1)
         {
-            RegisterBuffer reg_buffer[PIXELS_PER_THREAD];
-#pragma unroll
-            for (int i = 0; i < PIXELS_PER_THREAD; i++)
-            {
-                reg_buffer[i].r = half2(0, 0);
-                reg_buffer[i].g = half2(0, 0);
-                reg_buffer[i].b = half2(0, 0);
-                //alpha_min 1/256
-                //t_min 1/8192
-                //-> t_mul_alpha_min 1/(256*8192) -> half underflow
-                reg_buffer[i].t = half2(SCALER, SCALER);//mul 128.0f to avoid underflow; t_max * 128 * color_max < half_max;
-                reg_buffer[i].lst_contributor = 0;//simd ushort2
-            }
 
             unsigned int any_active = 0xffffffffu;
             int index_in_tile = 0;
@@ -169,7 +169,7 @@ __global__ void raster_forward_kernel(
                     any_active |= active_mask;
 
                     unsigned int alpha_valid_mask = 0xffffffffu;
-                    alpha_valid_mask &= __hle2_mask(power, half2(0, 0));
+                    //alpha_valid_mask &= __hle2_mask(power, half2(1.0f/(1<<24), 1.0f / (1 << 24)));//TODO 1 ULP:2^(-14) * (0 + 1/1024)
                     reg_buffer[i].alpha = point_color_x2.a * fast_exp_approx(power);
                     alpha_valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
                     reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
@@ -181,41 +181,44 @@ __global__ void raster_forward_kernel(
                     reg_buffer[i].r += (point_color_x2.r * weight);
                     reg_buffer[i].g += (point_color_x2.g * weight);
                     reg_buffer[i].b += (point_color_x2.b * weight);
+                    /*if (pixel_x == 1004 && pixel_y == 772 && i == 1 && index_in_tile == 272)
+                    {
+                        printf("forward: index:%d transmitance:%e power:%e\n", index_in_tile, float(reg_buffer[i].t.y), float(power.y));
+                    }*/
                     reg_buffer[i].t = reg_buffer[i].t * (half2(1.0f, 1.0f) - reg_buffer[i].alpha);
                 }
                 //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
                 //reg_buffer[2].alpha = (reg_buffer[0].alpha + half2(2.0f, 2.0f) * reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
 
             }
+            
+        }
+        int tile_index = blockIdx.x * blockDim.y + threadIdx.y;
+        auto ourput_r = output_img[batch_id][0][tile_index];
+        auto ourput_g = output_img[batch_id][1][tile_index];
+        auto ourput_b = output_img[batch_id][2][tile_index];
+        auto ourput_t = output_transmitance[batch_id][0][tile_index];
+        auto output_last_index = output_last_contributor[batch_id][tile_index];
+        #pragma unroll
+        for (int i = 0; i < PIXELS_PER_THREAD; i++)
+        {
+            const int output_x = threadIdx.x % tile_size_x;
+            const int output_y = threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE + 2 * i;
 
+            ourput_r[output_y][output_x] = min(float(reg_buffer[i].r.x) * INV_SCALER, 1.0f);
+            ourput_r[output_y + 1][output_x] = min(float(reg_buffer[i].r.y) * INV_SCALER, 1.0f);
 
-            int tile_index = blockIdx.x * blockDim.y + threadIdx.y;
-            auto ourput_r = output_img[batch_id][0][tile_index];
-            auto ourput_g = output_img[batch_id][1][tile_index];
-            auto ourput_b = output_img[batch_id][2][tile_index];
-            auto ourput_t = output_transmitance[batch_id][0][tile_index];
-            auto output_last_index = output_last_contributor[batch_id][tile_index];
-#pragma unroll
-            for (int i = 0; i < PIXELS_PER_THREAD; i++)
-            {
-                const int output_x = threadIdx.x % tile_size_x;
-                const int output_y = threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE + 2 * i;
+            ourput_g[output_y][output_x] = min(float(reg_buffer[i].g.x) * INV_SCALER, 1.0f);
+            ourput_g[output_y + 1][output_x] = min(float(reg_buffer[i].g.y) * INV_SCALER, 1.0f);
 
-                ourput_r[output_y][output_x] = float(reg_buffer[i].r.x) * INV_SCALER;
-                ourput_r[output_y + 1][output_x] = float(reg_buffer[i].r.y) * INV_SCALER;
+            ourput_b[output_y][output_x] = min(float(reg_buffer[i].b.x) * INV_SCALER, 1.0f);
+            ourput_b[output_y + 1][output_x] = min(float(reg_buffer[i].b.y) * INV_SCALER, 1.0f);
 
-                ourput_g[output_y][output_x] = float(reg_buffer[i].g.x) * INV_SCALER;
-                ourput_g[output_y + 1][output_x] = float(reg_buffer[i].g.y) * INV_SCALER;
+            ourput_t[output_y][output_x] = float(reg_buffer[i].t.x) * INV_SCALER;
+            ourput_t[output_y + 1][output_x] = float(reg_buffer[i].t.y) * INV_SCALER;
 
-                ourput_b[output_y][output_x] = float(reg_buffer[i].b.x) * INV_SCALER;
-                ourput_b[output_y + 1][output_x] = float(reg_buffer[i].b.y) * INV_SCALER;
-
-                ourput_t[output_y][output_x] = float(reg_buffer[i].t.x) * INV_SCALER;
-                ourput_t[output_y + 1][output_x] = float(reg_buffer[i].t.y) * INV_SCALER;
-
-                output_last_index[output_y][output_x] = reg_buffer[i].lst_contributor&0xffff;
-                output_last_index[output_y + 1][output_x] = (reg_buffer[i].lst_contributor >> 16) & 0xffff;
-            }
+            output_last_index[output_y][output_x] = reg_buffer[i].lst_contributor & 0xffff;
+            output_last_index[output_y + 1][output_x] = (reg_buffer[i].lst_contributor >> 16) & 0xffff;
         }
     }
 }
@@ -323,6 +326,72 @@ std::vector<at::Tensor> rasterize_forward(
     }
 
     return { output_img ,output_transmitance,output_depth ,output_last_contributor,packed_params };
+}
+
+
+std::vector<at::Tensor> rasterize_forward_packed(
+    at::Tensor sorted_points,
+    at::Tensor start_index,
+    at::Tensor packed_params,
+    std::optional<at::Tensor>  specific_tiles_arg,
+    int64_t img_h,
+    int64_t img_w,
+    int64_t tile_h,
+    int64_t tile_w,
+    bool enable_trans,
+    bool enable_depth
+)
+{
+    at::DeviceGuard guard(packed_params.device());
+
+    int64_t viewsnum = start_index.sizes()[0];
+    int tilesnum_x = std::ceil(img_w / float(tile_w));
+    int tilesnum_y = std::ceil(img_h / float(tile_h));
+    int64_t tilesnum = tilesnum_x * tilesnum_y;
+    at::Tensor specific_tiles;
+    if (specific_tiles_arg.has_value())
+    {
+        specific_tiles = *specific_tiles_arg;
+        tilesnum = specific_tiles.sizes()[1];
+    }
+    else
+    {
+        specific_tiles = torch::empty({ 0,0 }, packed_params.options().dtype(torch::kInt32));
+    }
+    //raster
+
+    torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
+    at::Tensor output_img = torch::empty({ viewsnum,3, tilesnum,tile_h,tile_w }, opt_img);
+
+    torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(enable_trans);
+    at::Tensor output_transmitance = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t);
+
+    at::Tensor output_depth = torch::empty({ 0,0, 0, 0, 0 }, opt_t);
+    if (enable_depth)
+    {
+        output_depth = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t.requires_grad(true));
+    }
+
+    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kShort).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
+    at::Tensor output_last_contributor = torch::empty({ viewsnum, tilesnum, tile_h, tile_w }, opt_c);
+
+    {
+        int tiles_per_block = 4;
+        dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
+        dim3 Thread3d(32, tiles_per_block);
+        raster_forward_kernel<8, 16, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
+            output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
+            tilesnum_x);
+        CUDA_CHECK_ERRORS;
+    }
+
+    return { output_img ,output_transmitance,output_depth ,output_last_contributor };
 }
 
 
@@ -526,7 +595,7 @@ __global__ void raster_backward_kernel(
                     alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), alpha);
 
                     unsigned int valid_mask = 0xffffffffu;
-                    valid_mask &= __hle2_mask(power, half2(0, 0));
+                    //valid_mask &= __hle2_mask(power, half2(0, 0));
                     valid_mask &= __hge2_mask(alpha, half2(1.0f / 256, 1.0f / 256));
                     valid_mask &= __vcmpleu2(index_in_tile << 16 | index_in_tile, shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x]);
 
@@ -536,6 +605,10 @@ __global__ void raster_backward_kernel(
                         reinterpret_cast<unsigned int*>(&G)[0] &= valid_mask;
 
                         reg_buffer[i].t = __h2div(reg_buffer[i].t,(half2(1.0f,1.0f) - alpha));//0-2^(-10)
+                        /*if (pixel_x == 1004 && pixel_y == 772 && i == 1 && float(alpha.y) != 0.0f)
+                        {
+                            printf("backward: index:%d transmitance:%e alpha:%e\n", index_in_tile, float(reg_buffer[i].t.y), float(alpha.y));
+                        }*/
                         grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
