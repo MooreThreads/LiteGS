@@ -9,7 +9,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "./example_train.py",
-            "args":["--sh_degree","3","-s","dataset/garden","-i","images","-m","output/garden","--eval"],
+            "args":["--sh_degree","3","-s","dataset/bicycle","-i","images","-m","output/bicycle","--eval"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false,

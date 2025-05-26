@@ -54,9 +54,10 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
 
     #color
     nvtx.range_push("sh")
-    camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
-    dirs=xyz[:3]-camera_center.unsqueeze(-1)
-    dirs=torch.nn.functional.normalize(dirs,dim=-2)
+    with torch.no_grad():
+        camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
+        dirs=xyz[:3]-camera_center.unsqueeze(-1)
+        dirs=torch.nn.functional.normalize(dirs,dim=-2)
     color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,sh_0,sh_rest,dirs)
     nvtx.range_pop()
     

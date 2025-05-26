@@ -760,9 +760,9 @@ __global__ void sh2rgb_backward_kernel(
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    float dRGBdx[3]{ 0,0,0 };
-    float dRGBdy[3]{ 0,0,0 };
-    float dRGBdz[3]{ 0,0,0 };
+    //float dRGBdx[3]{ 0,0,0 };
+    //float dRGBdy[3]{ 0,0,0 };
+    //float dRGBdz[3]{ 0,0,0 };
 
     for (int batch_id = 0; batch_id < rgb_grad.size(0); batch_id++)
     {
@@ -794,7 +794,7 @@ __global__ void sh2rgb_backward_kernel(
                 SH_rest_grad[1][2][index] = dRGBdsh2 * dL_dRGB.z;
                 SH_rest_grad[2][2][index] = dRGBdsh3 * dL_dRGB.z;
 
-                dRGBdx[0] += -SH_C1 * SH_rest[2][0][index];
+                /*dRGBdx[0] += -SH_C1 * SH_rest[2][0][index];
                 dRGBdx[1] += -SH_C1 * SH_rest[2][1][index];
                 dRGBdx[2] += -SH_C1 * SH_rest[2][2][index];
                 dRGBdy[0] += -SH_C1 * SH_rest[0][0][index];
@@ -802,7 +802,7 @@ __global__ void sh2rgb_backward_kernel(
                 dRGBdy[2] += -SH_C1 * SH_rest[0][2][index];
                 dRGBdz[0] += SH_C1 * SH_rest[1][0][index];
                 dRGBdz[1] += SH_C1 * SH_rest[1][1][index];
-                dRGBdz[2] += SH_C1 * SH_rest[1][2][index];
+                dRGBdz[2] += SH_C1 * SH_rest[1][2][index];*/
 
                 if (degree > 1)
                 {
@@ -831,7 +831,7 @@ __global__ void sh2rgb_backward_kernel(
                     SH_rest_grad[6][2][index] = dRGBdsh7 * dL_dRGB.z;
                     SH_rest_grad[7][2][index] = dRGBdsh8 * dL_dRGB.z;
 
-                    dRGBdx[0] += SH_C2[0] * y * SH_rest[3][0][index] + SH_C2[2] * 2.f * -x * SH_rest[5][0][index] + SH_C2[3] * z * SH_rest[6][0][index] + SH_C2[4] * 2.f * x * SH_rest[7][0][index];
+                    /*dRGBdx[0] += SH_C2[0] * y * SH_rest[3][0][index] + SH_C2[2] * 2.f * -x * SH_rest[5][0][index] + SH_C2[3] * z * SH_rest[6][0][index] + SH_C2[4] * 2.f * x * SH_rest[7][0][index];
                     dRGBdx[1] += SH_C2[0] * y * SH_rest[3][1][index] + SH_C2[2] * 2.f * -x * SH_rest[5][1][index] + SH_C2[3] * z * SH_rest[6][1][index] + SH_C2[4] * 2.f * x * SH_rest[7][1][index];
                     dRGBdx[2] += SH_C2[0] * y * SH_rest[3][2][index] + SH_C2[2] * 2.f * -x * SH_rest[5][2][index] + SH_C2[3] * z * SH_rest[6][2][index] + SH_C2[4] * 2.f * x * SH_rest[7][2][index];
                     
@@ -841,7 +841,7 @@ __global__ void sh2rgb_backward_kernel(
                     
                     dRGBdz[0] += SH_C2[1] * y * SH_rest[4][0][index] + SH_C2[2] * 2.f * 2.f * z * SH_rest[5][0][index] + SH_C2[3] * x * SH_rest[6][0][index];
                     dRGBdz[1] += SH_C2[1] * y * SH_rest[4][1][index] + SH_C2[2] * 2.f * 2.f * z * SH_rest[5][1][index] + SH_C2[3] * x * SH_rest[6][1][index];
-                    dRGBdz[2] += SH_C2[1] * y * SH_rest[4][2][index] + SH_C2[2] * 2.f * 2.f * z * SH_rest[5][2][index] + SH_C2[3] * x * SH_rest[6][2][index];
+                    dRGBdz[2] += SH_C2[1] * y * SH_rest[4][2][index] + SH_C2[2] * 2.f * 2.f * z * SH_rest[5][2][index] + SH_C2[3] * x * SH_rest[6][2][index];*/
 
                     if (degree > 2)
                     {
@@ -874,7 +874,7 @@ __global__ void sh2rgb_backward_kernel(
                         SH_rest_grad[13][2][index] = dRGBdsh14 * dL_dRGB.z;
                         SH_rest_grad[14][2][index] = dRGBdsh15 * dL_dRGB.z;
 
-                        dRGBdx[0] += (
+                        /*dRGBdx[0] += (
                             SH_C3[0] * SH_rest[8][0][index] * 3.f * 2.f * xy +
                             SH_C3[1] * SH_rest[9][0][index] * yz +
                             SH_C3[2] * SH_rest[10][0][index] * -2.f * xy +
@@ -939,16 +939,16 @@ __global__ void sh2rgb_backward_kernel(
                             SH_C3[2] * SH_rest[10][2][index] * 4.f * 2.f * yz +
                             SH_C3[3] * SH_rest[11][2][index] * 3.f * (2.f * zz - xx - yy) +
                             SH_C3[4] * SH_rest[12][2][index] * 4.f * 2.f * xz +
-                            SH_C3[5] * SH_rest[13][2][index] * (xx - yy));
+                            SH_C3[5] * SH_rest[13][2][index] * (xx - yy));*/
                     }
                 }
 
             }
 
 
-            dir_grad[batch_id][0][index] = dRGBdx[0] * rgb_grad[batch_id][0][index] + dRGBdx[1] * rgb_grad[batch_id][1][index] + dRGBdx[2] * rgb_grad[batch_id][2][index];
-            dir_grad[batch_id][1][index] = dRGBdy[0] * rgb_grad[batch_id][0][index] + dRGBdy[1] * rgb_grad[batch_id][1][index] + dRGBdy[2] * rgb_grad[batch_id][2][index];
-            dir_grad[batch_id][2][index] = dRGBdz[0] * rgb_grad[batch_id][0][index] + dRGBdz[1] * rgb_grad[batch_id][1][index] + dRGBdz[2] * rgb_grad[batch_id][2][index];
+            //dir_grad[batch_id][0][index] = dRGBdx[0] * rgb_grad[batch_id][0][index] + dRGBdx[1] * rgb_grad[batch_id][1][index] + dRGBdx[2] * rgb_grad[batch_id][2][index];
+            //dir_grad[batch_id][1][index] = dRGBdy[0] * rgb_grad[batch_id][0][index] + dRGBdy[1] * rgb_grad[batch_id][1][index] + dRGBdy[2] * rgb_grad[batch_id][2][index];
+            //dir_grad[batch_id][2][index] = dRGBdz[0] * rgb_grad[batch_id][0][index] + dRGBdz[1] * rgb_grad[batch_id][1][index] + dRGBdz[2] * rgb_grad[batch_id][2][index];
         }
 
         
@@ -964,7 +964,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
 
     at::Tensor sh_grad = torch::empty({ 1 ,C,P }, rgb_grad.options());
     at::Tensor sh_rest_grad = torch::zeros({ sh_rest_dim ,C,P }, rgb_grad.options());
-    at::Tensor dir_grad = torch::empty_like(dir);
+    at::Tensor dir_grad = torch::zeros_like(dir);
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
