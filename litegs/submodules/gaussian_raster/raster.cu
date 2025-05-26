@@ -169,7 +169,7 @@ __global__ void raster_forward_kernel(
                     any_active |= active_mask;
 
                     unsigned int alpha_valid_mask = 0xffffffffu;
-                    //alpha_valid_mask &= __hle2_mask(power, half2(1.0f/(1<<24), 1.0f / (1 << 24)));//TODO 1 ULP:2^(-14) * (0 + 1/1024)
+                    alpha_valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
                     reg_buffer[i].alpha = point_color_x2.a * fast_exp_approx(power);
                     alpha_valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
                     reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
@@ -595,7 +595,7 @@ __global__ void raster_backward_kernel(
                     alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), alpha);
 
                     unsigned int valid_mask = 0xffffffffu;
-                    //valid_mask &= __hle2_mask(power, half2(0, 0));
+                    valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
                     valid_mask &= __hge2_mask(alpha, half2(1.0f / 256, 1.0f / 256));
                     valid_mask &= __vcmpleu2(index_in_tile << 16 | index_in_tile, shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x]);
 

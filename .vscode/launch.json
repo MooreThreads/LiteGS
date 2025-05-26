@@ -39,7 +39,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "./example_train.py",
-            "args":["--sh_degree","3","-s","dataset/garden","-i","images","-m","output/garden","--eval","--start_checkpoint","output/garden/chkpnt20.pth"],
+            "args":["--sh_degree","3","-s","dataset/bicycle","-i","images","-m","output/bicycle","--eval","--start_checkpoint","output/bicycle/chkpnt175.pth"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false,

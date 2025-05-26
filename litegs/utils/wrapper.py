@@ -473,8 +473,8 @@ class GaussiansRasterFunc(torch.autograd.Function):
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
 
-        if grad_rgb_image.isnan().any():
-            breakpoint()
+        # if grad_rgb_image.isnan().any():
+        #     breakpoint()
         
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
@@ -488,11 +488,11 @@ class GaussiansRasterFunc(torch.autograd.Function):
         # _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
         # _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')
         # _grad_ndc=torch.tensor(np.load('./profiler_input_data/grad_ndc.npy'),device='cuda')
-        if grad_color.isnan().any() or grad_color.isinf().any() \
-            or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
-                or grad_cov2d_inv.isnan().any() or grad_cov2d_inv.isinf().any() \
-                    or grad_ndc.isnan().any() or grad_ndc.isinf().any():
-            breakpoint()
+        # if grad_color.isnan().any() or grad_color.isinf().any() \
+        #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
+        #         or grad_cov2d_inv.isnan().any() or grad_cov2d_inv.isinf().any() \
+        #             or grad_ndc.isnan().any() or grad_ndc.isinf().any():
+        #     breakpoint()
 
         grads = (
             None,
