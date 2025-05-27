@@ -169,7 +169,7 @@ __global__ void raster_forward_kernel(
                     any_active |= active_mask;
 
                     unsigned int alpha_valid_mask = 0xffffffffu;
-                    alpha_valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
+                    //alpha_valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
                     reg_buffer[i].alpha = point_color_x2.a * fast_exp_approx(power);
                     alpha_valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
                     reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
@@ -181,10 +181,6 @@ __global__ void raster_forward_kernel(
                     reg_buffer[i].r += (point_color_x2.r * weight);
                     reg_buffer[i].g += (point_color_x2.g * weight);
                     reg_buffer[i].b += (point_color_x2.b * weight);
-                    /*if (pixel_x == 1004 && pixel_y == 772 && i == 1 && index_in_tile == 272)
-                    {
-                        printf("forward: index:%d transmitance:%e power:%e\n", index_in_tile, float(reg_buffer[i].t.y), float(power.y));
-                    }*/
                     reg_buffer[i].t = reg_buffer[i].t * (half2(1.0f, 1.0f) - reg_buffer[i].alpha);
                 }
                 //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
@@ -595,7 +591,7 @@ __global__ void raster_backward_kernel(
                     alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), alpha);
 
                     unsigned int valid_mask = 0xffffffffu;
-                    valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
+                    //valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
                     valid_mask &= __hge2_mask(alpha, half2(1.0f / 256, 1.0f / 256));
                     valid_mask &= __vcmpleu2(index_in_tile << 16 | index_in_tile, shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x]);
 
@@ -605,10 +601,6 @@ __global__ void raster_backward_kernel(
                         reinterpret_cast<unsigned int*>(&G)[0] &= valid_mask;
 
                         reg_buffer[i].t = __h2div(reg_buffer[i].t,(half2(1.0f,1.0f) - alpha));//0-2^(-10)
-                        /*if (pixel_x == 1004 && pixel_y == 772 && i == 1 && float(alpha.y) != 0.0f)
-                        {
-                            printf("backward: index:%d transmitance:%e alpha:%e\n", index_in_tile, float(reg_buffer[i].t.y), float(alpha.y));
-                        }*/
                         grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
