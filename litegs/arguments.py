@@ -91,7 +91,7 @@ class OptimizationParams(ParamGroup):
         super().__init__(parser, "Optimization Parameters")
 
 class DensifyParams(ParamGroup):
-    densification_interval = 1
+    densification_interval = 5
     densify_from = 3
     densify_until = -1
     prune_interval = 5
@@ -101,6 +101,8 @@ class DensifyParams(ParamGroup):
     prune_large_point_from=40
     screen_size_threshold=128#tile
     percent_dense = 0.01
+    budget=20.0 #0.0 for official densify
+    densify_mode="multiplier"#final_count or multiplier
     def __init__(self, parser):
         super().__init__(parser, "Densify Parameters")
         
