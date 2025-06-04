@@ -65,9 +65,12 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     tile_start_index,sorted_pointId,b_visible=utils.wrapper.Binning.call_fused(ndc_pos,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
     if StatisticsHelperInst.bStart:
         StatisticsHelperInst.update_visible_count(b_visible)
-        def gradient_wrapper(tensor:torch.Tensor) -> torch.Tensor:
-            return tensor[:,:2].norm(dim=1)
-        StatisticsHelperInst.register_tensor_grad_callback('mean2d_grad',ndc_pos,StatisticsHelper.update_mean_std_compact,gradient_wrapper)
+        def gradient_statistic_handle(Inst:StatisticsHelper,mean2d_grad:torch.Tensor) -> None:
+            tensor_sum=mean2d_grad[:,:2].norm(dim=1)
+            tensor_square=tensor_sum*tensor_sum
+            Inst.update_mean_std('mean2d_grad',tensor_sum,tensor_square,b_visible,True)
+            return 
+        StatisticsHelperInst.register_tensor_grad_callback(ndc_pos,gradient_statistic_handle)
 
     #raster
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))

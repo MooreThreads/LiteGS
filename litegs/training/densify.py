@@ -80,13 +80,14 @@ class DensityControllerBase:
     
 class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad()
-    def __init__(self,screen_extent:int,densify_params:DensifyParams,bCluster:bool)->None:
+    def __init__(self,screen_extent:int,densify_params:DensifyParams,bCluster:bool,init_points_num:int)->None:
         self.grad_threshold=densify_params.densify_grad_threshold
         self.min_opacity=densify_params.opacity_threshold
         self.percent_dense=densify_params.percent_dense
         self.prune_large_point_from=densify_params.prune_large_point_from
         self.screen_extent=screen_extent
         self.max_screen_size=densify_params.screen_size_threshold
+        self.init_points_num=init_points_num
         super(DensityControllerOfficial,self).__init__(densify_params,bCluster)
         return
     
@@ -103,7 +104,7 @@ class DensityControllerOfficial(DensityControllerBase):
 
     @torch.no_grad()
     def get_clone_mask(self,actived_scale:torch.Tensor)->torch.Tensor:
-        mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad')
+        mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad').squeeze()
         abnormal_mask = mean2d_grads >= self.grad_threshold
         tiny_pts_mask = actived_scale.max(dim=0).values <= self.percent_dense*self.screen_extent
         selected_pts_mask = abnormal_mask&tiny_pts_mask
@@ -111,7 +112,7 @@ class DensityControllerOfficial(DensityControllerBase):
     
     @torch.no_grad()
     def get_split_mask(self,actived_scale:torch.Tensor,N=2)->torch.Tensor:
-        mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad')
+        mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad').squeeze()
         abnormal_mask = mean2d_grads >= self.grad_threshold
         large_pts_mask = actived_scale.max(dim=0).values > self.percent_dense*self.screen_extent
         selected_pts_mask=abnormal_mask&large_pts_mask
@@ -258,9 +259,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         else:
             assert(False)
 
-        self.init_points_num=init_points_num
-
-        super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster)
+        super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster,init_points_num)
         return
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
@@ -279,10 +278,10 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
             return ret_value
 
-        all_grads=StatisticsHelperInst.get_mean('mean2d_grad')
-        all_opacity=opacity.sigmoid()
+        frag_err_std,frag_count=StatisticsHelperInst.get_std('fragment_err')
+        score=frag_err_std.sum(dim=(0,1))*frag_count
 
-        return all_grads
+        return score
     
     @torch.no_grad()
     def split_and_clone(self,optimizer:torch.optim.Optimizer,epoch:int):
