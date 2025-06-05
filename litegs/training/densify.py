@@ -281,7 +281,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         frag_err_std,frag_count=StatisticsHelperInst.get_std('fragment_err')
         score=frag_err_std.sum(dim=(0,1))*frag_count
 
-        return score
+        return score.clamp_min_(0)
     
     @torch.no_grad()
     def split_and_clone(self,optimizer:torch.optim.Optimizer,epoch:int):
@@ -295,9 +295,9 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         budget=max(int(cur_target_count-xyz.shape[-1]),0)
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
-        sorted_socre_index=score.argsort(descending=True)
-        selected_index=sorted_socre_index[:budget]
-        #selected_index = torch.multinomial(score, budget, replacement=False)
+        #sorted_socre_index=score.argsort(descending=True)
+        #selected_index=sorted_socre_index[:budget]
+        selected_index = torch.multinomial(score, budget, replacement=False)
         clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
         split_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values > self.percent_dense*self.screen_extent)]
 
