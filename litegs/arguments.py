@@ -101,7 +101,7 @@ class DensifyParams(ParamGroup):
     prune_large_point_from=40
     screen_size_threshold=128#tile
     percent_dense = 0.01
-    budget=20.0 #0.0 for official densify
+    budget=15.0 #0.0 for official densify
     densify_mode="multiplier"#final_count or multiplier
     def __init__(self, parser):
         super().__init__(parser, "Densify Parameters")

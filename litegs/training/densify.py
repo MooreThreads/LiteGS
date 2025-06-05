@@ -297,6 +297,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
         sorted_socre_index=score.argsort(descending=True)
         selected_index=sorted_socre_index[:budget]
+        #selected_index = torch.multinomial(score, budget, replacement=False)
         clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
         split_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values > self.percent_dense*self.screen_extent)]
 

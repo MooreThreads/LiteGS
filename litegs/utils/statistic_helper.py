@@ -68,7 +68,8 @@ class StatisticsHelper:
             assert(self.compact_mask is not None)
             tensor_sum=tensor_sum.reshape(*tensor_sum.shape[:-1],-1,self.chunk_size)
             square_sum=square_sum.reshape(*square_sum.shape[:-1],-1,self.chunk_size)
-            count=count.reshape(-1,self.chunk_size)
+            if count.__class__==torch.Tensor:
+                count=count.reshape(-1,self.chunk_size)
         
         data:MeanStdData=self.mean_and_std.get(key,None)
         if data is None:

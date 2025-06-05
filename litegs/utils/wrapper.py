@@ -479,12 +479,14 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,grad_color_square_sum,fragment_weight_sum=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,err_sum,err_square_sum,fragment_weight_sum=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
                                                                                           transmitance,lst_contributor,
                                                                                           grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
                                                                                           img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
         if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_mean_std("fragment_err",grad_color,grad_color_square_sum,fragment_weight_sum,True)
+            #if err_sum.isinf().any() or err_square_sum.isinf().any():
+            #    breakpoint()
+            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_weight_sum,True)
 
         # _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
         # _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
