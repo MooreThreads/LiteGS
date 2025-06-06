@@ -75,7 +75,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     #init
     total_epoch=int(op.iterations/len(trainingset))
     if dp.densify_until<0:
-        dp.densify_until=int(int(total_epoch/2)/dp.opacity_reset_interval)*dp.opacity_reset_interval
+        dp.densify_until=int(int(total_epoch/2)/dp.opacity_reset_interval)*dp.opacity_reset_interval+1
     density_controller=densify.DensityControllerTamingGS(norm_radius,dp,pp.cluster_size>0,init_points_num)
     StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],density_controller.is_densify_actived)
     progress_bar = tqdm(range(start_epoch, total_epoch), desc="Training progress")
