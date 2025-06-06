@@ -280,6 +280,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
         frag_err_std,frag_count=StatisticsHelperInst.get_std('fragment_err')
         score=frag_err_std.sum(dim=(0,1))*frag_count
+        score=score.nan_to_num(0)
 
         return score.clamp_min_(0)
     
@@ -292,7 +293,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
 
         cur_target_count = (self.target_points_num - self.init_points_num) / (self.densify_params.densify_until - self.densify_params.densify_from) * (epoch-self.densify_params.densify_from)+self.init_points_num
-        budget=max(int(cur_target_count-xyz.shape[-1]),0)
+        budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
         #sorted_socre_index=score.argsort(descending=True)
