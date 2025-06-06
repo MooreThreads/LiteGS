@@ -623,16 +623,18 @@ __global__ void raster_backward_kernel(
                         reg_buffer[i].g += alpha * (point_color_x2.g - reg_buffer[i].g);
                         reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
 
+                        grad_a += d_alpha * G;
+                        half2 d_G = point_color_x2.a * d_alpha;
+                        half2 d_power = G * d_G;//G * point_alpha * d_alpha
                         if (enable_statistic)
                         {
                             fragment_count += (0x00010001u & valid_mask);
-                            err += d_alpha;
-                            err_square += d_alpha * half2(INV_SCALER, INV_SCALER) * d_alpha;
+                            half2 cur_weight = alpha;
+                            half2 cur_err = d_alpha;
+                            weight += cur_weight;
+                            err += cur_weight * cur_err;
+                            err_square += cur_weight * (cur_err * half2(INV_SCALER, INV_SCALER) * cur_err);
                         }
-
-                        grad_a += d_alpha * G;
-                        half2 d_G = point_color_x2.a * d_alpha;
-                        half2 d_power = G * d_G;
                         half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
                         half2 grad_neg_half_c_x2 = d_power * half2(2 * i, 2 * i + 1) * half2(2 * i, 2 * i + 1);
                         half2 grad_basic_x2 = d_power;
@@ -663,15 +665,15 @@ __global__ void raster_backward_kernel(
                         warp_reduce_sum<float, false>(err_sum);
                         float err_square_sum{ float(err_square.x + err_square.y) * INV_SCALER };
                         warp_reduce_sum<float, false>(err_square_sum);
-                        unsigned int reduced_fragment_count = (fragment_count >> 16u) + (fragment_count & 0xffffu);
-                        warp_reduce_sum<unsigned int, false>(reduced_fragment_count);
-                        //float weight_sum = float(weight.x + weight.y) * INV_SCALER;
-                        //warp_reduce_sum<float, false>(weight_sum);
+                        //unsigned int reduced_fragment_count = (fragment_count >> 16u) + (fragment_count & 0xffffu);
+                        //warp_reduce_sum<unsigned int, false>(reduced_fragment_count);
+                        float weight_sum = float(weight.x + weight.y);
+                        warp_reduce_sum<float, false>(weight_sum);
                         if (threadIdx.x == 0)
                         {
                             atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square_sum);
                             atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum);
-                            atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], float(reduced_fragment_count));
+                            atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight_sum);
                         }
                     }
 
