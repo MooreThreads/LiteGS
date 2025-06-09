@@ -14,8 +14,6 @@ from .. import scene
 from . import optimizer
 from ..data import CameraFrameDataset
 from .. import render
-from .optimizer import SparseGaussianAdam
-from ..utils import wrapper
 from ..utils.statistic_helper import StatisticsHelperInst
 from . import densify
 
