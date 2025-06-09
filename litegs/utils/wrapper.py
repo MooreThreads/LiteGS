@@ -488,10 +488,6 @@ class GaussiansRasterFunc(torch.autograd.Function):
             #    breakpoint()
             StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_weight_sum,True)
 
-        # _grad_color=torch.tensor(np.load('./profiler_input_data/grad_color.npy'),device='cuda')
-        # _grad_opacities=torch.tensor(np.load('./profiler_input_data/grad_opacities.npy'),device='cuda')
-        # _grad_cov2d_inv=torch.tensor(np.load('./profiler_input_data/grad_cov2d_inv.npy'),device='cuda')
-        # _grad_ndc=torch.tensor(np.load('./profiler_input_data/grad_ndc.npy'),device='cuda')
         # if grad_color.isnan().any() or grad_color.isinf().any() \
         #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
         #         or grad_cov2d_inv.isnan().any() or grad_cov2d_inv.isinf().any() \
