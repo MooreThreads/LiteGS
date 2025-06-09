@@ -153,7 +153,7 @@ class CameraFrameDataset(Dataset):
         self.cameras=cameras
         self.frames=frames
         self.downsample=downsample
-        self.frustumplanes=[]
+        
         if bDevice:
             for camera in cameras.values():
                 camera.proj_matrix=torch.Tensor(camera.proj_matrix).cuda()
@@ -161,12 +161,32 @@ class CameraFrameDataset(Dataset):
                 frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
                 for key in frame.image.keys():
                     frame.image[key]=torch.tensor(frame.image[key]).cuda()
+        
+        #init frustumplanes
+        self.frustumplanes=[]
         for frame in self.frames:
             frustumplane=self.__get_frustumplane(frame.get_viewmatrix(),self.cameras[frame.camera_id].get_project_matrix())
             if bDevice:
                 self.frustumplanes.append(torch.Tensor(frustumplane).cuda())
             else:
                 self.frustumplanes.append(frustumplane)
+
+        #init ray_d
+        self.ray_d=[]
+        for frame in frames:
+            output_shape=frame.image[downsample].shape
+            half_W=int(output_shape[2]*0.5)
+            half_H=int(output_shape[1]*0.5)
+            focal_length=(cameras[frame.camera_id].proj_matrix[0,0]*half_W+cameras[frame.camera_id].proj_matrix[1,1]*half_H)*0.5
+            X=(torch.arange(-half_W,half_W,1,device='cuda')+0.5).unsqueeze(0).repeat(output_shape[1],1)
+            Y=(torch.arange(-half_H,half_H,1,device='cuda')+0.5).unsqueeze(1).repeat(1,output_shape[2])
+            Z=torch.ones([output_shape[1],output_shape[2]],device='cuda')*focal_length
+            camera_ray_d=torch.concat([X.unsqueeze(-1),Y.unsqueeze(-1),Z.unsqueeze(-1)],dim=-1)
+            #camera_ray_d=torch.nn.functional.normalize(camera_ray_d,dim=-1)
+            world_ray_d=camera_ray_d@(frame.get_viewmatrix()[:3,:3].transpose(0,1))
+            world_ray_d=torch.nn.functional.normalize(world_ray_d,dim=-1)
+            self.ray_d.append(world_ray_d)
+            
         return
     
     def __len__(self):
@@ -177,6 +197,8 @@ class CameraFrameDataset(Dataset):
         view_matrix=self.frames[idx].get_viewmatrix()
         proj_matrix=self.cameras[self.frames[idx].camera_id].get_inv_z_project_matrix()
         frustumplane=self.frustumplanes[idx]
+        ray_o=self.frames[idx].get_camera_center()
+        ray_d=self.ray_d[idx]
         return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(frustumplane),torch.Tensor(image)
     
     def get_norm(self)->tuple[float,float]:
