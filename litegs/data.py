@@ -175,11 +175,11 @@ class CameraFrameDataset(Dataset):
         self.ray_d=[]
         for frame in frames:
             output_shape=frame.image[downsample].shape
-            half_W=int(output_shape[2]*0.5)
-            half_H=int(output_shape[1]*0.5)
+            half_W=output_shape[2]*0.5
+            half_H=output_shape[1]*0.5
             focal_length=(cameras[frame.camera_id].proj_matrix[0,0]*half_W+cameras[frame.camera_id].proj_matrix[1,1]*half_H)*0.5
-            X=(torch.arange(-half_W,half_W,1,device='cuda')+0.5).unsqueeze(0).repeat(output_shape[1],1)
-            Y=(torch.arange(-half_H,half_H,1,device='cuda')+0.5).unsqueeze(1).repeat(1,output_shape[2])
+            X=(torch.arange(0,output_shape[2],1,device='cuda')+0.5).unsqueeze(0).repeat(output_shape[1],1)-half_W
+            Y=(torch.arange(0,output_shape[1],1,device='cuda')+0.5).unsqueeze(1).repeat(1,output_shape[2])-half_H
             Z=torch.ones([output_shape[1],output_shape[2]],device='cuda')*focal_length
             camera_ray_d=torch.concat([X.unsqueeze(-1),Y.unsqueeze(-1),Z.unsqueeze(-1)],dim=-1)
             #camera_ray_d=torch.nn.functional.normalize(camera_ray_d,dim=-1)
