@@ -290,10 +290,10 @@ __global__ void create_ROI_kernel(
                 int max_y = ceil(coord.y + abs(axis[0].y) + abs(axis[1].y));
                 int2 left_up{ min_x ,min_y };
                 int2 right_down{ max_x ,max_y };
-                tensor_left_up[view_id][0][index] = min(max(left_up.x, 0), img_w);
-                tensor_left_up[view_id][1][index] = min(max(left_up.y, 0), img_h);
-                tensor_right_down[view_id][0][index] = min(max(right_down.x, 0), img_w);
-                tensor_right_down[view_id][1][index] = min(max(right_down.y, 0), img_h);
+                tensor_left_up[view_id][0][index] = left_up.x;
+                tensor_left_up[view_id][1][index] = left_up.y;
+                tensor_right_down[view_id][0][index] = right_down.x;
+                tensor_right_down[view_id][1][index] = right_down.y;
             }
             
         }

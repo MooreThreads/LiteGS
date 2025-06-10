@@ -668,10 +668,10 @@ class Binning(BaseWrapper):
         pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
         tile_left_up=torch.empty_like(pixel_left_up)
         tile_right_down=torch.empty_like(pixel_right_down)
-        tile_left_up[:,0,:]=(pixel_left_up[:,0,:]/float(tile_size[1])).int()
-        tile_right_down[:,0,:]=(pixel_right_down[:,0,:]/float(tile_size[1])).ceil().int()
-        tile_left_up[:,1,:]=(pixel_left_up[:,1,:]/float(tile_size[0])).int()
-        tile_right_down[:,1,:]=(pixel_right_down[:,1,:]/float(tile_size[0])).ceil().int()
+        tile_left_up[:,0,:]=(pixel_left_up[:,0,:]/float(tile_size[1])).int().clamp(0,img_tile_shape[1])
+        tile_right_down[:,0,:]=(pixel_right_down[:,0,:]/float(tile_size[1])).ceil().int().clamp(0,img_tile_shape[1])
+        tile_left_up[:,1,:]=(pixel_left_up[:,1,:]/float(tile_size[0])).int().clamp(0,img_tile_shape[0])
+        tile_right_down[:,1,:]=(pixel_right_down[:,1,:]/float(tile_size[0])).ceil().int().clamp(0,img_tile_shape[0])
         rect_length=tile_right_down-tile_left_up
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
