@@ -501,7 +501,8 @@ __global__ void raster_backward_kernel(
     constexpr float SCALER = 128.0f;
     constexpr float INV_SCALER = 1.0f / 128;
 
-    __shared__ half2 shared_img_grad[3][PIXELS_PER_THREAD][4 * 32];
+    __shared__ half2 shared_img_grad[4][PIXELS_PER_THREAD][4 * 32];
+    __shared__ half2 final_t[PIXELS_PER_THREAD][4 * 32];
     __shared__ unsigned int shared_last_contributor[PIXELS_PER_THREAD][4 * 32];//ushort2
 
     const int batch_id = blockIdx.y;
@@ -533,6 +534,7 @@ __global__ void raster_backward_kernel(
                 float t0 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x];
                 float t1 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x];
                 reg_buffer[i].t = half2(t0 * SCALER, t1 * SCALER);
+                final_t[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t;
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
                     d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
@@ -543,6 +545,9 @@ __global__ void raster_backward_kernel(
                 shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
                     d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
                     d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
+                    d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
+                    d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
                 
                 int last0 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x] - 1;
                 int last1 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x] - 1;
@@ -622,6 +627,11 @@ __global__ void raster_backward_kernel(
                         reg_buffer[i].r += alpha * (point_color_x2.r - reg_buffer[i].r);//0-256
                         reg_buffer[i].g += alpha * (point_color_x2.g - reg_buffer[i].g);
                         reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
+                        if (enable_trans_grad)
+                        {
+                            d_alpha -= __h2div(shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x], 
+                                (half2(1.0f, 1.0f) - alpha));
+                        }
 
                         grad_a += d_alpha * G;
                         half2 d_G = point_color_x2.a * d_alpha;
@@ -671,9 +681,14 @@ __global__ void raster_backward_kernel(
                         warp_reduce_sum<float, false>(weight_sum);
                         if (threadIdx.x == 0)
                         {
-                            atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square_sum);
-                            atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum);
-                            atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight_sum);
+                            //depth -> recover weight from ndc space to world space
+                            //S_{z}:S_{0.5}=(0.5*(f-n)+n)^2:(z*(f-n)+n)^2
+                            //float length = 1 / (min(max(params.depth, 0.1f),1.0f) * (100.0f - 0.01f) + 0.01f);
+                            //float area = length* length;
+                            float area = 1.0f;
+                            atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square_sum* area);
+                            atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum* area);
+                            atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight_sum* area);
                         }
                     }
 
@@ -821,7 +836,7 @@ std::vector<at::Tensor> rasterize_backward(
     //dim3 Thread3d(32, 1);
     if (enable_statistic == false)
     {
-        raster_backward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -840,7 +855,7 @@ std::vector<at::Tensor> rasterize_backward(
     }
     else
     {
-        raster_backward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
