@@ -84,7 +84,6 @@ class DensityControllerOfficial(DensityControllerBase):
         self.grad_threshold=densify_params.densify_grad_threshold
         self.min_opacity=densify_params.opacity_threshold
         self.percent_dense=densify_params.percent_dense
-        self.prune_large_point_from=densify_params.prune_large_point_from
         self.screen_extent=screen_extent
         self.max_screen_size=densify_params.screen_size_threshold
         self.init_points_num=init_points_num
@@ -262,24 +261,24 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster,init_points_num)
         return
     
+    @torch.no_grad()
+    def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
+        prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
+
+        _,frag_weight=StatisticsHelperInst.get_std('fragment_err')
+        invisible = frag_weight<1
+        prune_mask[:invisible.shape[0]]|=invisible
+        print("weight prune",invisible.sum())
+
+        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
+        prune_mask[:big_points_vs.shape[0]]|=big_points_vs
+        
+        return prune_mask
+    
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
 
-        score_coefficients = {'view_importance': 50, 'edge_importance': 50, 'mse_importance': 50, 'grad_importance': 25, 'dist_importance': 50, 'opac_importance': 100, 'dept_importance': 5, 'loss_importance': 10, 'radii_importance': 10, 'scale_importance': 25, 'count_importance': 0.1, 'blend_importance': 50}
-        
-        def normalize(config_value, value_tensor):
-            multiplier = config_value
-            value_tensor[value_tensor.isnan()] = 0
-
-            valid_indices = (value_tensor > 0)
-            valid_value = value_tensor[valid_indices].to(torch.float32)
-
-            ret_value = torch.zeros_like(value_tensor, dtype=torch.float32)
-            ret_value[valid_indices] = multiplier * (valid_value / torch.median(valid_value))
-
-            return ret_value
-
-        frag_err_std,frag_count=StatisticsHelperInst.get_std('fragment_err')
-        score=frag_err_std.sum(dim=(0,1))*frag_count
+        frag_err_std,frag_weight=StatisticsHelperInst.get_std('fragment_err')
+        score=frag_err_std.sum(dim=(0,1))*frag_weight
         score=score.nan_to_num(0)
 
         return score.clamp_min_(0)
