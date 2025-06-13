@@ -72,7 +72,7 @@ class PipelineParams(ParamGroup):
     sparse_grad = True
     spatial_refine_interval = 5
     device_preload = True
-    enable_transmitance=False
+    enable_transmitance=True
     enable_depth=False
     def __init__(self, parser):
         super().__init__(parser, "Pipeline Parameters")
@@ -94,11 +94,10 @@ class DensifyParams(ParamGroup):
     densification_interval = 5
     densify_from = 3
     densify_until = -1
-    prune_interval = 5
+    prune_interval = 10
     opacity_reset_interval = 10
     densify_grad_threshold = 0.00015
     opacity_threshold=0.005
-    prune_large_point_from=40
     screen_size_threshold=128#tile
     percent_dense = 0.01
     budget=15.0 #0.0 for official densify
