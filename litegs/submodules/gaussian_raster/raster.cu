@@ -491,8 +491,8 @@ __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,         //[batch,point_num,9]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_err_sum,  //[batch,3,point_num]
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_err_square_sum,  //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_err_sum,  //[batch,1,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_err_square_sum,  //[batch,1,point_num]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_fragment_weight_sum,  //[batch,1,point_num]
     int tiles_num_x, int img_h, int img_w)
 {
@@ -825,8 +825,8 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor d_color = torch::zeros({ batch_num,3,points_num }, packed_params.options());
     at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
     at::Tensor packed_grad = torch::zeros({ batch_num,points_num,sizeof(PackedGrad)/sizeof(float)}, packed_params.options());
-    at::Tensor err_square_sum = torch::zeros({ batch_num,3,points_num }, packed_params.options());
-    at::Tensor err_sum = torch::zeros({ batch_num,3,points_num }, packed_params.options());
+    at::Tensor err_square_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
+    at::Tensor err_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
     at::Tensor fragment_weight_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
     
     int tiles_per_block = 4;
