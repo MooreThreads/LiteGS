@@ -43,7 +43,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     test_loader=None
     if lp.eval:
         testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
-        test_loader = DataLoader(testset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
+        test_loader = DataLoader(testset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
     norm_trans,norm_radius=trainingset.get_norm()
 
     #torch parameter
@@ -105,9 +105,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)
-                # if pp.enable_transmitance:#example for transimitance grad
-                #     trans_loss=transmitance.square().mean()*0.01
-                #     loss+=trans_loss
+                #loss+=torch.nn.functional.normalize(culled_scale.exp(),dim=0).var(dim=0).mean()*1e-1
+                loss+=(culled_opacity.sigmoid()*culled_opacity.sigmoid()).mean()*0.01
+                if pp.enable_transmitance:#example for transimitance grad
+                    trans_loss=transmitance.square().mean()*0.01
+                    loss+=trans_loss
                 # if pp.enable_depth:#example for depth grad
                 #     depth_loss=(1.0-depth).square().mean()*0.01
                 #     loss+=depth_loss
