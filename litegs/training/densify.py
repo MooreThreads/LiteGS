@@ -155,9 +155,9 @@ class DensityControllerOfficial(DensityControllerBase):
         stds=scale[...,split_mask].exp()
         means=torch.zeros((3,stds.size(-1)),device="cuda")
         samples = torch.normal(mean=means, std=stds).unsqueeze(0)
-        transform_matrix=wrapper.CreateTransformMatrix.call_fused(scale[...,split_mask].exp(),torch.nn.functional.normalize(rot[...,split_mask],dim=0))
-        rotation_matrix=transform_matrix[:3,:3]
-        shift=(samples.permute(2,0,1))@rotation_matrix.permute(2,0,1)
+        transform_matrix=wrapper.CreateTransformMatrix.call_fused(torch.ones_like(scale[...,split_mask].exp()),torch.nn.functional.normalize(rot[...,split_mask],dim=0))
+        transform_matrix=transform_matrix[:3,:3]
+        shift=(samples.permute(2,0,1))@transform_matrix.permute(2,0,1)
         shift=shift.permute(1,2,0).squeeze(0)
         
         split_xyz=xyz[...,split_mask]+shift
@@ -305,9 +305,9 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         stds=scale[...,split_index].exp()
         means=torch.zeros((3,stds.size(-1)),device="cuda")
         samples = torch.normal(mean=means, std=stds).unsqueeze(0)
-        transform_matrix=wrapper.CreateTransformMatrix.call_fused(scale[...,split_index].exp(),torch.nn.functional.normalize(rot[...,split_index],dim=0))
-        rotation_matrix=transform_matrix[:3,:3]
-        shift=(samples.permute(2,0,1))@rotation_matrix.permute(2,0,1)
+        transform_matrix=wrapper.CreateTransformMatrix.call_fused(torch.ones_like(scale[...,split_index]),torch.nn.functional.normalize(rot[...,split_index],dim=0))
+        transform_matrix=transform_matrix[:3,:3]
+        shift=(samples.permute(2,0,1))@transform_matrix.permute(2,0,1)
         shift=shift.permute(1,2,0).squeeze(0)
         
         split_xyz=xyz[...,split_index]+shift
