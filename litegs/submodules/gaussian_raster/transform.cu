@@ -27,23 +27,28 @@ __global__ void jacobian_rayspace_kernel(
     int batch_id = blockIdx.y;
     if (batch_id < translated_position.size(0) && index < translated_position.size(2))
     {
-        float focalx = proj_matrix[batch_id][0][0]*output_w*0.5;
-        float focaly = proj_matrix[batch_id][1][1]*output_h*0.5;
+        float focalx = proj_matrix[batch_id][0][0]*output_w*0.5f;
+        float focaly = proj_matrix[batch_id][1][1]*output_h*0.5f;
+        float3 t{ translated_position[batch_id][0][index] ,translated_position[batch_id][1][index] ,translated_position[batch_id][2][index] };
+        float limit_x = t.z / proj_matrix[batch_id][0][0] * 1.3f;
+        float limit_y = t.z / proj_matrix[batch_id][1][1] * 1.3f;
+        t.x = max(min(t.x, limit_x), -limit_x);
+        t.y = max(min(t.y, limit_y), -limit_y);
 
-        float reciprocal_tz = 1.0f/max(translated_position[batch_id][2][index],1e-2f);//near plane 0.01
+        float reciprocal_tz = 1.0f/max(t.z,1e-2f);//near plane 0.01
         float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
 
         jacobian[batch_id][0][0][index] = focalx * reciprocal_tz;
         jacobian[batch_id][1][1][index] = focaly * reciprocal_tz;
         if (TRNASPOSE)
         {
-            jacobian[batch_id][0][2][index] = -focalx * translated_position[batch_id][0][index] * square_reciprocal_tz;
-            jacobian[batch_id][1][2][index] = -focaly * translated_position[batch_id][1][index] * square_reciprocal_tz;
+            jacobian[batch_id][0][2][index] = -focalx * t.x * square_reciprocal_tz;
+            jacobian[batch_id][1][2][index] = -focaly * t.y * square_reciprocal_tz;
         }
         else
         {
-            jacobian[batch_id][2][0][index] = -focalx * translated_position[batch_id][0][index] * square_reciprocal_tz;
-            jacobian[batch_id][2][1][index] = -focaly * translated_position[batch_id][1][index] * square_reciprocal_tz;
+            jacobian[batch_id][2][0][index] = -focalx * t.x * square_reciprocal_tz;
+            jacobian[batch_id][2][1][index] = -focaly * t.y * square_reciprocal_tz;
         }
     }
 }
