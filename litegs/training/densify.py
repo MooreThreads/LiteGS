@@ -80,7 +80,7 @@ class DensityControllerBase:
     
 class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad()
-    def __init__(self,screen_extent:int,densify_params:DensifyParams,bCluster:bool,init_points_num:int)->None:
+    def __init__(self,screen_extent:float,densify_params:DensifyParams,bCluster:bool,init_points_num:int)->None:
         self.grad_threshold=densify_params.densify_grad_threshold
         self.min_opacity=densify_params.opacity_threshold
         self.percent_dense=densify_params.percent_dense
@@ -137,7 +137,6 @@ class DensityControllerOfficial(DensityControllerBase):
             prune_mask[del_indices]=True
         #print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
         self._prune_optimizer(~prune_mask,optimizer)
-        optimizer.state.clear()#prune large point damage the img
         return
 
     @torch.no_grad()
@@ -163,12 +162,10 @@ class DensityControllerOfficial(DensityControllerBase):
         split_xyz=xyz[...,split_mask]+shift
         clone_xyz=xyz[...,clone_mask]
         append_xyz=torch.cat((split_xyz,clone_xyz),dim=-1)
-        xyz.data[...,split_mask]-=shift
         
         split_scale = (scale[...,split_mask].exp() / (0.8*2)).log()
         clone_scale = scale[...,clone_mask]
         append_scale = torch.cat((split_scale,clone_scale),dim=-1)
-        scale.data[...,split_mask]=split_scale
 
         split_rot=rot[...,split_mask]
         clone_rot=rot[...,clone_mask]
@@ -261,25 +258,27 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster,init_points_num)
         return
     
-    @torch.no_grad()
-    def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
-        prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
+    # @torch.no_grad()
+    # def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
+    #     prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
 
-        _,frag_weight=StatisticsHelperInst.get_std('fragment_err')
-        invisible = frag_weight<1
-        prune_mask[:invisible.shape[0]]|=invisible
-        print("weight prune",invisible.sum())
+    #     _,frag_weight=StatisticsHelperInst.get_std('fragment_err')
+    #     invisible = frag_weight==0
+    #     prune_mask[:invisible.shape[0]]|=invisible
 
-        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-        prune_mask[:big_points_vs.shape[0]]|=big_points_vs
+    #     big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
+    #     prune_mask[:big_points_vs.shape[0]]|=big_points_vs
         
-        return prune_mask
+    #     return prune_mask
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
 
         frag_err_std,frag_weight=StatisticsHelperInst.get_std('fragment_err')
-        score=frag_err_std.sum(dim=(0,1))*frag_weight
+        score=torch.ones_like(frag_weight)
         score=score.nan_to_num(0)
+
+        mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad').squeeze()
+        score[mean2d_grads<0.0002]=0
 
         return score.clamp_min_(0)
     
@@ -295,11 +294,12 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
+        score[(scale.exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]=0
         #sorted_socre_index=score.argsort(descending=True)
         #selected_index=sorted_socre_index[:budget]
         selected_index = torch.multinomial(score, budget, replacement=False)
-        clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
-        split_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values > self.percent_dense*self.screen_extent)]
+        #clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
+        split_index=selected_index
 
         #split
         stds=scale[...,split_index].exp()
@@ -311,30 +311,30 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         shift=shift.permute(1,2,0).squeeze(0)
         
         split_xyz=xyz[...,split_index]+shift
-        clone_xyz=xyz[...,clone_index]
-        append_xyz=torch.cat((split_xyz,clone_xyz),dim=-1)
+        #clone_xyz=xyz[...,clone_index]
+        append_xyz=split_xyz#torch.cat((split_xyz,clone_xyz),dim=-1)
         xyz.data[...,split_index]-=shift
         
         split_scale = (scale[...,split_index].exp() / (0.8*2)).log()
-        clone_scale = scale[...,clone_index]
-        append_scale = torch.cat((split_scale,clone_scale),dim=-1)
+        #clone_scale = scale[...,clone_index]
+        append_scale = split_scale#torch.cat((split_scale,clone_scale),dim=-1)
         scale.data[...,split_index]=split_scale
 
         split_rot=rot[...,split_index]
-        clone_rot=rot[...,clone_index]
-        append_rot = torch.cat((split_rot,clone_rot),dim=-1)
+        #clone_rot=rot[...,clone_index]
+        append_rot = split_rot#torch.cat((split_rot,clone_rot),dim=-1)
 
         split_sh_0=sh_0[...,split_index]
-        clone_sh_0=sh_0[...,clone_index]
-        append_sh_0 = torch.cat((split_sh_0,clone_sh_0),dim=-1)
+        #clone_sh_0=sh_0[...,clone_index]
+        append_sh_0 = split_sh_0#torch.cat((split_sh_0,clone_sh_0),dim=-1)
 
         split_sh_rest=sh_rest[...,split_index]
-        clone_sh_rest=sh_rest[...,clone_index]
-        append_sh_rest = torch.cat((split_sh_rest,clone_sh_rest),dim=-1)
+        #clone_sh_rest=sh_rest[...,clone_index]
+        append_sh_rest = split_sh_rest#torch.cat((split_sh_rest,clone_sh_rest),dim=-1)
 
         split_opacity=opacity[...,split_index]
-        clone_opacity=opacity[...,clone_index]
-        append_opacity = torch.cat((split_opacity,clone_opacity),dim=-1)
+        #clone_opacity=opacity[...,clone_index]
+        append_opacity = split_opacity#torch.cat((split_opacity,clone_opacity),dim=-1)
 
         if self.bCluster:
             N=append_xyz.shape[-1]
