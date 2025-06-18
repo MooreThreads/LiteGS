@@ -83,7 +83,7 @@ class OptimizationParams(ParamGroup):
     position_lr_final = 0.0000016
     position_lr_max_steps = 30000
     feature_lr = 0.0025
-    opacity_lr = 0.05
+    opacity_lr = 0.025
     scaling_lr = 0.005
     rotation_lr = 0.001
     lambda_dssim = 0.2
@@ -91,7 +91,7 @@ class OptimizationParams(ParamGroup):
         super().__init__(parser, "Optimization Parameters")
 
 class DensifyParams(ParamGroup):
-    densification_interval = 5
+    densification_interval = 2
     densify_from = 3
     densify_until = -1
     prune_interval = 10
