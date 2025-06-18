@@ -70,7 +70,7 @@ def get_optimizer(xyz:torch.nn.Parameter,scale:torch.nn.Parameter,rot:torch.nn.P
     l = [
         {'params': [xyz], 'lr': opt_setting.position_lr_init * spatial_lr_scale, "name": "xyz"},
         {'params': [sh_0], 'lr': opt_setting.feature_lr, "name": "sh_0"},
-        {'params': [sh_rest], 'lr': opt_setting.feature_lr / 20.0, "name": "sh_rest"},
+        {'params': [sh_rest], 'lr': opt_setting.feature_lr / 10.0, "name": "sh_rest"},
         {'params': [opacity], 'lr': opt_setting.opacity_lr, "name": "opacity"},
         {'params': [scale], 'lr': opt_setting.scaling_lr, "name": "scale"},
         {'params': [rot], 'lr': opt_setting.rotation_lr, "name": "rot"}
