@@ -273,14 +273,13 @@ class DensityControllerTamingGS(DensityControllerOfficial):
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
 
-        frag_err_std,frag_weight=StatisticsHelperInst.get_std('fragment_err')
-        score=torch.ones_like(frag_weight)
-        score=score.nan_to_num(0)
+        frag_err_var,weight=StatisticsHelperInst.get_std('fragment_err')
+        
+        score=frag_err_var.sqrt()*weight
+        score=score.squeeze().nan_to_num(0)
+        score.clamp_min_(0)
 
-        mean2d_grads=StatisticsHelperInst.get_mean('mean2d_grad').squeeze()
-        score[mean2d_grads<0.0002]=0
-
-        return score.clamp_min_(0)
+        return score
     
     @torch.no_grad()
     def split_and_clone(self,optimizer:torch.optim.Optimizer,epoch:int):
@@ -294,12 +293,9 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
-        score[(scale.exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]=0
-        #sorted_socre_index=score.argsort(descending=True)
-        #selected_index=sorted_socre_index[:budget]
         selected_index = torch.multinomial(score, budget, replacement=False)
-        #clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
-        split_index=selected_index
+        clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
+        split_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values > self.percent_dense*self.screen_extent)]
 
         #split
         stds=scale[...,split_index].exp()
@@ -311,30 +307,28 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         shift=shift.permute(1,2,0).squeeze(0)
         
         split_xyz=xyz[...,split_index]+shift
-        #clone_xyz=xyz[...,clone_index]
-        append_xyz=split_xyz#torch.cat((split_xyz,clone_xyz),dim=-1)
-        xyz.data[...,split_index]-=shift
+        clone_xyz=xyz[...,clone_index]
+        append_xyz=torch.cat((split_xyz,clone_xyz),dim=-1)
         
         split_scale = (scale[...,split_index].exp() / (0.8*2)).log()
-        #clone_scale = scale[...,clone_index]
-        append_scale = split_scale#torch.cat((split_scale,clone_scale),dim=-1)
-        scale.data[...,split_index]=split_scale
+        clone_scale = scale[...,clone_index]
+        append_scale = torch.cat((split_scale,clone_scale),dim=-1)
 
         split_rot=rot[...,split_index]
-        #clone_rot=rot[...,clone_index]
-        append_rot = split_rot#torch.cat((split_rot,clone_rot),dim=-1)
+        clone_rot=rot[...,clone_index]
+        append_rot = torch.cat((split_rot,clone_rot),dim=-1)
 
         split_sh_0=sh_0[...,split_index]
-        #clone_sh_0=sh_0[...,clone_index]
-        append_sh_0 = split_sh_0#torch.cat((split_sh_0,clone_sh_0),dim=-1)
+        clone_sh_0=sh_0[...,clone_index]
+        append_sh_0 = torch.cat((split_sh_0,clone_sh_0),dim=-1)
 
         split_sh_rest=sh_rest[...,split_index]
-        #clone_sh_rest=sh_rest[...,clone_index]
-        append_sh_rest = split_sh_rest#torch.cat((split_sh_rest,clone_sh_rest),dim=-1)
+        clone_sh_rest=sh_rest[...,clone_index]
+        append_sh_rest = torch.cat((split_sh_rest,clone_sh_rest),dim=-1)
 
         split_opacity=opacity[...,split_index]
-        #clone_opacity=opacity[...,clone_index]
-        append_opacity = split_opacity#torch.cat((split_opacity,clone_opacity),dim=-1)
+        clone_opacity=opacity[...,clone_index]
+        append_opacity = torch.cat((split_opacity,clone_opacity),dim=-1)
 
         if self.bCluster:
             N=append_xyz.shape[-1]
