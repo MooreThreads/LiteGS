@@ -4,6 +4,7 @@ import fused_ssim
 from torchmetrics.image import psnr
 from tqdm import tqdm
 import numpy as np
+import math
 import os
 import torch.cuda.nvtx as nvtx
 
@@ -73,7 +74,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     #init
     total_epoch=int(op.iterations/len(trainingset))
     if dp.densify_until<0:
-        dp.densify_until=int(int(total_epoch/2)/dp.opacity_reset_interval)*dp.opacity_reset_interval+1
+        dp.densify_until=int(math.ceil(total_epoch/2/dp.opacity_reset_interval))*dp.opacity_reset_interval+1
     density_controller=densify.DensityControllerTamingGS(norm_radius,dp,pp.cluster_size>0,init_points_num)
     StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],density_controller.is_densify_actived)
     progress_bar = tqdm(range(start_epoch, total_epoch), desc="Training progress")
@@ -103,16 +104,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                                                             actived_sh_degree,gt_image.shape[2:],pp)
                 
                 l1_loss=__l1_loss(img,gt_image)
-                ssim_loss:torch.Tensor=fused_ssim.fused_ssim(img,gt_image)
-                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*(1-ssim_loss)
-                #loss+=torch.nn.functional.normalize(culled_scale.exp(),dim=0).var(dim=0).mean()*1e-1
-                loss+=(culled_opacity.sigmoid()*culled_opacity.sigmoid()).mean()*0.01
-                if pp.enable_transmitance:#example for transimitance grad
-                    trans_loss=transmitance.square().mean()*0.01
-                    loss+=trans_loss
-                # if pp.enable_depth:#example for depth grad
-                #     depth_loss=(1.0-depth).square().mean()*0.01
-                #     loss+=depth_loss
+                ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
+                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
@@ -125,6 +118,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         if epoch in test_epochs:
             with torch.no_grad():
+                _cluster_origin,_cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
                 psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
                 loaders={"Trainingset":train_loader}
                 if lp.eval:
@@ -136,7 +130,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                         proj_matrix=proj_matrix.cuda()
                         frustumplane=frustumplane.cuda()
                         gt_image=gt_image.cuda()/255.0
-                        _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
+                        _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(_cluster_origin,_cluster_extend,frustumplane,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                         img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                                     actived_sh_degree,gt_image.shape[2:],pp)

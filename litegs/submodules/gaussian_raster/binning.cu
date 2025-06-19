@@ -225,6 +225,7 @@ at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_
 
 __global__ void create_ROI_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_ndc,        //viewnum,4,pointnum
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> view_space_z,        //viewnum,pointnum
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_eigen_val,  //viewnum,2,pointnum
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> tensor_eigen_vec,  //viewnum,2,2,pointnum
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_opacity,  //viewnum,pointnum
@@ -241,7 +242,7 @@ __global__ void create_ROI_kernel(
     {
         float4 ndc{ tensor_ndc[view_id][0][index],tensor_ndc[view_id][1][index],
             tensor_ndc[view_id][2][index] ,tensor_ndc[view_id][3][index] };
-        bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (ndc.z > 1.0f) || (ndc.z < 0.0f));
+        bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (view_space_z[view_id][index] <= 0.2f));
         if (bVisible)
         {
             float opacity = max(tensor_opacity[view_id][index], 1.0f / 255);
@@ -299,15 +300,15 @@ __global__ void create_ROI_kernel(
         }
         else
         {
-            tensor_left_up[view_id][0][index] = 0;
-            tensor_left_up[view_id][1][index] = 0;
-            tensor_right_down[view_id][0][index] = 0;
-            tensor_right_down[view_id][1][index] = 0;
+            tensor_left_up[view_id][0][index] = -1;
+            tensor_left_up[view_id][1][index] = -1;
+            tensor_right_down[view_id][0][index] = -1;
+            tensor_right_down[view_id][1][index] = -1;
         }
     }
 }
 
-std::vector<at::Tensor> create_2d_gaussian_ROI(at::Tensor ndc, at::Tensor eigen_val, at::Tensor eigen_vec, at::Tensor opacity,
+std::vector<at::Tensor> create_2d_gaussian_ROI(at::Tensor ndc, at::Tensor view_space_z, at::Tensor eigen_val, at::Tensor eigen_vec, at::Tensor opacity,
     int64_t height,int64_t width)
 {
     at::DeviceGuard guard(ndc.device());
@@ -321,6 +322,7 @@ std::vector<at::Tensor> create_2d_gaussian_ROI(at::Tensor ndc, at::Tensor eigen_
 
     dim3 Block3d(std::ceil(points_num / 256.0f), views_num, 1);
     create_ROI_kernel<<<Block3d,256>>>(ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        view_space_z.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         eigen_val.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         eigen_vec.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),

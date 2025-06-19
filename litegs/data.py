@@ -29,7 +29,7 @@ class CameraInfo:
         return None
     
 class PinHoleCameraInfo(CameraInfo):
-    def __init__(self,id:int,width:int,height:int,parameters:list[float],z_near=0.01,z_far=100.0):
+    def __init__(self,id:int,width:int,height:int,parameters:list[float],z_near=0.01,z_far=5000.0):
         super(PinHoleCameraInfo,self).__init__(id,"PINHOLE",width,height)
         focal_length_x=parameters[0]
         focal_length_y=parameters[1]
@@ -37,7 +37,7 @@ class PinHoleCameraInfo(CameraInfo):
         focal_y=focal_length_y/(height*0.5)
         self.proj_matrix=np.array([[focal_x,0,0,0],
                   [0,focal_y,0,0],
-                  [0,0,(z_far+z_near)/(z_far-z_near),-2*z_far*z_near/(z_far-z_near)],
+                  [0,0,z_far/(z_far-z_near),-z_far*z_near/(z_far-z_near)],
                   [0,0,1,0]],dtype=np.float32).transpose()
         self.inv_z_proj_matrix=np.array([[focal_x,0,0,0],
                   [0,focal_y,0,0],
@@ -195,7 +195,7 @@ class CameraFrameDataset(Dataset):
     def __getitem__(self,idx:int)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
         image=self.frames[idx].load_image(self.downsample)
         view_matrix=self.frames[idx].get_viewmatrix()
-        proj_matrix=self.cameras[self.frames[idx].camera_id].get_inv_z_project_matrix()
+        proj_matrix=self.cameras[self.frames[idx].camera_id].get_project_matrix()
         frustumplane=self.frustumplanes[idx]
         ray_o=self.frames[idx].get_camera_center()
         ray_d=self.ray_d[idx]

@@ -534,7 +534,10 @@ __global__ void raster_backward_kernel(
                 float t0 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x];
                 float t1 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x];
                 reg_buffer[i].t = half2(t0 * SCALER, t1 * SCALER);
-                final_t[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t;
+                if (enable_trans_grad)
+                {
+                    final_t[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t;
+                }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
                     d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
@@ -545,9 +548,12 @@ __global__ void raster_backward_kernel(
                 shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
                     d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
                     d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
-                shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
-                    d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
-                    d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                if (enable_trans_grad)
+                {
+                    shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
+                        d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
+                        d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                }
                 
                 int last0 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x] - 1;
                 int last1 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x] - 1;
@@ -640,10 +646,10 @@ __global__ void raster_backward_kernel(
                         {
                             fragment_count += (0x00010001u & valid_mask);
                             half2 cur_weight = alpha;
-                            half2 cur_err = d_alpha;
+                            half2 cur_err = alpha*d_alpha;
                             weight += cur_weight;
-                            err += cur_weight * cur_err;
-                            err_square += cur_weight * (cur_err * half2(INV_SCALER, INV_SCALER) * cur_err);
+                            err += cur_err;
+                            err_square += (cur_err * half2(INV_SCALER, INV_SCALER) * cur_err);
                         }
                         half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
                         half2 grad_neg_half_c_x2 = d_power * half2(2 * i, 2 * i + 1) * half2(2 * i, 2 * i + 1);
@@ -675,20 +681,15 @@ __global__ void raster_backward_kernel(
                         warp_reduce_sum<float, false>(err_sum);
                         float err_square_sum{ float(err_square.x + err_square.y) * INV_SCALER };
                         warp_reduce_sum<float, false>(err_square_sum);
-                        //unsigned int reduced_fragment_count = (fragment_count >> 16u) + (fragment_count & 0xffffu);
-                        //warp_reduce_sum<unsigned int, false>(reduced_fragment_count);
-                        float weight_sum = float(weight.x + weight.y);
-                        warp_reduce_sum<float, false>(weight_sum);
+                        unsigned int reduced_fragment_count = (fragment_count >> 16u) + (fragment_count & 0xffffu);
+                        warp_reduce_sum<unsigned int, false>(reduced_fragment_count);
+                        //float weight_sum = float(weight.x + weight.y);
+                        //warp_reduce_sum<float, false>(weight_sum);
                         if (threadIdx.x == 0)
                         {
-                            //depth -> recover weight from ndc space to world space
-                            //S_{z}:S_{0.5}=(0.5*(f-n)+n)^2:(z*(f-n)+n)^2
-                            //float length = 1 / (min(max(params.depth, 0.1f),1.0f) * (100.0f - 0.01f) + 0.01f);
-                            //float area = length* length;
-                            float area = 1.0f;
-                            atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square_sum* area);
-                            atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum* area);
-                            atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight_sum* area);
+                            atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square_sum);
+                            atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum);
+                            atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], float(reduced_fragment_count));
                         }
                     }
 
@@ -836,7 +837,7 @@ std::vector<at::Tensor> rasterize_backward(
     //dim3 Thread3d(32, 1);
     if (enable_statistic == false)
     {
-        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -855,7 +856,7 @@ std::vector<at::Tensor> rasterize_backward(
     }
     else
     {
-        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),

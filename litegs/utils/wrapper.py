@@ -659,13 +659,13 @@ class Binning(BaseWrapper):
         return tile_start_index,sorted_pointId,b_visible
     
     @torch.no_grad()
-    def __binning_fused(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
+    def __binning_fused(ndc:torch.Tensor,view_depth:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
             img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
         
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size[0]))),int(math.ceil(img_pixel_shape[1]/float(tile_size[1]))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
+        pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
         tile_left_up=torch.empty_like(pixel_left_up)
         tile_right_down=torch.empty_like(pixel_right_down)
         tile_left_up[:,0,:]=(pixel_left_up[:,0,:]/float(tile_size[1])).int().clamp(0,img_tile_shape[1])
@@ -681,7 +681,7 @@ class Binning(BaseWrapper):
         b_visible=(tiles_touched!=0)
 
         #sort by depth
-        values,point_ids=ndc[:,2].sort(dim=-1,descending=True)
+        values,point_ids=view_depth.sort(dim=-1,descending=False)
         for i in range(ndc.shape[0]):
             tiles_touched[i]=tiles_touched[i,point_ids[i]]
 
