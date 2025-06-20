@@ -165,8 +165,8 @@ class StatisticsHelper:
         def calc_std(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):
             grad_mean=sum/(count+1e-6)
             grad_square_mean=square_sum/(count+1e-6)
-            grad_std=grad_square_mean-grad_mean**2
-            return grad_std
+            grad_var=grad_square_mean-grad_mean**2
+            return grad_var.clamp_min(0).sqrt()
         
         data = self.mean_and_std.get(key,None)
         std_tensor=None
