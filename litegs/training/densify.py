@@ -258,24 +258,25 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster,init_points_num)
         return
     
-    # @torch.no_grad()
-    # def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
-    #     prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
+    @torch.no_grad()
+    def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
+        prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
 
-    #     _,frag_weight=StatisticsHelperInst.get_std('fragment_err')
-    #     invisible = frag_weight==0
-    #     prune_mask[:invisible.shape[0]]|=invisible
+        frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
+        weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
+        invisible = weight_sum<10#(1297*840*185/self.target_points_num *0.1)
+        prune_mask[:invisible.shape[0]]|=invisible
 
-    #     big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-    #     prune_mask[:big_points_vs.shape[0]]|=big_points_vs
+        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
+        prune_mask[:big_points_vs.shape[0]]|=big_points_vs
         
-    #     return prune_mask
+        return prune_mask
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
 
-        frag_err_var,weight=StatisticsHelperInst.get_std('fragment_err')
+        frag_err_std,weight=StatisticsHelperInst.get_std('fragment_err')
         
-        score=frag_err_var.sqrt()*weight
+        score=frag_err_std*weight
         score=score.squeeze().nan_to_num(0)
         score.clamp_min_(0)
 

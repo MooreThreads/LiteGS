@@ -157,7 +157,7 @@ class StatisticsHelper:
         if data is not None:
             mean_val=(data.sum/(data.count+1e-9))
             mean_val,=cluster.uncluster(mean_val)
-        return mean_val
+        return mean_val,data.count.reshape(-1)
     
     @torch.no_grad()
     def get_std(self,key:str):

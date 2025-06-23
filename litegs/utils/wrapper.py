@@ -452,12 +452,13 @@ class GaussiansRasterFunc(torch.autograd.Function):
         depth=None
         normal=None
    
-        img,transmitance,depth,lst_contributor,packed_params=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,
+        img,transmitance,depth,lst_contributor,packed_params,fragment_count,fragment_weight=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,
                                                                                             ndc,cov2d_inv,color,opacities,
                                                                                             tiles,img_h,img_w,tile_h,tile_w,
+                                                                                            StatisticsHelperInst.bStart,
                                                                                             enable_transmitance,enable_depth)
 
-        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles)
+        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles,fragment_count,fragment_weight)
         ctx.arg_tile_size=(tile_h,tile_w)
         ctx.img_hw=(img_h,img_w)
 
@@ -469,7 +470,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor):
-        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles=ctx.saved_tensors
+        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles,fragment_count,fragment_weight=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
 
@@ -479,14 +480,15 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,err_sum,err_square_sum,fragment_weight_sum=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,err_sum,err_square_sum=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
                                                                                           transmitance,lst_contributor,
                                                                                           grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
                                                                                           img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
         if StatisticsHelperInst.bStart:
             #if err_sum.isinf().any() or err_square_sum.isinf().any():
             #    breakpoint()
-            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_weight_sum,True)
+            StatisticsHelperInst.update_mean_std("fragment_weight",fragment_weight,fragment_weight*fragment_weight,fragment_count,True)
+            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_count,True)
 
         # if grad_color.isnan().any() or grad_color.isinf().any() \
         #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
