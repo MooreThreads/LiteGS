@@ -4,9 +4,13 @@ from torch.utils.data import DataLoader
 from torchmetrics.image import psnr,ssim,lpip
 import sys
 import os
+import matplotlib.pyplot as plt
 
 import litegs
 import litegs.config
+
+OUTPUT_FILE=True
+
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     lp_cdo,op_cdo,pp_cdo,dp_cdo=litegs.config.get_default_arg()
@@ -29,6 +33,10 @@ if __name__ == "__main__":
     cameras_info:dict[int,litegs.data.CameraInfo]=None
     camera_frames:list[litegs.data.CameraFrame]=None
     cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
+
+    if OUTPUT_FILE:
+        os.makedirs(os.path.join(lp.model_path,"Trainingset"),exist_ok=True)
+        os.makedirs(os.path.join(lp.model_path,"Testset"),exist_ok=True)
 
     #preload
     for camera_frame in camera_frames:
@@ -69,6 +77,7 @@ if __name__ == "__main__":
         ssim_list=[]
         psnr_list=[]
         lpips_list=[]
+        index=0
         for view_matrix,proj_matrix,frustumplane,gt_image in loader:
             view_matrix=view_matrix.cuda()
             proj_matrix=proj_matrix.cuda()
@@ -78,9 +87,14 @@ if __name__ == "__main__":
                                                                                                     xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
             img,transmitance,depth,normal=litegs.render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                         lp.sh_degree,gt_image.shape[2:],pp)
+            psnr_value=psnr_metrics(img,gt_image)
             ssim_list.append(ssim_metrics(img,gt_image).unsqueeze(0))
-            psnr_list.append(psnr_metrics(img,gt_image).unsqueeze(0))
+            psnr_list.append(psnr_value.unsqueeze(0))
             lpips_list.append(lpip_metrics(img,gt_image).unsqueeze(0))
+            index+=1
+            if OUTPUT_FILE:
+                plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-rd.png".format(index,float(psnr_value))),img.detach().cpu()[0].permute(1,2,0).numpy())
+                plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-gt.png".format(index,float(psnr_value))),gt_image.detach().cpu()[0].permute(1,2,0).numpy())
         ssim_mean=torch.concat(ssim_list,dim=0).mean()
         psnr_mean=torch.concat(psnr_list,dim=0).mean()
         lpips_mean=torch.concat(lpips_list,dim=0).mean()
