@@ -77,8 +77,7 @@ if __name__ == "__main__":
         ssim_list=[]
         psnr_list=[]
         lpips_list=[]
-        index=0
-        for view_matrix,proj_matrix,frustumplane,gt_image in loader:
+        for index,(view_matrix,proj_matrix,frustumplane,gt_image) in enumerate(loader):
             view_matrix=view_matrix.cuda()
             proj_matrix=proj_matrix.cuda()
             frustumplane=frustumplane.cuda()
