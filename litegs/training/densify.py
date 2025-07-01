@@ -264,7 +264,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
         frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
         weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
-        invisible = weight_sum<10#(1297*840*185/self.target_points_num *0.1)
+        invisible = weight_sum==0
         prune_mask[:invisible.shape[0]]|=invisible
 
         big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
@@ -275,7 +275,6 @@ class DensityControllerTamingGS(DensityControllerOfficial):
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
 
         frag_err_std,weight=StatisticsHelperInst.get_std('fragment_err')
-        
         score=frag_err_std*weight
         score=score.squeeze().nan_to_num(0)
         score.clamp_min_(0)
@@ -294,9 +293,9 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
-        selected_index = torch.multinomial(score, budget, replacement=False)
-        clone_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
-        split_index=selected_index[(scale[:,selected_index].exp().max(dim=0).values > self.percent_dense*self.screen_extent)]
+        densify_index = torch.multinomial(score, budget, replacement=False)
+        clone_index=densify_index[(scale[:,densify_index].exp().max(dim=0).values <= self.percent_dense*self.screen_extent)]
+        split_index=densify_index[(scale[:,densify_index].exp().max(dim=0).values > self.percent_dense*self.screen_extent)]
 
         #split
         stds=scale[...,split_index].exp()

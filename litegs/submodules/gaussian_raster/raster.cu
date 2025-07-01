@@ -900,7 +900,7 @@ std::vector<at::Tensor> rasterize_backward(
     //dim3 Thread3d(32, 1);
     if (enable_statistic == false)
     {
-        raster_backward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -918,7 +918,7 @@ std::vector<at::Tensor> rasterize_backward(
     }
     else
     {
-        raster_backward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),

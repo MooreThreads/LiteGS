@@ -74,7 +74,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     #init
     total_epoch=int(op.iterations/len(trainingset))
     if dp.densify_until<0:
-        dp.densify_until=int(total_epoch/2/dp.opacity_reset_interval)*dp.opacity_reset_interval+1
+        dp.densify_until=int(total_epoch*0.8/dp.opacity_reset_interval)*dp.opacity_reset_interval+1
     density_controller=densify.DensityControllerTamingGS(norm_radius,dp,pp.cluster_size>0,init_points_num)
     StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],density_controller.is_densify_actived)
     progress_bar = tqdm(range(start_epoch, total_epoch), desc="Training progress")
@@ -106,6 +106,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
+                loss+=transmitance.abs().mean()*1e-6
+                loss+=culled_opacity.sigmoid().abs().mean()*1e-4
+                loss+=culled_scale.exp().var(0).mean()*1e-4
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()

@@ -72,7 +72,7 @@ class PipelineParams(ParamGroup):
     sparse_grad = True
     spatial_refine_interval = 5
     device_preload = True
-    enable_transmitance=False
+    enable_transmitance=True
     enable_depth=False
     def __init__(self, parser):
         super().__init__(parser, "Pipeline Parameters")
@@ -91,7 +91,7 @@ class OptimizationParams(ParamGroup):
         super().__init__(parser, "Optimization Parameters")
 
 class DensifyParams(ParamGroup):
-    densification_interval = 5
+    densification_interval = 2
     densify_from = 3
     densify_until = -1
     prune_interval = 10
