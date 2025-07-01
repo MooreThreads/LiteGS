@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
     #preload
     for camera_frame in camera_frames:
-        camera_frame.load_image()
+        camera_frame.load_image(lp.resolution)
 
     #Dataset
     training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
@@ -90,7 +90,6 @@ if __name__ == "__main__":
             ssim_list.append(ssim_metrics(img,gt_image).unsqueeze(0))
             psnr_list.append(psnr_value.unsqueeze(0))
             lpips_list.append(lpip_metrics(img,gt_image).unsqueeze(0))
-            index+=1
             if OUTPUT_FILE:
                 plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-rd.png".format(index,float(psnr_value))),img.detach().cpu()[0].permute(1,2,0).numpy())
                 plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-gt.png".format(index,float(psnr_value))),gt_image.detach().cpu()[0].permute(1,2,0).numpy())
