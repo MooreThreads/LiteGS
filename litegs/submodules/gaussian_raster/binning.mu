@@ -1,14 +1,13 @@
-#ifndef __CUDACC__
-    #define __CUDACC__
+#ifndef __MUSACC__
+    #define __MUSACC__
     #define __NVCC__
 #endif
-#include "cuda_runtime.h"
+#include "musa_runtime.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <cuda/atomic>
+#include <musa/atomic>
 namespace cg = cooperative_groups;
 
-#include <c10/cuda/CUDAException.h>
 #include <ATen/core/TensorAccessor.h>
 
 #include "cuda_errchk.h"
@@ -67,9 +66,9 @@ namespace cg = cooperative_groups;
      torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> table_pointId
  )
  {
-     auto block = cg::this_thread_block();
-     auto warp = cg::tiled_partition<32>(block);
-     int task_index = warp.meta_group_size() * block.group_index().x + warp.meta_group_rank();
+     int lane_id=threadIdx.x%32;
+     
+     int task_index = (blockDim.x/32) * blockIdx.x + (threadIdx.x/32);
 
      if (task_index < large_index.size(0))
      {
@@ -91,7 +90,7 @@ namespace cg = cooperative_groups;
          int u = LU[view_id][1][point_id];
          int width = RD[view_id][0][point_id]-l;
          int height = RD[view_id][1][point_id]-u;
-         for (int i = warp.thread_rank(); i < width * height; i+=warp.num_threads())
+         for (int i = lane_id; i < width * height; i+=32)
          {
              int tile_col = l + (i % width);
              int tile_row = u + (i / width);
@@ -148,7 +147,7 @@ namespace cg = cooperative_groups;
     
     int large_points_num = large_index.size(0);
     int blocksnum = std::ceil((large_points_num * 32) / 512.0f);
-    large_points_duplicate_with_keys_kernel << <blocksnum, 512 >> > (
+    large_points_duplicate_with_keys_kernel <<<blocksnum, 512 >>> (
         LU.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         RD.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
         prefix_sum.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),

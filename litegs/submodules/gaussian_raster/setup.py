@@ -1,20 +1,22 @@
+import torch; import torch_musa
+from torch_musa.utils.musa_extension import MUSAExtension, BuildExtension
+from torch_musa.utils.simple_porting import SimplePorting
 from setuptools import setup
-from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
 setup(
     name="litegs_fused",
     packages=['litegs_fused'],
     package_dir={'litegs_fused':"."},
     ext_modules=[
-        CUDAExtension(
+        MUSAExtension(
             name="litegs_fused",
             sources=[
-            "binning.cu",
-            "compact.cu",
+            "binning.mu",
+            "compact.mu",
             "cuda_errchk.cpp",
             "ext_cuda.cpp",
-            "raster.cu",
-            "transform.cu"])
+            "raster.mu",
+            "transform.mu"])
         ],
     cmdclass={
         'build_ext': BuildExtension

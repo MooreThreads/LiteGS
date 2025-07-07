@@ -11,17 +11,17 @@
 
 #define BOX_SIZE 1024
 
-#include "cuda_runtime.h"
+#include "musa_runtime.h"
 #include "device_launch_parameters.h"
 #include "simple_knn.h"
 #include <cfloat>
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <vector>
-#include <cuda_runtime_api.h>
+#include <musa_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/sequence.h>
-#define __CUDACC__
+#define __MUSACC__
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
@@ -186,7 +186,7 @@ __global__ void boxMeanDist(uint32_t P, float3* points, uint32_t* indices, MinMa
 void SimpleKNN::knn(int P, float3* points, float* meanDists)
 {
 	float3* result;
-	cudaMalloc(&result, sizeof(float3));
+	musaMalloc(&result, sizeof(float3));
 	size_t temp_storage_bytes;
 
 	float3 init = { 0, 0, 0 }, minn, maxx;
@@ -195,10 +195,10 @@ void SimpleKNN::knn(int P, float3* points, float* meanDists)
 	thrust::device_vector<char> temp_storage(temp_storage_bytes);
 
 	cub::DeviceReduce::Reduce(temp_storage.data().get(), temp_storage_bytes, points, result, P, CustomMin(), init);
-	cudaMemcpy(&minn, result, sizeof(float3), cudaMemcpyDeviceToHost);
+	musaMemcpy(&minn, result, sizeof(float3), musaMemcpyDeviceToHost);
 
 	cub::DeviceReduce::Reduce(temp_storage.data().get(), temp_storage_bytes, points, result, P, CustomMax(), init);
-	cudaMemcpy(&maxx, result, sizeof(float3), cudaMemcpyDeviceToHost);
+	musaMemcpy(&maxx, result, sizeof(float3), musaMemcpyDeviceToHost);
 
 	thrust::device_vector<uint32_t> morton(P);
 	thrust::device_vector<uint32_t> morton_sorted(P);
@@ -218,5 +218,5 @@ void SimpleKNN::knn(int P, float3* points, float* meanDists)
 	boxMinMax << <num_boxes, BOX_SIZE >> > (P, points, indices_sorted.data().get(), boxes.data().get());
 	boxMeanDist << <num_boxes, BOX_SIZE >> > (P, points, indices_sorted.data().get(), boxes.data().get(), meanDists);
 
-	cudaFree(result);
+	musaFree(result);
 }

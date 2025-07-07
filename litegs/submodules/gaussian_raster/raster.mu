@@ -1,16 +1,15 @@
-#ifndef __CUDACC__
-#define __CUDACC__
+#ifndef __MUSACC__
+#define __MUSACC__
 #define __NVCC__
 #endif
-#include "cuda_runtime.h"
+#include "musa_runtime.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <cuda/atomic>
+#include <musa/atomic>
 #include <math.h>
-#include <cuda_fp16.h>
+#include <musa_fp16.h>
 namespace cg = cooperative_groups;
 
-#include <c10/cuda/CUDAException.h>
 #include <ATen/core/TensorAccessor.h>
 
 #include "cuda_errchk.h"
@@ -421,7 +420,7 @@ std::vector<at::Tensor> rasterize_forward(
         dim3 Thread3d(32, tiles_per_block);
         if (enable_statistic)
         {
-            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            raster_forward_kernel<8, 16, true, false, false> <<<Block3d, Thread3d >>> (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -435,7 +434,7 @@ std::vector<at::Tensor> rasterize_forward(
         }
         else
         {
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            raster_forward_kernel<8, 16, false, false, false> <<<Block3d, Thread3d >>> (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -511,7 +510,7 @@ std::vector<at::Tensor> rasterize_forward_packed(
         dim3 Thread3d(32, tiles_per_block);
         if (enable_statistic)
         {
-            raster_forward_kernel<8, 16,true, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            raster_forward_kernel<8, 16,true, false, false> <<<Block3d, Thread3d >>> (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -525,7 +524,7 @@ std::vector<at::Tensor> rasterize_forward_packed(
         }
         else
         {
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+            raster_forward_kernel<8, 16, false, false, false> <<<Block3d, Thread3d >>> (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
                 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
                 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
@@ -692,7 +691,7 @@ __global__ void raster_backward_kernel(
                         reinterpret_cast<unsigned int*>(&alpha)[0] &= valid_mask;
                         reinterpret_cast<unsigned int*>(&G)[0] &= valid_mask;
 
-                        reg_buffer[i].t = __h2div(reg_buffer[i].t,(half2(1.0f,1.0f) - alpha));//0-2^(-10)
+                        reg_buffer[i].t /= (half2(1.0f,1.0f) - alpha);//0-2^(-10)
                         grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
@@ -707,8 +706,7 @@ __global__ void raster_backward_kernel(
                         reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
                         if (enable_trans_grad)
                         {
-                            d_alpha -= __h2div(shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x], 
-                                (half2(1.0f, 1.0f) - alpha));
+                            d_alpha -= (shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x])/(half2(1.0f, 1.0f) - alpha);
                         }
 
                         grad_a += d_alpha * G;
@@ -900,7 +898,7 @@ std::vector<at::Tensor> rasterize_backward(
     //dim3 Thread3d(32, 1);
     if (enable_statistic == false)
     {
-        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, false, true, false> <<<Block3d, Thread3d >>> (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -918,7 +916,7 @@ std::vector<at::Tensor> rasterize_backward(
     }
     else
     {
-        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (
+        raster_backward_kernel<8, 16, true, true, false> <<<Block3d, Thread3d >>> (
             sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
             packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
