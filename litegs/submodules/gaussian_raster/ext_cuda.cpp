@@ -17,6 +17,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("jacobianRayspace", &jacobianRayspace);
   m.def("createTransformMatrix_forward", &createTransformMatrix_forward);
   m.def("createTransformMatrix_backward", &createTransformMatrix_backward);
+  m.def("world2ndc_forward", &world2ndc_forward);
   m.def("world2ndc_backword", &world2ndc_backword);
   m.def("createCov2dDirectly_forward", &createCov2dDirectly_forward);
   m.def("createCov2dDirectly_backward", &createCov2dDirectly_backward);

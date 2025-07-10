@@ -286,9 +286,7 @@ class World2NdcFunc(torch.autograd.Function):
     '''
     @staticmethod
     def forward(ctx,position:torch.Tensor,view_project_matrix:torch.Tensor):
-        hom_pos=torch.matmul(view_project_matrix.transpose(-1,-2),position)
-        repc_hom_w=1/(hom_pos[:,3:4]+1e-7)
-        ndc_pos=hom_pos*repc_hom_w
+        ndc_pos,repc_hom_w=litegs_fused.world2ndc_forward(position,view_project_matrix)
         ctx.save_for_backward(view_project_matrix,ndc_pos,repc_hom_w)
         return ndc_pos
     

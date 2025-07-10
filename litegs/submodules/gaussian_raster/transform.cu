@@ -237,67 +237,6 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
 }
 
 
-__global__ void world2ndc_backword_kernel(
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_project_matrix,    //[batch,4,4]  
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc_position,    //[batch,4,point_num] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> repc_hom_w_tensor,         //[batch,1,point_num]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_ndc_pos,    //[batch,4,point_num]  
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_position    //[4,point_num] 
-
-)
-{
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    for (int batch_id = 0; batch_id < ndc_position.size(0); batch_id++)
-    {
-        if (batch_id < ndc_position.size(0) && index < ndc_position.size(2))
-        {
-            float repc_hom_w = repc_hom_w_tensor[batch_id][0][index];
-
-            float mul1 = ndc_position[batch_id][0][index] * repc_hom_w;
-            float mul2 = ndc_position[batch_id][1][index] * repc_hom_w;
-            float mul3 = ndc_position[batch_id][2][index] * repc_hom_w;
-
-            float grad_x = (view_project_matrix[batch_id][0][0] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul1) * grad_ndc_pos[batch_id][0][index]
-                + (view_project_matrix[batch_id][0][1] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul2) * grad_ndc_pos[batch_id][1][index]
-                + (view_project_matrix[batch_id][0][2] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul3) * grad_ndc_pos[batch_id][2][index];
-
-            float grad_y = (view_project_matrix[batch_id][1][0] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul1) * grad_ndc_pos[batch_id][0][index]
-                + (view_project_matrix[batch_id][1][1] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul2) * grad_ndc_pos[batch_id][1][index]
-                + (view_project_matrix[batch_id][1][2] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul3) * grad_ndc_pos[batch_id][2][index];
-
-            float grad_z = (view_project_matrix[batch_id][2][0] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul1) * grad_ndc_pos[batch_id][0][index]
-                + (view_project_matrix[batch_id][2][1] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul2) * grad_ndc_pos[batch_id][1][index]
-                + (view_project_matrix[batch_id][2][2] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul3) * grad_ndc_pos[batch_id][2][index];
-
-            grad_position[0][index] = grad_x;
-            grad_position[1][index] = grad_y;
-            grad_position[2][index] = grad_z;
-            grad_position[3][index] = 0;
-        }
-    }
-}
-
-at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor ndc_position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos)
-{
-
-
-    int N = grad_ndcpos.size(0);
-    int P = grad_ndcpos.size(2);
-    at::Tensor d_position = torch::empty({ 4,P }, grad_ndcpos.options());
-
-    int threadsnum = 256;
-    int blocknum=std::ceil(P / (float)threadsnum);
-
-    world2ndc_backword_kernel << <blocknum, threadsnum >> > (
-        view_project_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        ndc_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        repc_hom_w.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        grad_ndcpos.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        d_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
-
-    CUDA_CHECK_ERRORS;
-    return d_position;
-}
 template <typename scalar_t,int ROW,int COL>
 __device__ void load_matrix(scalar_t(* __restrict__ dest)[ROW][COL], const torch::TensorAccessor<scalar_t, 2, torch::RestrictPtrTraits, int32_t> source)
 {
@@ -416,6 +355,140 @@ __device__ void matmul_AtA(scalar_t(*__restrict__ A)[N], scalar_t(*__restrict__ 
         }
     }
 }
+
+__global__ void world2ndc_forward_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_view_project_matrix,    //[batch,4,4]  
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_world_position,    //[4,point_num] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_ndc_position,         //[batch,4,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_repc_hom_w_tensor    //[batch,1,point_num]  
+)
+{
+    int batch_id = blockIdx.y;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (batch_id < tensor_view_project_matrix.size(0) && index < tensor_world_position.size(1))
+    {
+        float view_proj_matrix[4][4];
+        for(int i=0;i<4;i++)
+            for(int j=0;j<4;j++)
+                view_proj_matrix[i][j] = tensor_view_project_matrix[batch_id][i][j];
+
+        float4 world_pos{ tensor_world_position[0][index],tensor_world_position[1][index] ,tensor_world_position[2][index] ,tensor_world_position[3][index] };
+        float4 hom_pos;
+        hom_pos.x = world_pos.x * view_proj_matrix[0][0]
+            + world_pos.y * view_proj_matrix[1][0]
+            + world_pos.z * view_proj_matrix[2][0]
+            + world_pos.w * view_proj_matrix[3][0];
+        hom_pos.y = world_pos.x * view_proj_matrix[0][1]
+            + world_pos.y * view_proj_matrix[1][1]
+            + world_pos.z * view_proj_matrix[2][1]
+            + world_pos.w * view_proj_matrix[3][1];
+        hom_pos.z = world_pos.x * view_proj_matrix[0][2]
+            + world_pos.y * view_proj_matrix[1][2]
+            + world_pos.z * view_proj_matrix[2][2]
+            + world_pos.w * view_proj_matrix[3][2];
+        hom_pos.w = world_pos.x * view_proj_matrix[0][3]
+            + world_pos.y * view_proj_matrix[1][3]
+            + world_pos.z * view_proj_matrix[2][3]
+            + world_pos.w * view_proj_matrix[3][3];
+
+        float repc_hom_w = 1.0f / (hom_pos.w+1e-7f);
+        tensor_repc_hom_w_tensor[batch_id][0][index] = repc_hom_w;
+
+        tensor_ndc_position[batch_id][0][index] = hom_pos.x *repc_hom_w;
+        tensor_ndc_position[batch_id][1][index] = hom_pos.y *repc_hom_w;
+        tensor_ndc_position[batch_id][2][index] = hom_pos.z *repc_hom_w;
+        tensor_ndc_position[batch_id][3][index] = 1.0f;
+    }
+    
+}
+
+std::vector<at::Tensor> world2ndc_forward(at::Tensor world_position,at::Tensor view_project_matrix)
+{
+
+
+    int N = view_project_matrix.size(0);
+    int P = world_position.size(1);
+    at::Tensor ndc_position = torch::empty({ N,4,P }, world_position.options());
+    at::Tensor repc_hom_w = torch::empty({ N,1,P }, world_position.options());
+
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(P / 256.0f), N, 1);
+
+    world2ndc_forward_kernel << <Block3d, threadsnum >> > (
+        view_project_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        world_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        ndc_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        repc_hom_w.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+
+    CUDA_CHECK_ERRORS;
+    return {ndc_position,repc_hom_w};
+}
+
+
+__global__ void world2ndc_backword_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_project_matrix,    //[batch,4,4]  
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc_position,    //[batch,4,point_num] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> repc_hom_w_tensor,         //[batch,1,point_num]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_ndc_pos,    //[batch,4,point_num]  
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_position    //[4,point_num] 
+
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int batch_id = 0; batch_id < ndc_position.size(0); batch_id++)
+    {
+        if (batch_id < ndc_position.size(0) && index < ndc_position.size(2))
+        {
+            float repc_hom_w = repc_hom_w_tensor[batch_id][0][index];
+
+            float mul1 = ndc_position[batch_id][0][index] * repc_hom_w;
+            float mul2 = ndc_position[batch_id][1][index] * repc_hom_w;
+            float mul3 = ndc_position[batch_id][2][index] * repc_hom_w;
+
+            float grad_x = (view_project_matrix[batch_id][0][0] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul1) * grad_ndc_pos[batch_id][0][index]
+                + (view_project_matrix[batch_id][0][1] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul2) * grad_ndc_pos[batch_id][1][index]
+                + (view_project_matrix[batch_id][0][2] * repc_hom_w - view_project_matrix[batch_id][0][3] * mul3) * grad_ndc_pos[batch_id][2][index];
+
+            float grad_y = (view_project_matrix[batch_id][1][0] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul1) * grad_ndc_pos[batch_id][0][index]
+                + (view_project_matrix[batch_id][1][1] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul2) * grad_ndc_pos[batch_id][1][index]
+                + (view_project_matrix[batch_id][1][2] * repc_hom_w - view_project_matrix[batch_id][1][3] * mul3) * grad_ndc_pos[batch_id][2][index];
+
+            float grad_z = (view_project_matrix[batch_id][2][0] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul1) * grad_ndc_pos[batch_id][0][index]
+                + (view_project_matrix[batch_id][2][1] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul2) * grad_ndc_pos[batch_id][1][index]
+                + (view_project_matrix[batch_id][2][2] * repc_hom_w - view_project_matrix[batch_id][2][3] * mul3) * grad_ndc_pos[batch_id][2][index];
+
+            grad_position[0][index] = grad_x;
+            grad_position[1][index] = grad_y;
+            grad_position[2][index] = grad_z;
+            grad_position[3][index] = 0;
+        }
+    }
+}
+
+at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor ndc_position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos)
+{
+
+
+    int N = grad_ndcpos.size(0);
+    int P = grad_ndcpos.size(2);
+    at::Tensor d_position = torch::empty({ 4,P }, grad_ndcpos.options());
+
+    int threadsnum = 256;
+    int blocknum = std::ceil(P / (float)threadsnum);
+
+    world2ndc_backword_kernel << <blocknum, threadsnum >> > (
+        view_project_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        ndc_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        repc_hom_w.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        grad_ndcpos.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        d_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
+
+    CUDA_CHECK_ERRORS;
+    return d_position;
+}
+
+
+
 
 template <typename scalar_t>
 __global__ void create_cov2d_forward(
