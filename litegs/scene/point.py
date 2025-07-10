@@ -139,4 +139,16 @@ def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
                         if bClustered:
                             refined_value, = cluster.cluster_points(chunk_size,refined_value)
                         value.data=refined_value
-    return None
+
+        param_dict:dict[str,torch.Tensor]={}
+        for param_group in optimizer.param_groups:
+            name=param_group['name']
+            tensor=param_group['params'][0]
+            param_dict[name]=tensor
+        xyz=param_dict["xyz"]
+        rot=param_dict["rot"]
+        scale=param_dict["scale"]
+        sh_0=param_dict["sh_0"]
+        sh_rest=param_dict["sh_rest"]
+        opacity=param_dict["opacity"]
+        return xyz,scale,rot,sh_0,sh_rest,opacity
