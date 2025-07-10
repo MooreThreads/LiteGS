@@ -106,9 +106,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
-                loss+=transmitance.abs().mean()*1e-6
-                loss+=culled_opacity.sigmoid().abs().mean()*1e-4
-                loss+=culled_scale.exp().var(0).mean()*1e-4
+                loss+=(culled_scale).square().mean()*op.reg_weight
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()

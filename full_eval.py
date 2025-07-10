@@ -12,12 +12,24 @@
 import os
 from argparse import ArgumentParser
 
-mipnerf360_outdoor_scenes = ["bicycle", "flowers", "garden", "stump", "treehill"]
-mipnerf360_indoor_scenes = ["room", "counter", "kitchen", "bonsai"]
-tanks_and_temples_scenes = ["truck", "train"]
-deep_blending_scenes = ["drjohnson", "playroom"]
 
 # Scene-specific budgets for "big" mode (final_count)
+target_primitives_list = {
+    "bicycle": [i for i in range(500_000,5_000_000+1,500_000)],
+    "flowers": [i for i in range(500_000,3_000_000+1,500_000)],
+    "garden": [i for i in range(500_000,5_000_000+1,500_000)],
+    "stump":[i for i in range(500_000,4_000_000+1,500_000)],
+    "treehill":[i for i in range(500_000,3_000_000+1,500_000)],
+    "room": [i for i in range(200_000,1_000_000+1,200_000)],
+    "counter": [i for i in range(200_000,1_000_000+1,200_000)],
+    "kitchen": [i for i in range(200_000,1_000_000+1,200_000)],
+    "bonsai": [i for i in range(200_000,1_000_000+1,200_000)],
+    "truck": [i for i in range(200_000,2_000_000+1,200_000)],
+    "train": [i for i in range(200_000,1_000_000+1,200_000)],
+    "playroom": [i for i in range(200_000,2_000_000+1,200_000)],
+    "drjohnson": [i for i in range(200_000,2_000_000+1,200_000)]
+}
+
 big_budgets = {
     "bicycle": 5987095,
     "flowers": 3618411,
@@ -36,19 +48,19 @@ big_budgets = {
 
 # Scene-specific budgets for "budget" mode (multiplier)
 budget_multipliers = {
-    "bicycle": 15,
-    "flowers": 15,
-    "garden": 15,
-    "stump": 15,
-    "treehill": 15,
-    "room": 2,
-    "counter": 2,
-    "kitchen": 2,
-    "bonsai": 2,
-    "truck": 2,
-    "train": 2,
-    "playroom": 5,
-    "drjohnson": 5
+    "bicycle": 15,#54275
+    "flowers": 15,#38347
+    "garden": 15,#138766
+    "stump": 15,#32049
+    "treehill": 15,#52363
+    "room": 2,#112627
+    "counter": 2,#155767
+    "kitchen": 2,#241367
+    "bonsai": 2,#206613
+    "truck": 2,#136029
+    "train": 2,#182686
+    "playroom": 5,#37005
+    "drjohnson": 5#80861
 }
 
 images={
@@ -83,13 +95,28 @@ parser.add_argument("--output_path", default="./output")
 parser.add_argument('--mipnerf360', "-m360", required=True, type=str)
 parser.add_argument("--tanksandtemples", "-tat", required=True, type=str)
 parser.add_argument("--deepblending", "-db", required=True, type=str)
-parser.add_argument("--mode", required=True, type=str)
 args, _ = parser.parse_known_args()
 
+
 datasets={
-    "mipnerf360":mipnerf360_outdoor_scenes+mipnerf360_indoor_scenes,
-    "tanksandtemples":tanks_and_temples_scenes,
-    "deepblending":deep_blending_scenes
+    "mipnerf360_indoor":["bicycle", "flowers", "garden", "stump", "treehill"],
+    "mipnerf360_outdoor":["room", "counter", "kitchen", "bonsai"],
+    "tanksandtemples":["truck", "train"],
+    "deepblending":["drjohnson", "playroom"],
+}
+
+img_config={
+    "mipnerf360_indoor":" -i images_4",
+    "mipnerf360_outdoor":" -i images_2",
+    "tanksandtemples":" -i images",
+    "deepblending":" -i images",
+}
+
+reg_config={
+    "mipnerf360_indoor":" --reg_weight 0.001 ",
+    "mipnerf360_outdoor":" --reg_weight 0 ",
+    "tanksandtemples":" --reg_weight 0 ",
+    "deepblending":" --reg_weight 0 ",
 }
 
 
@@ -97,22 +124,34 @@ datasets={
 if not args.skip_training:
     for dataset,scenes in datasets.items():
         for scene_name in scenes:
-            scene_input_path=os.path.join(args.__getattribute__(dataset),scene_name)
-            scene_output_path=os.path.join(args.output_path,scene_name)
-            os.system("python example_train.py -s {0} -i {1} -m {2} --eval --sh_degree 3 --budget {3} --densify_mode {4}".format(
+            scene_input_path=os.path.join(args.__getattribute__(dataset.split('_')[0]),scene_name)
+            #curve
+            for target_primitives in target_primitives_list[scene_name]:
+                scene_output_path=os.path.join(args.output_path,scene_name+'-{}k'.format(int(target_primitives/1000)))
+                os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2}".format(
+                    scene_input_path,
+                    scene_output_path,
+                    target_primitives
+                )+img_config[dataset])
+            #full
+            scene_output_path=os.path.join(args.output_path,scene_name+'-big')
+            os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2}".format(
                 scene_input_path,
-                images[scene_name],
                 scene_output_path,
-                budget_dict[args.mode][scene_name],
-                densify_mode_dict[args.mode]
-            ))
+                big_budgets[scene_name]
+            )+img_config[dataset]+reg_config[dataset])
 
 for dataset,scenes in datasets.items():
     for scene_name in scenes:
-        scene_input_path=os.path.join(args.__getattribute__(dataset),scene_name)
-        scene_output_path=os.path.join(args.output_path,scene_name)
-        os.system("python example_metrics.py -s {0} -i {1} -m {2} --sh_degree 3".format(
-            scene_input_path,
-            images[scene_name],
-            scene_output_path
-        ))
+        scene_input_path=os.path.join(args.__getattribute__(dataset.split('_')[0]),scene_name)
+        # for target_primitives in target_primitives_list[scene_name]:
+        #     scene_output_path=os.path.join(args.output_path,scene_name+'-{}k'.format(int(target_primitives/1000)))
+        #     os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3".format(
+        #         scene_input_path,
+        #         scene_output_path
+        #     )+img_config[dataset])
+        scene_output_path=os.path.join(args.output_path,scene_name+'-big')
+        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3".format(
+                scene_input_path,
+                scene_output_path
+            )+img_config[dataset])

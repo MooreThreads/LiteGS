@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import litegs
 import litegs.config
 
-OUTPUT_FILE=True
+OUTPUT_FILE=False
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")

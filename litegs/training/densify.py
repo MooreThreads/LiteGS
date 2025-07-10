@@ -247,14 +247,8 @@ class DensityControllerTamingGS(DensityControllerOfficial):
     @torch.no_grad()
     def __init__(self,screen_extent:int,densify_params:DensifyParams,bCluster:bool,init_points_num:int)->None:
 
-        assert(densify_params.budget!=0.0)
-        if densify_params.densify_mode=='final_count':
-            self.target_points_num=densify_params.budget
-        elif densify_params.densify_mode=='multiplier':
-            self.target_points_num=densify_params.budget*init_points_num
-        else:
-            assert(False)
-
+        assert(densify_params.target_primitives!=0.0)
+        self.target_points_num=densify_params.target_primitives
         super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster,init_points_num)
         return
     

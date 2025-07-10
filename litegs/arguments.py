@@ -87,11 +87,12 @@ class OptimizationParams(ParamGroup):
     scaling_lr = 0.005
     rotation_lr = 0.001
     lambda_dssim = 0.2
+    reg_weight=0.0
     def __init__(self, parser):
         super().__init__(parser, "Optimization Parameters")
 
 class DensifyParams(ParamGroup):
-    densification_interval = 2
+    densification_interval = 5
     densify_from = 3
     densify_until = -1
     prune_interval = 10
@@ -100,8 +101,7 @@ class DensifyParams(ParamGroup):
     opacity_threshold=0.005
     screen_size_threshold=128#tile
     percent_dense = 0.01
-    budget=15.0 #0.0 for official densify
-    densify_mode="multiplier"#final_count or multiplier
+    target_primitives=15.0
     def __init__(self, parser):
         super().__init__(parser, "Densify Parameters")
         
