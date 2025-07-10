@@ -63,9 +63,7 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     nvtx.range_pop()
     
     #visibility table
-    tile_start_index,sorted_pointId,b_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
-    if StatisticsHelperInst.bStart:
-        StatisticsHelperInst.update_visible_count(b_visible)
+    tile_start_index,sorted_pointId=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
 
     #raster
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))

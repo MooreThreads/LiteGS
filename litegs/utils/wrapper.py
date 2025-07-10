@@ -668,19 +668,14 @@ class Binning(BaseWrapper):
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
         pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
-        tile_left_up=torch.empty_like(pixel_left_up)
-        tile_right_down=torch.empty_like(pixel_right_down)
-        tile_left_up[:,0,:]=(pixel_left_up[:,0,:]/float(tile_size[1])).int().clamp(0,img_tile_shape[1])
-        tile_right_down[:,0,:]=(pixel_right_down[:,0,:]/float(tile_size[1])).ceil().int().clamp(0,img_tile_shape[1])
-        tile_left_up[:,1,:]=(pixel_left_up[:,1,:]/float(tile_size[0])).int().clamp(0,img_tile_shape[0])
-        tile_right_down[:,1,:]=(pixel_right_down[:,1,:]/float(tile_size[0])).ceil().int().clamp(0,img_tile_shape[0])
-        rect_length=tile_right_down-tile_left_up
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
+        tile_left_up,tile_right_down,tiles_touched=litegs_fused.get_allocate_size(pixel_left_up,pixel_right_down,tile_size[0],tile_size[1],img_tile_shape[0],img_tile_shape[1])
 
         #allocate
-        tiles_touched=rect_length[:,0]*rect_length[:,1]
-        b_visible=(tiles_touched!=0)
+        if StatisticsHelperInst.bStart:
+            b_visible=(tiles_touched!=0)
+            StatisticsHelperInst.update_visible_count(b_visible)
+            rect_length=tile_right_down-tile_left_up
+            StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
 
         #sort by depth
         values,point_ids=view_depth.sort(dim=-1,descending=False)
@@ -707,7 +702,7 @@ class Binning(BaseWrapper):
         # range
         tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
-        return tile_start_index,sorted_pointId,b_visible
+        return tile_start_index,sorted_pointId
     
     
     _fused=__binning_fused
