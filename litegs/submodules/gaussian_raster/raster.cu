@@ -349,6 +349,20 @@ __global__ void pack_forward_params(
     }
 }
 
+#define RASTER_FORWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),\
+fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),\
+fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+tilesnum_x
+
+#define ENCODE(STATISTIC, TRANS, DEPTH) (((STATISTIC)*1)<<2)|(((TRANS)*1)<<1)|((DEPTH)*1)
+
 std::vector<at::Tensor> rasterize_forward(
     at::Tensor sorted_points,
     at::Tensor start_index,
@@ -419,33 +433,34 @@ std::vector<at::Tensor> rasterize_forward(
         int tiles_per_block = 4;
         dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
         dim3 Thread3d(32, tiles_per_block);
-        if (enable_statistic)
+        switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
-            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-                fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-                fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tilesnum_x);
-        }
-        else
-        {
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-                fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-                fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tilesnum_x);
+        case ENCODE(false,false,false):
+            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, false, false):
+            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, true, false):
+            raster_forward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, false, true):
+            raster_forward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, true, false):
+            raster_forward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, false, true):
+            raster_forward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, true, true):
+            raster_forward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, true, true):
+            raster_forward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        default:
+            break;
         }
         CUDA_CHECK_ERRORS;
     }
@@ -509,33 +524,34 @@ std::vector<at::Tensor> rasterize_forward_packed(
         int tiles_per_block = 4;
         dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
         dim3 Thread3d(32, tiles_per_block);
-        if (enable_statistic)
+        switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
-            raster_forward_kernel<8, 16,true, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-                fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-                fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tilesnum_x);
-        }
-        else
-        {
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-                output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-                output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-                fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-                fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-                tilesnum_x);
+        case ENCODE(false, false, false):
+            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, false, false):
+            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, true, false):
+            raster_forward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, false, true):
+            raster_forward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, true, false):
+            raster_forward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, false, true):
+            raster_forward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, true, true):
+            raster_forward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, true, true):
+            raster_forward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            break;
+        default:
+            break;
         }
         CUDA_CHECK_ERRORS;
     }
@@ -822,6 +838,21 @@ __global__ void unpack_gradient(
     }
 }
 
+
+#define RASTER_BACKWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),\
+last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),\
+d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+packed_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+err_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
+err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
+tilesnum_x, img_h, img_w
+
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,
@@ -896,43 +927,35 @@ std::vector<at::Tensor> rasterize_backward(
     int tiles_per_block = 4;
     dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
-    //dim3 Block3d(1, viewsnum, 1);
-    //dim3 Thread3d(32, 1);
-    if (enable_statistic == false)
+    
+    switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))
     {
-        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (
-            sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-            packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-            final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),
-            last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-            d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-            d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-            d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-            packed_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            err_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-            err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-            tilesnum_x, img_h, img_w
-            );
-    }
-    else
-    {
-        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (
-            sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-            start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-            packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-            final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),
-            last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),
-            d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-            d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-            d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),
-            packed_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-            err_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-            err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),
-            tilesnum_x, img_h, img_w
-            );
+    case ENCODE(false, false, false):
+        raster_backward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(true, false, false):
+        raster_backward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(false, true, false):
+        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(false, false, true):
+        raster_backward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(true, true, false):
+        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(true, false, true):
+        raster_backward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(false, true, true):
+        raster_backward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    case ENCODE(true, true, true):
+        raster_backward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        break;
+    default:
+        break;
     }
 
     CUDA_CHECK_ERRORS;
