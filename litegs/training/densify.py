@@ -220,8 +220,7 @@ class DensityControllerOfficial(DensityControllerBase):
     def is_densify_actived(self,epoch:int):
 
         return epoch<self.densify_params.densify_until and epoch>=self.densify_params.densify_from and (
-            epoch%self.densify_params.densification_interval==0 or
-            epoch%self.densify_params.prune_interval==0)
+            epoch%self.densify_params.densification_interval==0)
 
     @torch.no_grad()
     def step(self,optimizer:torch.optim.Optimizer,epoch:int):
@@ -229,8 +228,6 @@ class DensityControllerOfficial(DensityControllerBase):
             bUpdate=False
             if epoch%self.densify_params.densification_interval==0:
                 self.split_and_clone(optimizer,epoch)
-                bUpdate=True
-            if epoch%self.densify_params.prune_interval==0:
                 self.prune(optimizer,epoch)
                 bUpdate=True
             if epoch%self.densify_params.opacity_reset_interval==0:
@@ -258,7 +255,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
         frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
         weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
-        invisible = weight_sum==0
+        invisible = weight_sum==0#weight_sum<(weight_sum[weight_sum!=0].quantile(0.05))
         prune_mask[:invisible.shape[0]]|=invisible
 
         big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
@@ -283,8 +280,10 @@ class DensityControllerTamingGS(DensityControllerOfficial):
             chunk_size=xyz.shape[-1]
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
 
+        prune_num=self.get_prune_mask(opacity.sigmoid(),scale.exp()).sum()
+
         cur_target_count = (self.target_points_num - self.init_points_num) / (self.densify_params.densify_until - self.densify_params.densify_from) * (epoch-self.densify_params.densify_from)+self.init_points_num
-        budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])
+        budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])+prune_num
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
         densify_index = torch.multinomial(score, budget, replacement=False)
