@@ -12,11 +12,6 @@
 import os
 from argparse import ArgumentParser
 
-import sys
-
-# 将print输出重定向到文件
-sys.stdout = open('output.txt', 'w')
-
 # Scene-specific budgets for "big" mode (final_count)
 target_primitives_list = {
     "bicycle": [i for i in range(500_000,5_000_000+1,500_000)],
@@ -104,9 +99,9 @@ args, _ = parser.parse_known_args()
 
 datasets={
     "mipnerf360_indoor":["bicycle", "flowers", "garden", "stump", "treehill"],
-    "mipnerf360_outdoor":[],#["room", "counter", "kitchen", "bonsai"],
-    "tanksandtemples":[],#["truck", "train"],
-    "deepblending":[],#["drjohnson", "playroom"],
+    "mipnerf360_outdoor":["room", "counter", "kitchen", "bonsai"],
+    "tanksandtemples":["truck", "train"],
+    "deepblending":["drjohnson", "playroom"],
 }
 
 img_config={
@@ -133,24 +128,28 @@ if not args.skip_training:
             for target_primitives in target_primitives_list[scene_name]:
                 scene_output_path=os.path.join(args.output_path,scene_name+'-{}k'.format(int(target_primitives/1000)))
                 print("scene:{} #primitive:{}".format(scene_name,target_primitives))
-                os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2}".format(
+                os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4}".format(
                     scene_input_path,
                     scene_output_path,
-                    target_primitives
-                )+img_config[dataset]+reg_config[dataset])
+                    target_primitives,
+                    img_config[dataset],
+                    reg_config[dataset]
+                ))
             #full
             scene_output_path=os.path.join(args.output_path,scene_name+'-big')
-            os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2}".format(
-                scene_input_path,
-                scene_output_path,
-                big_budgets[scene_name]
-            )+img_config[dataset]+reg_config[dataset])
+            os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4}".format(
+                    scene_input_path,
+                    scene_output_path,
+                    target_primitives,
+                    img_config[dataset],
+                    reg_config[dataset]
+                ))
 
 for dataset,scenes in datasets.items():
     for scene_name in scenes:
         scene_input_path=os.path.join(args.__getattribute__(dataset.split('_')[0]),scene_name)
         for target_primitives in target_primitives_list[scene_name]:
             scene_output_path=os.path.join(args.output_path,scene_name+'-{}k'.format(int(target_primitives/1000)))
-            os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3".format(scene_input_path,scene_output_path)+img_config[dataset])
+            os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2}  >> output.txt".format(scene_input_path,scene_output_path,img_config[dataset]))
         scene_output_path=os.path.join(args.output_path,scene_name+'-big')
-        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3".format(scene_input_path,scene_output_path)+img_config[dataset])
+        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2}  >> output.txt".format(scene_input_path,scene_output_path,img_config[dataset]))
