@@ -14,6 +14,11 @@ namespace cg = cooperative_groups;
 #include "cuda_errchk.h"
 #include "transform.h"
 
+#if TORCH_VERSION_MINOR < 6
+    #define TYPE type
+#else
+    #define TYPE scalar_type
+#endif
 
 template <typename scalar_t,bool TRNASPOSE=true>
 __global__ void jacobian_rayspace_kernel(
@@ -68,7 +73,7 @@ at::Tensor jacobianRayspace(
     dim3 Block3d(std::ceil(P/(float)threadsnum), N, 1);
     if (bTranspose)
     {
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.type(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t,true > << <Block3d, threadsnum >> > (
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.TYPE(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t,true > << <Block3d, threadsnum >> > (
             translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             output_h,output_w,
@@ -76,7 +81,7 @@ at::Tensor jacobianRayspace(
     }
     else
     {
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.type(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t, false > << <Block3d, threadsnum >> > (
+        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.TYPE(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t, false > << <Block3d, threadsnum >> > (
             translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             output_h,output_w,
@@ -477,7 +482,7 @@ at::Tensor createCov2dDirectly_forward(
     int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(transform_matrix.type(), __FUNCTION__, [&] {
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(transform_matrix.TYPE(), __FUNCTION__, [&] {
         create_cov2d_forward<scalar_t> << <Block3d, threadsnum >> > (
             J.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
@@ -1129,7 +1134,7 @@ std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
     int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.type(), __FUNCTION__, [&] {eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.TYPE(), __FUNCTION__, [&] {eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
         input.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
         val.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
         vec.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
@@ -1147,7 +1152,7 @@ at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix
     int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(inv_matrix.type(), __FUNCTION__, [&] {inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(inv_matrix.TYPE(), __FUNCTION__, [&] {inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
         inv_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
         dL_dInvMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
         dL_dMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
