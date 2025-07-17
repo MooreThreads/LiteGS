@@ -39,7 +39,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/MooreThreads/LiteGS",
     packages=find_packages(where=".", include=["litegs", "litegs.*"])+["fused_ssim"],
-    package_dir={"litegs": "litegs","fused_ssim":"litegs/submodules/fused_ssim/fused_ssim"},
+    package_dir={"litegs": "litegs","fused_ssim":"litegs/submodules/fused_ssim"},
     setup_requires=["torch","wheel"],
     install_requires=["torch","wheel","numpy","plyfile","tqdm","pillow"],
     ext_modules=get_cuda_modules(),
