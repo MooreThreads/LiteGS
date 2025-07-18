@@ -1,0 +1,1170 @@
+  Scene:./output\bicycle-500k Trainingset
+  SSIM :    0.7059133
+  PSNR :   23.7518501
+  LPIPS:    0.3321089
+
+  Scene:./output\bicycle-500k Testset
+  SSIM :    0.6849812
+  PSNR :   24.5474625
+  LPIPS:    0.3353750
+
+  Scene:./output\bicycle-1000k Trainingset
+  SSIM :    0.7608781
+  PSNR :   24.6124668
+  LPIPS:    0.2763152
+
+  Scene:./output\bicycle-1000k Testset
+  SSIM :    0.7310244
+  PSNR :   25.1045647
+  LPIPS:    0.2820348
+
+  Scene:./output\bicycle-1500k Trainingset
+  SSIM :    0.7895129
+  PSNR :   25.0823555
+  LPIPS:    0.2457026
+
+  Scene:./output\bicycle-1500k Testset
+  SSIM :    0.7545734
+  PSNR :   25.2886429
+  LPIPS:    0.2527549
+
+  Scene:./output\bicycle-2000k Trainingset
+  SSIM :    0.8099216
+  PSNR :   25.5258331
+  LPIPS:    0.2237252
+
+  Scene:./output\bicycle-2000k Testset
+  SSIM :    0.7662247
+  PSNR :   25.4461250
+  LPIPS:    0.2360591
+
+  Scene:./output\bicycle-2500k Trainingset
+  SSIM :    0.8213260
+  PSNR :   25.7410812
+  LPIPS:    0.2097353
+
+  Scene:./output\bicycle-2500k Testset
+  SSIM :    0.7741185
+  PSNR :   25.5252151
+  LPIPS:    0.2221467
+
+  Scene:./output\bicycle-3000k Trainingset
+  SSIM :    0.8336805
+  PSNR :   25.9969006
+  LPIPS:    0.1974928
+
+  Scene:./output\bicycle-3000k Testset
+  SSIM :    0.7817459
+  PSNR :   25.5918331
+  LPIPS:    0.2130991
+
+  Scene:./output\bicycle-3500k Trainingset
+  SSIM :    0.8415157
+  PSNR :   26.2036514
+  LPIPS:    0.1876833
+
+  Scene:./output\bicycle-3500k Testset
+  SSIM :    0.7858647
+  PSNR :   25.6866989
+  LPIPS:    0.2058596
+
+  Scene:./output\bicycle-4000k Trainingset
+  SSIM :    0.8467794
+  PSNR :   26.3108559
+  LPIPS:    0.1818382
+
+  Scene:./output\bicycle-4000k Testset
+  SSIM :    0.7894791
+  PSNR :   25.7259464
+  LPIPS:    0.2000875
+
+  Scene:./output\bicycle-4500k Trainingset
+  SSIM :    0.8530676
+  PSNR :   26.5131454
+  LPIPS:    0.1751672
+
+  Scene:./output\bicycle-4500k Testset
+  SSIM :    0.7919377
+  PSNR :   25.7491684
+  LPIPS:    0.1961814
+
+  Scene:./output\bicycle-5000k Trainingset
+  SSIM :    0.8589588
+  PSNR :   26.6815834
+  LPIPS:    0.1689104
+
+  Scene:./output\bicycle-5000k Testset
+  SSIM :    0.7941263
+  PSNR :   25.8247013
+  LPIPS:    0.1930356
+
+  Scene:./output\flowers-500k Trainingset
+  SSIM :    0.6614535
+  PSNR :   22.5549850
+  LPIPS:    0.3554847
+
+  Scene:./output\flowers-500k Testset
+  SSIM :    0.5664337
+  PSNR :   21.3980389
+  LPIPS:    0.4063057
+
+  Scene:./output\flowers-1000k Trainingset
+  SSIM :    0.7186694
+  PSNR :   23.5113468
+  LPIPS:    0.3016574
+
+  Scene:./output\flowers-1000k Testset
+  SSIM :    0.6073578
+  PSNR :   21.8858395
+  LPIPS:    0.3612306
+
+  Scene:./output\flowers-1500k Trainingset
+  SSIM :    0.7484737
+  PSNR :   24.0520496
+  LPIPS:    0.2708387
+
+  Scene:./output\flowers-1500k Testset
+  SSIM :    0.6255833
+  PSNR :   22.0411625
+  LPIPS:    0.3370080
+
+  Scene:./output\flowers-2000k Trainingset
+  SSIM :    0.7662432
+  PSNR :   24.4287262
+  LPIPS:    0.2518065
+
+  Scene:./output\flowers-2000k Testset
+  SSIM :    0.6353817
+  PSNR :   22.1513786
+  LPIPS:    0.3233885
+
+  Scene:./output\flowers-2500k Trainingset
+  SSIM :    0.7809632
+  PSNR :   24.7315426
+  LPIPS:    0.2367547
+
+  Scene:./output\flowers-2500k Testset
+  SSIM :    0.6424012
+  PSNR :   22.2150974
+  LPIPS:    0.3128201
+
+  Scene:./output\flowers-3000k Trainingset
+  SSIM :    0.7916646
+  PSNR :   24.9535065
+  LPIPS:    0.2253813
+
+  Scene:./output\flowers-3000k Testset
+  SSIM :    0.6491913
+  PSNR :   22.3494873
+  LPIPS:    0.3035196
+
+  Scene:./output\flowers-big Trainingset
+  SSIM :    0.7904269
+  PSNR :   24.9636288
+  LPIPS:    0.2255389
+
+  Scene:./output\flowers-big Testset
+  SSIM :    0.6479026
+  PSNR :   22.2911072
+  LPIPS:    0.3049484
+
+  Scene:./output\garden-500k Trainingset
+  SSIM :    0.8220038
+  PSNR :   27.3332291
+  LPIPS:    0.2102841
+
+  Scene:./output\garden-500k Testset
+  SSIM :    0.8017582
+  PSNR :   26.4701385
+  LPIPS:    0.2192165
+
+  Scene:./output\garden-1000k Trainingset
+  SSIM :    0.8583994
+  PSNR :   28.2356434
+  LPIPS:    0.1601315
+
+  Scene:./output\garden-1000k Testset
+  SSIM :    0.8346738
+  PSNR :   27.1259422
+  LPIPS:    0.1714925
+
+  Scene:./output\garden-1500k Trainingset
+  SSIM :    0.8747478
+  PSNR :   28.7047577
+  LPIPS:    0.1363330
+
+  Scene:./output\garden-1500k Testset
+  SSIM :    0.8481317
+  PSNR :   27.4162960
+  LPIPS:    0.1490326
+
+  Scene:./output\garden-2000k Trainingset
+  SSIM :    0.8853668
+  PSNR :   29.0636101
+  LPIPS:    0.1223454
+
+  Scene:./output\garden-2000k Testset
+  SSIM :    0.8578585
+  PSNR :   27.6314754
+  LPIPS:    0.1353350
+
+  Scene:./output\garden-2500k Trainingset
+  SSIM :    0.8915060
+  PSNR :   29.2709846
+  LPIPS:    0.1130836
+
+  Scene:./output\garden-2500k Testset
+  SSIM :    0.8616678
+  PSNR :   27.7374420
+  LPIPS:    0.1275641
+
+  Scene:./output\garden-3000k Trainingset
+  SSIM :    0.8964819
+  PSNR :   29.4338188
+  LPIPS:    0.1066289
+
+  Scene:./output\garden-3000k Testset
+  SSIM :    0.8660766
+  PSNR :   27.8178520
+  LPIPS:    0.1214285
+
+  Scene:./output\garden-3500k Trainingset
+  SSIM :    0.8997245
+  PSNR :   29.5357170
+  LPIPS:    0.1018432
+
+  Scene:./output\garden-3500k Testset
+  SSIM :    0.8680537
+  PSNR :   27.8774261
+  LPIPS:    0.1173412
+
+  Scene:./output\garden-4000k Trainingset
+  SSIM :    0.9032024
+  PSNR :   29.6777706
+  LPIPS:    0.0976754
+
+  Scene:./output\garden-4000k Testset
+  SSIM :    0.8705963
+  PSNR :   27.9343033
+  LPIPS:    0.1133448
+
+  Scene:./output\garden-4500k Trainingset
+  SSIM :    0.9053955
+  PSNR :   29.8078003
+  LPIPS:    0.0937469
+
+  Scene:./output\garden-4500k Testset
+  SSIM :    0.8714585
+  PSNR :   27.9225368
+  LPIPS:    0.1100899
+
+  Scene:./output\garden-5000k Trainingset
+  SSIM :    0.9073523
+  PSNR :   29.8852310
+  LPIPS:    0.0915611
+
+  Scene:./output\garden-5000k Testset
+  SSIM :    0.8724958
+  PSNR :   27.9819489
+  LPIPS:    0.1083998
+
+  Scene:./output\garden-big Trainingset
+  SSIM :    0.9076527
+  PSNR :   29.8856030
+  LPIPS:    0.0913441
+
+  Scene:./output\garden-big Testset
+  SSIM :    0.8739820
+  PSNR :   28.0254478
+  LPIPS:    0.1077256
+
+  Scene:./output\stump-200k Trainingset
+  SSIM :    0.7018780
+  PSNR :   25.5545883
+  LPIPS:    0.3806910
+
+  Scene:./output\stump-200k Testset
+  SSIM :    0.6769964
+  PSNR :   25.3900757
+  LPIPS:    0.3749839
+
+  Scene:./output\stump-400k Trainingset
+  SSIM :    0.7676085
+  PSNR :   26.8345203
+  LPIPS:    0.3159608
+
+  Scene:./output\stump-400k Testset
+  SSIM :    0.7285666
+  PSNR :   26.1794548
+  LPIPS:    0.3185927
+
+  Scene:./output\stump-600k Trainingset
+  SSIM :    0.8028976
+  PSNR :   27.5935287
+  LPIPS:    0.2782804
+
+  Scene:./output\stump-600k Testset
+  SSIM :    0.7542160
+  PSNR :   26.5122337
+  LPIPS:    0.2853345
+
+  Scene:./output\stump-800k Trainingset
+  SSIM :    0.8264889
+  PSNR :   28.2040863
+  LPIPS:    0.2516660
+
+  Scene:./output\stump-800k Testset
+  SSIM :    0.7701732
+  PSNR :   26.7994041
+  LPIPS:    0.2652209
+
+  Scene:./output\stump-1000k Trainingset
+  SSIM :    0.8434490
+  PSNR :   28.6793613
+  LPIPS:    0.2318280
+
+  Scene:./output\stump-1000k Testset
+  SSIM :    0.7788270
+  PSNR :   26.9501152
+  LPIPS:    0.2526660
+
+  Scene:./output\stump-1200k Trainingset
+  SSIM :    0.8556195
+  PSNR :   29.0457764
+  LPIPS:    0.2170232
+
+  Scene:./output\stump-1200k Testset
+  SSIM :    0.7865590
+  PSNR :   27.0988045
+  LPIPS:    0.2414203
+
+  Scene:./output\stump-1400k Trainingset
+  SSIM :    0.8656336
+  PSNR :   29.3652248
+  LPIPS:    0.2049635
+
+  Scene:./output\stump-1400k Testset
+  SSIM :    0.7917075
+  PSNR :   27.1867752
+  LPIPS:    0.2336280
+
+  Scene:./output\stump-1600k Trainingset
+  SSIM :    0.8739239
+  PSNR :   29.6422787
+  LPIPS:    0.1946492
+
+  Scene:./output\stump-1600k Testset
+  SSIM :    0.7954692
+  PSNR :   27.2291718
+  LPIPS:    0.2270925
+
+  Scene:./output\stump-1800k Trainingset
+  SSIM :    0.8807147
+  PSNR :   29.9514122
+  LPIPS:    0.1854399
+
+  Scene:./output\stump-1800k Testset
+  SSIM :    0.7984616
+  PSNR :   27.2747364
+  LPIPS:    0.2222455
+
+  Scene:./output\stump-2000k Trainingset
+  SSIM :    0.8868591
+  PSNR :   30.1757355
+  LPIPS:    0.1774771
+
+  Scene:./output\stump-2000k Testset
+  SSIM :    0.8015399
+  PSNR :   27.3302574
+  LPIPS:    0.2158892
+
+  Scene:./output\stump-big Trainingset
+  SSIM :    0.8860025
+  PSNR :   30.1142826
+  LPIPS:    0.1784402
+
+  Scene:./output\stump-big Testset
+  SSIM :    0.8013011
+  PSNR :   27.3389778
+  LPIPS:    0.2167150
+
+  Scene:./output\treehill-200k Trainingset
+  SSIM :    0.6009087
+  PSNR :   21.5490437
+  LPIPS:    0.4507163
+
+  Scene:./output\treehill-200k Testset
+  SSIM :    0.5631406
+  PSNR :   22.9049206
+  LPIPS:    0.4771884
+
+  Scene:./output\treehill-400k Trainingset
+  SSIM :    0.6546406
+  PSNR :   22.2838688
+  LPIPS:    0.3970316
+
+  Scene:./output\treehill-400k Testset
+  SSIM :    0.6032216
+  PSNR :   23.1305027
+  LPIPS:    0.4269196
+
+  Scene:./output\treehill-600k Trainingset
+  SSIM :    0.6852006
+  PSNR :   22.7024021
+  LPIPS:    0.3646500
+
+  Scene:./output\treehill-600k Testset
+  SSIM :    0.6229342
+  PSNR :   23.2113552
+  LPIPS:    0.3968867
+
+  Scene:./output\treehill-800k Trainingset
+  SSIM :    0.7100786
+  PSNR :   23.1320992
+  LPIPS:    0.3386794
+
+  Scene:./output\treehill-800k Testset
+  SSIM :    0.6339975
+  PSNR :   23.1813297
+  LPIPS:    0.3763721
+
+  Scene:./output\treehill-1000k Trainingset
+  SSIM :    0.7277860
+  PSNR :   23.4517365
+  LPIPS:    0.3203935
+
+  Scene:./output\treehill-1000k Testset
+  SSIM :    0.6416158
+  PSNR :   23.2190762
+  LPIPS:    0.3626434
+
+  Scene:./output\treehill-1200k Trainingset
+  SSIM :    0.7433125
+  PSNR :   23.7744560
+  LPIPS:    0.3047957
+
+  Scene:./output\treehill-1200k Testset
+  SSIM :    0.6476889
+  PSNR :   23.3147717
+  LPIPS:    0.3497105
+
+  Scene:./output\treehill-1400k Trainingset
+  SSIM :    0.7542010
+  PSNR :   23.9610634
+  LPIPS:    0.2930279
+
+  Scene:./output\treehill-1400k Testset
+  SSIM :    0.6512331
+  PSNR :   23.3714142
+  LPIPS:    0.3400885
+
+  Scene:./output\treehill-1600k Trainingset
+  SSIM :    0.7630006
+  PSNR :   24.0994663
+  LPIPS:    0.2840235
+
+  Scene:./output\treehill-1600k Testset
+  SSIM :    0.6546330
+  PSNR :   23.2714958
+  LPIPS:    0.3328701
+
+  Scene:./output\treehill-1800k Trainingset
+  SSIM :    0.7732430
+  PSNR :   24.3278084
+  LPIPS:    0.2734120
+
+  Scene:./output\treehill-1800k Testset
+  SSIM :    0.6569414
+  PSNR :   23.2510433
+  LPIPS:    0.3251698
+
+  Scene:./output\treehill-2000k Trainingset
+  SSIM :    0.7819808
+  PSNR :   24.5150623
+  LPIPS:    0.2640897
+
+  Scene:./output\treehill-2000k Testset
+  SSIM :    0.6591989
+  PSNR :   23.2183743
+  LPIPS:    0.3189624
+
+  Scene:./output\treehill-big Trainingset
+  SSIM :    0.7801466
+  PSNR :   24.4404125
+  LPIPS:    0.2660017
+
+  Scene:./output\treehill-big Testset
+  SSIM :    0.6597632
+  PSNR :   23.2400284
+  LPIPS:    0.3185755
+
+  Scene:./output\room-200k Trainingset
+  SSIM :    0.9252449
+  PSNR :   33.7370758
+  LPIPS:    0.2301521
+
+  Scene:./output\room-200k Testset
+  SSIM :    0.9121370
+  PSNR :   31.5966740
+  LPIPS:    0.2416021
+
+  Scene:./output\room-400k Trainingset
+  SSIM :    0.9357023
+  PSNR :   34.4721565
+  LPIPS:    0.2044839
+
+  Scene:./output\room-400k Testset
+  SSIM :    0.9211565
+  PSNR :   32.0357704
+  LPIPS:    0.2189220
+
+  Scene:./output\room-600k Trainingset
+  SSIM :    0.9406438
+  PSNR :   34.7858543
+  LPIPS:    0.1914868
+
+  Scene:./output\room-600k Testset
+  SSIM :    0.9255112
+  PSNR :   32.1955643
+  LPIPS:    0.2068152
+
+  Scene:./output\room-800k Trainingset
+  SSIM :    0.9441090
+  PSNR :   35.0897865
+  LPIPS:    0.1837608
+
+  Scene:./output\room-800k Testset
+  SSIM :    0.9284962
+  PSNR :   32.4170723
+  LPIPS:    0.2003263
+
+  Scene:./output\room-1000k Trainingset
+  SSIM :    0.9460517
+  PSNR :   35.2788963
+  LPIPS:    0.1782509
+
+  Scene:./output\room-1000k Testset
+  SSIM :    0.9303538
+  PSNR :   32.4816818
+  LPIPS:    0.1960566
+
+  Scene:./output\room-big Trainingset
+  SSIM :    0.9461081
+  PSNR :   35.2848129
+  LPIPS:    0.1779742
+
+  Scene:./output\room-big Testset
+  SSIM :    0.9303331
+  PSNR :   32.5204277
+  LPIPS:    0.1958414
+
+  Scene:./output\counter-200k Trainingset
+  SSIM :    0.9080959
+  PSNR :   30.0105858
+  LPIPS:    0.2140611
+
+  Scene:./output\counter-200k Testset
+  SSIM :    0.8956527
+  PSNR :   28.9155865
+  LPIPS:    0.2264626
+
+  Scene:./output\counter-400k Trainingset
+  SSIM :    0.9243103
+  PSNR :   30.9105835
+  LPIPS:    0.1854618
+
+  Scene:./output\counter-400k Testset
+  SSIM :    0.9084457
+  PSNR :   29.4137173
+  LPIPS:    0.2016467
+
+  Scene:./output\counter-600k Trainingset
+  SSIM :    0.9312624
+  PSNR :   31.3174171
+  LPIPS:    0.1717117
+
+  Scene:./output\counter-600k Testset
+  SSIM :    0.9134584
+  PSNR :   29.6266212
+  LPIPS:    0.1901467
+
+  Scene:./output\counter-800k Trainingset
+  SSIM :    0.9357341
+  PSNR :   31.5389233
+  LPIPS:    0.1630555
+
+  Scene:./output\counter-800k Testset
+  SSIM :    0.9168666
+  PSNR :   29.7479420
+  LPIPS:    0.1830400
+
+  Scene:./output\counter-1000k Trainingset
+  SSIM :    0.9389153
+  PSNR :   31.7651215
+  LPIPS:    0.1571750
+
+  Scene:./output\counter-1000k Testset
+  SSIM :    0.9183006
+  PSNR :   29.7683449
+  LPIPS:    0.1788165
+
+  Scene:./output\counter-big Trainingset
+  SSIM :    0.9387518
+  PSNR :   31.7909050
+  LPIPS:    0.1571085
+
+  Scene:./output\counter-big Testset
+  SSIM :    0.9176982
+  PSNR :   29.7847176
+  LPIPS:    0.1792452
+
+  Scene:./output\kitchen-200k Trainingset
+  SSIM :    0.9172653
+  PSNR :   30.4026909
+  LPIPS:    0.1610707
+
+  Scene:./output\kitchen-200k Testset
+  SSIM :    0.9053472
+  PSNR :   29.5124969
+  LPIPS:    0.1701125
+
+  Scene:./output\kitchen-400k Trainingset
+  SSIM :    0.9364048
+  PSNR :   32.7441711
+  LPIPS:    0.1280529
+
+  Scene:./output\kitchen-400k Testset
+  SSIM :    0.9231241
+  PSNR :   31.6349258
+  LPIPS:    0.1378245
+
+  Scene:./output\kitchen-600k Trainingset
+  SSIM :    0.9425303
+  PSNR :   33.2739639
+  LPIPS:    0.1172670
+
+  Scene:./output\kitchen-600k Testset
+  SSIM :    0.9274306
+  PSNR :   31.9401760
+  LPIPS:    0.1276621
+
+  Scene:./output\kitchen-800k Trainingset
+  SSIM :    0.9455258
+  PSNR :   33.5689888
+  LPIPS:    0.1110792
+
+  Scene:./output\kitchen-800k Testset
+  SSIM :    0.9311715
+  PSNR :   32.2508507
+  LPIPS:    0.1211436
+
+  Scene:./output\kitchen-1000k Trainingset
+  SSIM :    0.9484354
+  PSNR :   33.8325615
+  LPIPS:    0.1068882
+
+  Scene:./output\kitchen-1000k Testset
+  SSIM :    0.9332020
+  PSNR :   32.3006401
+  LPIPS:    0.1185342
+
+  Scene:./output\kitchen-big Trainingset
+  SSIM :    0.9482962
+  PSNR :   33.8294067
+  LPIPS:    0.1072592
+
+  Scene:./output\kitchen-big Testset
+  SSIM :    0.9326305
+  PSNR :   32.3019371
+  LPIPS:    0.1194574
+
+  Scene:./output\bonsai-200k Trainingset
+  SSIM :    0.9360906
+  PSNR :   32.1406212
+  LPIPS:    0.2313104
+
+  Scene:./output\bonsai-200k Testset
+  SSIM :    0.9306609
+  PSNR :   31.3592300
+  LPIPS:    0.2341229
+
+  Scene:./output\bonsai-300k Trainingset
+  SSIM :    0.9443466
+  PSNR :   32.9447136
+  LPIPS:    0.2105854
+
+  Scene:./output\bonsai-300k Testset
+  SSIM :    0.9387108
+  PSNR :   31.9893017
+  LPIPS:    0.2142234
+
+  Scene:./output\bonsai-400k Trainingset
+  SSIM :    0.9485638
+  PSNR :   33.4647560
+  LPIPS:    0.2004920
+
+  Scene:./output\bonsai-400k Testset
+  SSIM :    0.9424270
+  PSNR :   32.4071274
+  LPIPS:    0.2045717
+
+  Scene:./output\bonsai-500k Trainingset
+  SSIM :    0.9514331
+  PSNR :   33.7415161
+  LPIPS:    0.1937111
+
+  Scene:./output\bonsai-500k Testset
+  SSIM :    0.9452044
+  PSNR :   32.6600914
+  LPIPS:    0.1981265
+
+  Scene:./output\bonsai-600k Trainingset
+  SSIM :    0.9532836
+  PSNR :   33.8963013
+  LPIPS:    0.1895853
+
+  Scene:./output\bonsai-600k Testset
+  SSIM :    0.9470320
+  PSNR :   32.7489395
+  LPIPS:    0.1940837
+
+  Scene:./output\bonsai-700k Trainingset
+  SSIM :    0.9546866
+  PSNR :   34.0335197
+  LPIPS:    0.1863780
+
+  Scene:./output\bonsai-700k Testset
+  SSIM :    0.9482998
+  PSNR :   32.8675728
+  LPIPS:    0.1911549
+
+  Scene:./output\bonsai-800k Trainingset
+  SSIM :    0.9558576
+  PSNR :   34.2723579
+  LPIPS:    0.1829897
+
+  Scene:./output\bonsai-800k Testset
+  SSIM :    0.9491738
+  PSNR :   33.0109749
+  LPIPS:    0.1879940
+
+  Scene:./output\bonsai-900k Trainingset
+  SSIM :    0.9567499
+  PSNR :   34.3851738
+  LPIPS:    0.1808486
+
+  Scene:./output\bonsai-900k Testset
+  SSIM :    0.9498316
+  PSNR :   33.0613327
+  LPIPS:    0.1861259
+
+  Scene:./output\bonsai-1000k Trainingset
+  SSIM :    0.9574868
+  PSNR :   34.4209328
+  LPIPS:    0.1789275
+
+  Scene:./output\bonsai-1000k Testset
+  SSIM :    0.9502632
+  PSNR :   32.9742622
+  LPIPS:    0.1844033
+
+  Scene:./output\bonsai-big Trainingset
+  SSIM :    0.9576324
+  PSNR :   34.5189781
+  LPIPS:    0.1788015
+
+  Scene:./output\bonsai-big Testset
+  SSIM :    0.9506124
+  PSNR :   33.1522331
+  LPIPS:    0.1843880
+
+  Scene:./output\truck-200k Trainingset
+  SSIM :    0.8814984
+  PSNR :   26.5651226
+  LPIPS:    0.1725305
+
+  Scene:./output\truck-200k Testset
+  SSIM :    0.8662440
+  PSNR :   25.4999580
+  LPIPS:    0.1765602
+
+  Scene:./output\truck-400k Trainingset
+  SSIM :    0.9011446
+  PSNR :   27.3871918
+  LPIPS:    0.1373190
+
+  Scene:./output\truck-400k Testset
+  SSIM :    0.8824731
+  PSNR :   26.0430927
+  LPIPS:    0.1436788
+
+  Scene:./output\truck-600k Trainingset
+  SSIM :    0.9107392
+  PSNR :   27.8139286
+  LPIPS:    0.1198846
+
+  Scene:./output\truck-600k Testset
+  SSIM :    0.8892229
+  PSNR :   26.2522430
+  LPIPS:    0.1282441
+
+  Scene:./output\truck-800k Trainingset
+  SSIM :    0.9167348
+  PSNR :   28.1131592
+  LPIPS:    0.1089795
+
+  Scene:./output\truck-800k Testset
+  SSIM :    0.8926976
+  PSNR :   26.3554916
+  LPIPS:    0.1187712
+
+  Scene:./output\truck-1000k Trainingset
+  SSIM :    0.9212888
+  PSNR :   28.3416576
+  LPIPS:    0.1009092
+
+  Scene:./output\truck-1000k Testset
+  SSIM :    0.8950467
+  PSNR :   26.4601707
+  LPIPS:    0.1121437
+
+  Scene:./output\truck-1200k Trainingset
+  SSIM :    0.9240584
+  PSNR :   28.4779015
+  LPIPS:    0.0958472
+
+  Scene:./output\truck-1200k Testset
+  SSIM :    0.8962317
+  PSNR :   26.5178986
+  LPIPS:    0.1078899
+
+  Scene:./output\truck-1400k Trainingset
+  SSIM :    0.9267296
+  PSNR :   28.6406422
+  LPIPS:    0.0913639
+
+  Scene:./output\truck-1400k Testset
+  SSIM :    0.8973932
+  PSNR :   26.5539894
+  LPIPS:    0.1040302
+
+  Scene:./output\truck-1600k Trainingset
+  SSIM :    0.9285416
+  PSNR :   28.7063503
+  LPIPS:    0.0882159
+
+  Scene:./output\truck-1600k Testset
+  SSIM :    0.8981288
+  PSNR :   26.5792942
+  LPIPS:    0.1020491
+
+  Scene:./output\truck-1800k Trainingset
+  SSIM :    0.9304692
+  PSNR :   28.8257122
+  LPIPS:    0.0848097
+
+  Scene:./output\truck-1800k Testset
+  SSIM :    0.8991482
+  PSNR :   26.6349697
+  LPIPS:    0.0991787
+
+  Scene:./output\truck-2000k Trainingset
+  SSIM :    0.9321679
+  PSNR :   28.9184151
+  LPIPS:    0.0820327
+
+  Scene:./output\truck-2000k Testset
+  SSIM :    0.8993163
+  PSNR :   26.6537552
+  LPIPS:    0.0972056
+
+  Scene:./output\truck-big Trainingset
+  SSIM :    0.9320819
+  PSNR :   28.9339809
+  LPIPS:    0.0821413
+
+  Scene:./output\truck-big Testset
+  SSIM :    0.8995916
+  PSNR :   26.6835384
+  LPIPS:    0.0971833
+
+  Scene:./output\train-200k Trainingset
+  SSIM :    0.8254231
+  PSNR :   24.9917641
+  LPIPS:    0.2387693
+
+  Scene:./output\train-200k Testset
+  SSIM :    0.7914462
+  PSNR :   22.2072411
+  LPIPS:    0.2564315
+
+  Scene:./output\train-400k Trainingset
+  SSIM :    0.8562875
+  PSNR :   25.9664631
+  LPIPS:    0.1987661
+
+  Scene:./output\train-400k Testset
+  SSIM :    0.8153316
+  PSNR :   22.6571922
+  LPIPS:    0.2196604
+
+  Scene:./output\train-600k Trainingset
+  SSIM :    0.8709890
+  PSNR :   26.3187180
+  LPIPS:    0.1787612
+
+  Scene:./output\train-600k Testset
+  SSIM :    0.8230001
+  PSNR :   22.5037880
+  LPIPS:    0.2022194
+
+  Scene:./output\train-800k Trainingset
+  SSIM :    0.8805600
+  PSNR :   26.6478214
+  LPIPS:    0.1655108
+
+  Scene:./output\train-800k Testset
+  SSIM :    0.8275023
+  PSNR :   22.4850426
+  LPIPS:    0.1919113
+
+  Scene:./output\train-1000k Trainingset
+  SSIM :    0.8879862
+  PSNR :   26.8365955
+  LPIPS:    0.1552079
+
+  Scene:./output\train-1000k Testset
+  SSIM :    0.8337175
+  PSNR :   22.6805077
+  LPIPS:    0.1822449
+
+  Scene:./output\train-big Trainingset
+  SSIM :    0.8882922
+  PSNR :   26.8757458
+  LPIPS:    0.1549670
+
+  Scene:./output\train-big Testset
+  SSIM :    0.8327015
+  PSNR :   22.5527725
+  LPIPS:    0.1824030
+
+  Scene:./output\drjohnson-100k Trainingset
+  SSIM :    0.9013815
+  PSNR :   31.7400570
+  LPIPS:    0.2994532
+
+  Scene:./output\drjohnson-100k Testset
+  SSIM :    0.8832362
+  PSNR :   28.7307014
+  LPIPS:    0.3109688
+
+  Scene:./output\drjohnson-200k Trainingset
+  SSIM :    0.9199879
+  PSNR :   33.3300705
+  LPIPS:    0.2637558
+
+  Scene:./output\drjohnson-200k Testset
+  SSIM :    0.8949122
+  PSNR :   29.3562546
+  LPIPS:    0.2823417
+
+  Scene:./output\drjohnson-300k Trainingset
+  SSIM :    0.9283168
+  PSNR :   34.0578690
+  LPIPS:    0.2473392
+
+  Scene:./output\drjohnson-300k Testset
+  SSIM :    0.8994297
+  PSNR :   29.5325050
+  LPIPS:    0.2706463
+
+  Scene:./output\drjohnson-400k Trainingset
+  SSIM :    0.9338215
+  PSNR :   34.5528259
+  LPIPS:    0.2354887
+
+  Scene:./output\drjohnson-400k Testset
+  SSIM :    0.9021173
+  PSNR :   29.6722088
+  LPIPS:    0.2623228
+
+  Scene:./output\drjohnson-500k Trainingset
+  SSIM :    0.9379212
+  PSNR :   34.8931465
+  LPIPS:    0.2267233
+
+  Scene:./output\drjohnson-500k Testset
+  SSIM :    0.9036390
+  PSNR :   29.5715313
+  LPIPS:    0.2570757
+
+  Scene:./output\drjohnson-600k Trainingset
+  SSIM :    0.9412156
+  PSNR :   35.2965393
+  LPIPS:    0.2192910
+
+  Scene:./output\drjohnson-600k Testset
+  SSIM :    0.9050402
+  PSNR :   29.7023888
+  LPIPS:    0.2514183
+
+  Scene:./output\drjohnson-700k Trainingset
+  SSIM :    0.9435558
+  PSNR :   35.5212440
+  LPIPS:    0.2142982
+
+  Scene:./output\drjohnson-700k Testset
+  SSIM :    0.9058560
+  PSNR :   29.6033173
+  LPIPS:    0.2492837
+
+  Scene:./output\drjohnson-800k Trainingset
+  SSIM :    0.9455401
+  PSNR :   35.7140274
+  LPIPS:    0.2094746
+
+  Scene:./output\drjohnson-800k Testset
+  SSIM :    0.9060619
+  PSNR :   29.6741390
+  LPIPS:    0.2467895
+
+  Scene:./output\drjohnson-900k Trainingset
+  SSIM :    0.9476821
+  PSNR :   35.9432831
+  LPIPS:    0.2047952
+
+  Scene:./output\drjohnson-900k Testset
+  SSIM :    0.9064569
+  PSNR :   29.5986176
+  LPIPS:    0.2443230
+
+  Scene:./output\drjohnson-1000k Trainingset
+  SSIM :    0.9489760
+  PSNR :   36.0503883
+  LPIPS:    0.2013522
+
+  Scene:./output\drjohnson-1000k Testset
+  SSIM :    0.9067793
+  PSNR :   29.6230373
+  LPIPS:    0.2418002
+
+  Scene:./output\drjohnson-big Trainingset
+  SSIM :    0.9490518
+  PSNR :   36.0551262
+  LPIPS:    0.2012367
+
+  Scene:./output\drjohnson-big Testset
+  SSIM :    0.9082900
+  PSNR :   29.7574520
+  LPIPS:    0.2408645
+
+  Scene:./output\playroom-100k Trainingset
+  SSIM :    0.9304700
+  PSNR :   34.4297905
+  LPIPS:    0.2581673
+
+  Scene:./output\playroom-100k Testset
+  SSIM :    0.9022629
+  PSNR :   30.0727406
+  LPIPS:    0.2884760
+
+  Scene:./output\playroom-200k Trainingset
+  SSIM :    0.9391615
+  PSNR :   35.6937561
+  LPIPS:    0.2338571
+
+  Scene:./output\playroom-200k Testset
+  SSIM :    0.9088407
+  PSNR :   30.7727013
+  LPIPS:    0.2651916
+
+  Scene:./output\playroom-300k Trainingset
+  SSIM :    0.9434643
+  PSNR :   36.1967392
+  LPIPS:    0.2211575
+
+  Scene:./output\playroom-300k Testset
+  SSIM :    0.9110934
+  PSNR :   30.6653080
+  LPIPS:    0.2543692
+
+  Scene:./output\playroom-400k Trainingset
+  SSIM :    0.9461838
+  PSNR :   36.6286621
+  LPIPS:    0.2134419
+
+  Scene:./output\playroom-400k Testset
+  SSIM :    0.9126763
+  PSNR :   30.7071667
+  LPIPS:    0.2479755
+
+  Scene:./output\playroom-500k Trainingset
+  SSIM :    0.9483667
+  PSNR :   37.0535507
+  LPIPS:    0.2075010
+
+  Scene:./output\playroom-500k Testset
+  SSIM :    0.9134637
+  PSNR :   30.8553829
+  LPIPS:    0.2417543
+
+  Scene:./output\playroom-600k Trainingset
+  SSIM :    0.9497069
+  PSNR :   37.2612381
+  LPIPS:    0.2028801
+
+  Scene:./output\playroom-600k Testset
+  SSIM :    0.9134020
+  PSNR :   30.7771149
+  LPIPS:    0.2393063
+
+  Scene:./output\playroom-700k Trainingset
+  SSIM :    0.9508858
+  PSNR :   37.4221573
+  LPIPS:    0.1992766
+
+  Scene:./output\playroom-700k Testset
+  SSIM :    0.9138743
+  PSNR :   30.7937222
+  LPIPS:    0.2350538
+
+  Scene:./output\playroom-800k Trainingset
+  SSIM :    0.9517890
+  PSNR :   37.4781380
+  LPIPS:    0.1960898
+
+  Scene:./output\playroom-800k Testset
+  SSIM :    0.9142662
+  PSNR :   30.8406219
+  LPIPS:    0.2324965
+
+  Scene:./output\playroom-900k Trainingset
+  SSIM :    0.9527420
+  PSNR :   37.6281052
+  LPIPS:    0.1933645
+
+  Scene:./output\playroom-900k Testset
+  SSIM :    0.9138927
+  PSNR :   30.8543262
+  LPIPS:    0.2306723
+
+  Scene:./output\playroom-1000k Trainingset
+  SSIM :    0.9534575
+  PSNR :   37.7010460
+  LPIPS:    0.1908985
+
+  Scene:./output\playroom-1000k Testset
+  SSIM :    0.9144779
+  PSNR :   30.8928719
+  LPIPS:    0.2287217
+
+  Scene:./output\playroom-big Trainingset
+  SSIM :    0.9534652
+  PSNR :   37.8692589
+  LPIPS:    0.1906316
+
+  Scene:./output\playroom-big Testset
+  SSIM :    0.9140810
+  PSNR :   30.9023609
+  LPIPS:    0.2285423
+
