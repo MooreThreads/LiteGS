@@ -283,7 +283,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         prune_num=self.get_prune_mask(opacity.sigmoid(),scale.exp()).sum()
 
         cur_target_count = (self.target_points_num - self.init_points_num) / (self.densify_params.densify_until - self.densify_params.densify_from) * (epoch-self.densify_params.densify_from)+self.init_points_num
-        budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])+prune_num
+        budget=min(max(int(cur_target_count-xyz.shape[-1]),1)+prune_num,xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
         densify_index = torch.multinomial(score, budget, replacement=False)
