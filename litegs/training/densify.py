@@ -257,9 +257,6 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
         invisible = weight_sum==0#weight_sum<(weight_sum[weight_sum!=0].quantile(0.05))
         prune_mask[:invisible.shape[0]]|=invisible
-
-        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-        prune_mask[:big_points_vs.shape[0]]|=big_points_vs
         
         return prune_mask
     

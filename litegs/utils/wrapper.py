@@ -672,8 +672,6 @@ class Binning(BaseWrapper):
         if StatisticsHelperInst.bStart:
             b_visible=(tiles_touched!=0)
             StatisticsHelperInst.update_visible_count(b_visible)
-            rect_length=tile_right_down-tile_left_up
-            StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
 
         #sort by depth
         values,point_ids=view_depth.sort(dim=-1,descending=False)
