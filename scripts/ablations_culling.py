@@ -71,6 +71,7 @@ for dataset_name,scenes in datasets.items():
     for scene_name in scenes:
         scene_input_path=os.path.join(datasets_path[dataset_name],scene_name)
         scene_output_path=os.path.join(output_path,scene_name)
+        print("scene:{} #primitive:{}".format(scene_name,target_primitives[scene_name]))
         os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4} --cluster_size 0".format(
                 scene_input_path,
                 scene_output_path,
@@ -80,8 +81,8 @@ for dataset_name,scenes in datasets.items():
             ))
         
 
-for dataset,scenes in datasets.items():
+for dataset_name,scenes in datasets.items():
     for scene_name in scenes:
         scene_input_path=os.path.join(datasets_path[dataset_name],scene_name)
         scene_output_path=os.path.join(output_path,scene_name)
-        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2} ".format(scene_input_path,scene_output_path,img_config[dataset]))
+        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2} ".format(scene_input_path,scene_output_path,img_config[dataset_name]))

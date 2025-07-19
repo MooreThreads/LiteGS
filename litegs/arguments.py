@@ -78,10 +78,10 @@ class PipelineParams(ParamGroup):
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
-    iterations = 18000
+    iterations = 30000
     position_lr_init = 0.00016
     position_lr_final = 0.0000016
-    position_lr_max_steps = 18000
+    position_lr_max_steps = 30000
     feature_lr = 0.0025
     opacity_lr = 0.025
     scaling_lr = 0.005
