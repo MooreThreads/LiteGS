@@ -128,7 +128,7 @@ if not args.skip_training:
             for target_primitives in target_primitives_list[scene_name]:
                 scene_output_path=os.path.join(args.output_path,scene_name+'-{}k'.format(int(target_primitives/1000)))
                 print("scene:{} #primitive:{}".format(scene_name,target_primitives))
-                os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4}".format(
+                os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4} >> train.txt".format(
                     scene_input_path,
                     scene_output_path,
                     target_primitives,
@@ -137,7 +137,9 @@ if not args.skip_training:
                 ))
             #full
             scene_output_path=os.path.join(args.output_path,scene_name+'-big')
-            os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4}".format(
+            target_primitives=big_budgets[scene_name]
+            print("scene:{} #primitive:{}".format(scene_name,target_primitives))
+            os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4} >> train.txt".format(
                     scene_input_path,
                     scene_output_path,
                     target_primitives,
