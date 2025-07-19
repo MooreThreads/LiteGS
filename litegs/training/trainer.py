@@ -147,6 +147,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         if epoch in save_ply or epoch==total_epoch-1:
             if epoch==total_epoch-1:
                 progress_bar.close()
+                print("{} takes: {} s".format(lp.model_path,progress_bar.format_dict['elapsed']))
                 ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
             else:
                 ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")    
