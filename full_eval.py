@@ -112,7 +112,7 @@ img_config={
 }
 
 reg_config={
-    "mipnerf360_indoor":" --reg_weight 0.001 ",
+    "mipnerf360_indoor":" --reg_weight 0 ",
     "mipnerf360_outdoor":" --reg_weight 0 ",
     "tanksandtemples":" --reg_weight 0 ",
     "deepblending":" --reg_weight 0 ",
