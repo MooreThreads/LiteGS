@@ -119,7 +119,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         if epoch in test_epochs:
             with torch.no_grad():
-                _cluster_origin,_cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
+                _cluster_origin=None
+                _cluster_extend=None
+                if pp.cluster_size:
+                    _cluster_origin,_cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
                 psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
                 loaders={"Trainingset":train_loader}
                 if lp.eval:

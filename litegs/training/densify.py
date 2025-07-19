@@ -34,15 +34,18 @@ class DensityControllerBase:
 
     @torch.no_grad()
     def _cat_tensors_to_optimizer(self, tensors_dict:dict,optimizer:torch.optim.Optimizer):
+        cat_dim=-1
+        if self.bCluster:
+            cat_dim=-2
         for group in optimizer.param_groups:
             assert len(group["params"]) == 1
             extension_tensor = tensors_dict[group["name"]]
             stored_state = optimizer.state.get(group['params'][0], None)
             assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
             if stored_state is not None:
-                stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
-                stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
-            new_param=torch.cat((group["params"][0], extension_tensor), dim=-2).contiguous()
+                stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+                stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+            new_param=torch.cat((group["params"][0], extension_tensor), dim=cat_dim).contiguous()
             optimizer.state.pop(group['params'][0])#pop param
             group["params"][0]=torch.nn.Parameter(new_param)
             optimizer.state[group["params"][0]]=stored_state#assign to new param

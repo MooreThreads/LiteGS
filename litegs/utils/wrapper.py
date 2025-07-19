@@ -485,8 +485,8 @@ class GaussiansRasterFunc(torch.autograd.Function):
         if StatisticsHelperInst.bStart:
             #if err_sum.isinf().any() or err_square_sum.isinf().any():
             #    breakpoint()
-            StatisticsHelperInst.update_mean_std("fragment_weight",fragment_weight,fragment_weight*fragment_weight,fragment_count,True)
-            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_count,True)
+            StatisticsHelperInst.update_mean_std("fragment_weight",fragment_weight,fragment_weight*fragment_weight,fragment_count,None)
+            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_count,None)
 
         # if grad_color.isnan().any() or grad_color.isinf().any() \
         #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \

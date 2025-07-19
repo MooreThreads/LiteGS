@@ -56,20 +56,28 @@ class StatisticsHelper:
         return
     
     @torch.no_grad()
-    def update_visible_count(self,compacted_visible_mask:torch.Tensor):
-        assert(self.compact_mask is not None)
-        self.visible_count[self.compact_mask]+=compacted_visible_mask.sum(0).reshape(-1,self.chunk_size)
+    def update_visible_count(self,visible_mask:torch.Tensor):
+        if self.compact_mask is None:
+            self.visible_count+=visible_mask.sum(0)
+        else:
+            self.visible_count[self.compact_mask]+=visible_mask.sum(0).reshape(-1,self.chunk_size)
         return
     
 
     @torch.no_grad()
-    def update_mean_std(self,key:str,tensor_sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor,bCompacted:bool):
+    def update_mean_std(self,key:str,tensor_sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor,bCompacted:bool=None):
+        if bCompacted is None:
+            bCompacted=(self.compact_mask is not None)
         if bCompacted:
             assert(self.compact_mask is not None)
             tensor_sum=tensor_sum.reshape(*tensor_sum.shape[:-1],-1,self.chunk_size)
             square_sum=square_sum.reshape(*square_sum.shape[:-1],-1,self.chunk_size)
             if count.__class__==torch.Tensor:
                 count=count.reshape(-1,self.chunk_size)
+        else:
+            if count.__class__==torch.Tensor:
+                count=count.squeeze()
+
         
         data:MeanStdData=self.mean_and_std.get(key,None)
         if data is None:
@@ -78,7 +86,7 @@ class StatisticsHelper:
                 cluster_shape=(self.chunk_num,self.chunk_size)
             else:
                 data_shape=tensor_sum.shape[:-1]
-                cluster_shape=(data_shape[-1],)
+                cluster_shape=(tensor_sum.shape[-1],)
             data=MeanStdData(data_shape,cluster_shape,tensor_sum.device)
             self.mean_and_std[key]=data
         
