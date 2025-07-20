@@ -265,12 +265,15 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         return prune_mask
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
-
-        frag_err_var,weight=StatisticsHelperInst.get_var('fragment_err')
-        score=frag_err_var*weight
+        if self.densify_params.score=='weighted_var':
+            frag_err_var,weight=StatisticsHelperInst.get_var('fragment_err')
+            score=frag_err_var*weight
+        elif self.densify_params.score=='square_sum':
+            score=StatisticsHelperInst.mean_and_std['fragment_err'].square_sum.reshape(-1)
+        else:
+            assert(False)
         score=score.squeeze().nan_to_num(0)
         score.clamp_min_(0)
-
         return score
     
     @torch.no_grad()
