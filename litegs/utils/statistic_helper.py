@@ -180,7 +180,8 @@ class StatisticsHelper:
         std_tensor=None
         if data is not None:
             std_tensor=calc_var(data.sum,data.square_sum,data.count)
-        std_tensor,=cluster.uncluster(std_tensor)
+        if self.compact_mask is not None:
+            std_tensor,=cluster.uncluster(std_tensor)
         return std_tensor,data.count.reshape(-1)
     
     def get_global_culling(self):
