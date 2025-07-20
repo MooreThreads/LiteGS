@@ -265,8 +265,8 @@ class DensityControllerTamingGS(DensityControllerOfficial):
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
 
-        frag_err_std,weight=StatisticsHelperInst.get_std('fragment_err')
-        score=frag_err_std*(weight.sqrt())
+        frag_err_var,weight=StatisticsHelperInst.get_var('fragment_err')
+        score=frag_err_var*weight
         score=score.squeeze().nan_to_num(0)
         score.clamp_min_(0)
 

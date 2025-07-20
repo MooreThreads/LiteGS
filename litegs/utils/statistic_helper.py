@@ -168,18 +168,18 @@ class StatisticsHelper:
         return mean_val,data.count.reshape(-1)
     
     @torch.no_grad()
-    def get_std(self,key:str):
+    def get_var(self,key:str):
 
-        def calc_std(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):
+        def calc_var(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):
             grad_mean=sum/(count+1e-6)
             grad_square_mean=square_sum/(count+1e-6)
             grad_var=grad_square_mean-grad_mean**2
-            return grad_var.clamp_min(0).sqrt()
+            return grad_var.clamp_min(0)
         
         data = self.mean_and_std.get(key,None)
         std_tensor=None
         if data is not None:
-            std_tensor=calc_std(data.sum,data.square_sum,data.count)
+            std_tensor=calc_var(data.sum,data.square_sum,data.count)
         std_tensor,=cluster.uncluster(std_tensor)
         return std_tensor,data.count.reshape(-1)
     
