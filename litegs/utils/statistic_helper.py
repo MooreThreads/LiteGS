@@ -113,7 +113,7 @@ class StatisticsHelper:
             data[1]=torch.min(tensor_min,data[1])
         else:
             data=(tensor_max,tensor_min)
-            self.mean_and_std[key]=data
+            self.max_and_min[key]=data
         return
 
 
