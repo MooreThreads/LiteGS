@@ -96,6 +96,12 @@ class DensifyParams(ParamGroup):
     densify_from = 3
     densify_until = -1
     opacity_reset_interval = 10
+    opacity_reset_mode='half'#'complete'
+    target_primitives=15.0
+    
+
+
+    #discard
     densify_grad_threshold = 0.00015
     opacity_threshold=0.005
     screen_size_threshold=128#tile

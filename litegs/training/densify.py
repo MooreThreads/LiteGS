@@ -100,8 +100,6 @@ class DensityControllerOfficial(DensityControllerBase):
         invisible.shape[0]
         prune_mask=transparent
         prune_mask[:invisible.shape[0]]|=invisible
-        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-        prune_mask[:invisible.shape[0]]|=big_points_vs
         return prune_mask
 
     @torch.no_grad()
@@ -212,10 +210,13 @@ class DensityControllerOfficial(DensityControllerBase):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
-        decay_rate=0.5
-        decay_mask=(actived_opacities>1/(255*decay_rate-1))
-        decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
-        opacity.data=inverse_sigmoid(actived_opacities*decay_rate)#(actived_opacities.clamp_max(0.005))
+        if self.densify_params.opacity_reset_mode=='half':
+            decay_rate=0.5
+            decay_mask=(actived_opacities>1/(255*decay_rate-1))
+            decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
+            opacity.data=inverse_sigmoid(actived_opacities*decay_rate)
+        else:
+            opacity.data=actived_opacities.clamp_max(0.005)
         optimizer.state.clear()
         return
     
