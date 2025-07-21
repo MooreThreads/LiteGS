@@ -98,7 +98,7 @@ class DensifyParams(ParamGroup):
     opacity_reset_interval = 10
     opacity_reset_mode='half'#'complete'
     score='weighted_var'#'square_sum'
-    target_primitives=15.0
+    target_primitives=1000000
     
 
 
@@ -107,7 +107,6 @@ class DensifyParams(ParamGroup):
     opacity_threshold=0.005
     screen_size_threshold=128#tile
     percent_dense = 0.01
-    target_primitives=15.0
     def __init__(self, parser):
         super().__init__(parser, "Densify Parameters")
         
