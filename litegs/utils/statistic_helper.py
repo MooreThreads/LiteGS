@@ -171,8 +171,8 @@ class StatisticsHelper:
     def get_var(self,key:str):
 
         def calc_var(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):
-            grad_mean=sum/(count+1e-6)
-            grad_square_mean=square_sum/(count+1e-6)
+            grad_mean=sum/(count+1)
+            grad_square_mean=square_sum/(count+1)
             grad_var=grad_square_mean-grad_mean**2
             return grad_var.clamp_min(0)
         

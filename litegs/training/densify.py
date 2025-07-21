@@ -216,7 +216,7 @@ class DensityControllerOfficial(DensityControllerBase):
             decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
             opacity.data=inverse_sigmoid(actived_opacities*decay_rate)
         else:
-            opacity.data=actived_opacities.clamp_max(0.005)
+            opacity.data=inverse_sigmoid(actived_opacities.clamp_max(0.005))
         optimizer.state.clear()
         return
     
