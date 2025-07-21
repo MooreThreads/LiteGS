@@ -41,8 +41,8 @@ big_budgets = {
     "bonsai": 1252367,#206613
     "truck": 2584171,#136029
     "train": 1085480,#182686
-    "playroom": 2326100,#37005
-    "drjohnson": 3273600#80861
+    "drjohnson": 3273600,#80861
+    "playroom": 2326100#37005
 }
 
 images={
