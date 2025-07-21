@@ -30,36 +30,19 @@ target_primitives_list = {
 }
 
 big_budgets = {
-    "bicycle": 5987095,
-    "flowers": 3618411,
-    "garden": 5728191,
-    "stump": 4867429,
-    "treehill": 3770257,
-    "room": 1548960,
-    "counter": 1190919,
-    "kitchen": 1803735,
-    "bonsai": 1252367,
-    "truck": 2584171,
-    "train": 1085480,
-    "playroom": 2326100,
-    "drjohnson": 3273600
-}
-
-# Scene-specific budgets for "budget" mode (multiplier)
-budget_multipliers = {
-    "bicycle": 15,#54275
-    "flowers": 15,#38347
-    "garden": 15,#138766
-    "stump": 15,#32049
-    "treehill": 15,#52363
-    "room": 2,#112627
-    "counter": 2,#155767
-    "kitchen": 2,#241367
-    "bonsai": 2,#206613
-    "truck": 2,#136029
-    "train": 2,#182686
-    "playroom": 5,#37005
-    "drjohnson": 5#80861
+    "bicycle": 5987095,#54275
+    "flowers": 3618411,#38347
+    "garden": 5728191,#138766
+    "stump": 4867429,#32049
+    "treehill": 3770257,#52363
+    "room": 1548960,#112627
+    "counter": 1190919,#155767
+    "kitchen": 1803735,#241367
+    "bonsai": 1252367,#206613
+    "truck": 2584171,#136029
+    "train": 1085480,#182686
+    "playroom": 2326100,#37005
+    "drjohnson": 3273600#80861
 }
 
 images={
