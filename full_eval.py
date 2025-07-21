@@ -61,11 +61,6 @@ images={
     "drjohnson": "images",
 }
 
-budget_dict={
-    "big":big_budgets,
-    "budget":budget_multipliers
-}
-
 densify_mode_dict={
     "big":"final_count",
     "budget":"multiplier"
