@@ -53,6 +53,22 @@ class DensityControllerBase:
         return
     
     @torch.no_grad()
+    def _replace_tensor_to_optimizer(self, tensor:torch.Tensor, name:str,optimizer:torch.optim.Optimizer):
+        for group in optimizer.param_groups:
+            if group["name"] in ["appearance_embeddings", "appearance_network"]:
+                continue
+            if group["name"] == name:
+                stored_state = optimizer.state.get(group['params'][0], None)
+                stored_state["exp_avg"] = torch.zeros_like(tensor)
+                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                #stored_state["step"]=0#bugfix
+
+                del optimizer.state[group['params'][0]]
+                group["params"][0] = torch.nn.Parameter(tensor.requires_grad_(True))
+                optimizer.state[group['params'][0]] = stored_state
+        return
+    
+    @torch.no_grad()
     def _prune_optimizer(self,valid_mask:torch.Tensor,optimizer:torch.optim.Optimizer):
         for group in optimizer.param_groups:
             stored_state = optimizer.state.get(group['params'][0], None)
@@ -210,14 +226,13 @@ class DensityControllerOfficial(DensityControllerBase):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
-        if self.densify_params.opacity_reset_mode=='half':
+        if self.densify_params.opacity_reset_mode=='decay':
             decay_rate=0.5
-            decay_mask=(actived_opacities>1/(255*decay_rate-1))
-            decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
-            opacity.data=inverse_sigmoid(actived_opacities*decay_rate)
-        else:
+            optimizer.state.clear()
+        elif self.densify_params.opacity_reset_mode=='reset':
             opacity.data=inverse_sigmoid(actived_opacities.clamp_max(0.005))
-        optimizer.state.clear()
+            self._replace_tensor_to_optimizer(opacity,"opacity",optimizer)
+
         return
     
     @torch.no_grad()
