@@ -228,6 +228,7 @@ class DensityControllerOfficial(DensityControllerBase):
         actived_opacities=opacity.sigmoid()
         if self.densify_params.opacity_reset_mode=='decay':
             decay_rate=0.5
+            opacity.data=inverse_sigmoid((actived_opacities*decay_rate).clamp_min(1.0/128))
             optimizer.state.clear()
         elif self.densify_params.opacity_reset_mode=='reset':
             opacity.data=inverse_sigmoid(actived_opacities.clamp_max(0.005))
@@ -270,12 +271,15 @@ class DensityControllerTamingGS(DensityControllerOfficial):
     
     @torch.no_grad()
     def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
-        prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
+        if self.densify_params.prune_mode == 'weight':
+            prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
 
-        frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
-        weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
-        invisible = weight_sum==0#weight_sum<(weight_sum[weight_sum!=0].quantile(0.05))
-        prune_mask[:invisible.shape[0]]|=invisible
+            frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
+            weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
+            invisible = weight_sum==0#weight_sum<(weight_sum[weight_sum!=0].quantile(0.05))
+            prune_mask[:invisible.shape[0]]|=invisible
+        elif self.densify_params.prune_mode == 'threshold':
+            prune_mask=super(DensityControllerTamingGS,self).get_prune_mask(actived_opacity,actived_scale)
         
         return prune_mask
     
