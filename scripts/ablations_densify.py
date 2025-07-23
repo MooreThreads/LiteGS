@@ -57,38 +57,32 @@ img_config={
     "deepblending":" -i images",
 }
 
-reg_config={
-    "mipnerf360_indoor":" --reg_weight 0 ",
-    "mipnerf360_outdoor":" --reg_weight 0 ",
-    "tanksandtemples":" --reg_weight 0 ",
-    "deepblending":" --reg_weight 0 ",
-}
 
+adc_config=" --densification_interval 1 --opacity_reset_interval 20 --opacity_reset_mode reset --prune_mode threshold"
 
-ablation_configs=[
-    "--densification_interval 2 --opacity_reset_interval 20 --opacity_reset_mode complete --score square_sum",
-    "--densification_interval 2 --opacity_reset_interval 20 --opacity_reset_mode complete",
-    "--opacity_reset_interval 20 --opacity_reset_mode complete",
-    ""
+ablation_configs_list=[
+    "",
+    adc_config
 ]
 
+for ablation_configs in ablation_configs_list:
+    print("------------{}---------------".format(ablation_configs))
+    for dataset_name,scenes in datasets.items():
+        for scene_name in scenes:
+            scene_input_path=os.path.join(datasets_path[dataset_name],scene_name)
+            scene_output_path=os.path.join(output_path,scene_name)
+            print("scene:{} #primitive:{}".format(scene_name,target_primitives[scene_name]))
+            os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4}".format(
+                    scene_input_path,
+                    scene_output_path,
+                    target_primitives[scene_name],
+                    img_config[dataset_name],
+                    ablation_configs
+                ))
+            
 
-for dataset_name,scenes in datasets.items():
-    for scene_name in scenes:
-        scene_input_path=os.path.join(datasets_path[dataset_name],scene_name)
-        scene_output_path=os.path.join(output_path,scene_name)
-        print("scene:{} #primitive:{}".format(scene_name,target_primitives[scene_name]))
-        os.system("python example_train.py -s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} {3} {4} --cluster_size 0".format(
-                scene_input_path,
-                scene_output_path,
-                target_primitives[scene_name],
-                img_config[dataset_name],
-                reg_config[dataset_name]
-            ))
-        
-
-for dataset_name,scenes in datasets.items():
-    for scene_name in scenes:
-        scene_input_path=os.path.join(datasets_path[dataset_name],scene_name)
-        scene_output_path=os.path.join(output_path,scene_name)
-        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2} ".format(scene_input_path,scene_output_path,img_config[dataset_name]))
+    for dataset_name,scenes in datasets.items():
+        for scene_name in scenes:
+            scene_input_path=os.path.join(datasets_path[dataset_name],scene_name)
+            scene_output_path=os.path.join(output_path,scene_name)
+            os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2} ".format(scene_input_path,scene_output_path,img_config[dataset_name]))
