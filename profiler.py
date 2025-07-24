@@ -20,18 +20,13 @@ def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor)->torch.Tensor:
 
 if __name__ == "__main__":
 
-    (view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,sh,shape,) = torch.load('./data.pth')
-    lp,op,pp,dp=litegs.config.get_default_arg()
-    img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,0,shape,pp)
-
-
-    scene_name="room"
+    scene_name="garden"
     parser = ArgumentParser(description="Training script parameters")
     args = parser.parse_args(sys.argv[1:])
 
     cameras_info:dict[int,litegs.data.CameraInfo]=None
     camera_frames:list[litegs.data.CameraFrame]=None
-    cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result('./dataset/mipnerf360/{}'.format(scene_name),'images_2')
+    cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result('./dataset/mipnerf360/{}'.format(scene_name),'images_4')
 
     #preload
     for camera_frame in camera_frames:
@@ -45,7 +40,7 @@ if __name__ == "__main__":
     testset=litegs.data.CameraFrameDataset(cameras_info,test_frames,-1,True)
     test_loader = DataLoader(testset, batch_size=1,shuffle=False)
 
-    xyz,scale,rot,sh_0,sh_rest,opacity=litegs.io_manager.load_ply('output/garden-5728k/point_cloud/finish/point_cloud.ply'.format(scene_name),3)
+    xyz,scale,rot,sh_0,sh_rest,opacity=litegs.io_manager.load_ply('output/{}-500k/point_cloud/finish/point_cloud.ply'.format(scene_name),3)
     xyz=torch.Tensor(xyz).cuda()
     scale=torch.Tensor(scale).cuda()
     rot=torch.Tensor(rot).cuda()
