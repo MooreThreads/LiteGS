@@ -667,10 +667,10 @@ class Binning(BaseWrapper):
 
         pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
         tile_left_up,tile_right_down,tiles_touched=litegs_fused.get_allocate_size(pixel_left_up,pixel_right_down,tile_size[0],tile_size[1],img_tile_shape[0],img_tile_shape[1])
+        b_visible=(tiles_touched!=0)
 
         #allocate
         if StatisticsHelperInst.bStart:
-            b_visible=(tiles_touched!=0)
             StatisticsHelperInst.update_visible_count(b_visible)
 
         #sort by depth
@@ -698,7 +698,7 @@ class Binning(BaseWrapper):
         # range
         tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
-        return tile_start_index,sorted_pointId
+        return tile_start_index,sorted_pointId,b_visible.sum(0)
     
     
     _fused=__binning_fused

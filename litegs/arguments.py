@@ -70,7 +70,6 @@ class PipelineParams(ParamGroup):
     cluster_size = 128
     tile_size = (8,16)
     sparse_grad = True
-    spatial_refine_interval = 5
     device_preload = True
     enable_transmitance=False
     enable_depth=False

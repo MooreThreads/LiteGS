@@ -63,7 +63,7 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     nvtx.range_pop()
     
     #visibility table
-    tile_start_index,sorted_pointId=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
+    tile_start_index,sorted_pointId,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,eigen_val,eigen_vec,opacity,output_shape,pp.tile_size)
 
     #raster
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))
@@ -78,4 +78,4 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
         depth=utils.tiles2img_torch(depth,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     if normal is not None:
         normal=utils.tiles2img_torch(normal,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
-    return img,transmitance,depth,normal
+    return img,transmitance,depth,normal,primitive_visible
