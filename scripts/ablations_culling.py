@@ -11,19 +11,19 @@ datasets_path={
 output_path="./ablation_output/wo_culling/"
 
 target_primitives = {
-    "bicycle": 1000000,
-    "flowers": 1000000,
-    "garden": 1000000,
-    "stump": 1000000,
-    "treehill": 1000000,
-    "room": 1000000,
-    "counter": 1000000,
-    "kitchen": 1000000,
-    "bonsai": 1000000,
-    "truck": 1000000,
-    "train": 1000000,
-    "playroom": 1000000,
-    "drjohnson": 1000000
+    "bicycle": 5987095,#54275
+    "flowers": 3618411,#38347
+    "garden": 5728191,#138766
+    "stump": 4867429,#32049
+    "treehill": 3770257,#52363
+    "room": 1548960,#112627
+    "counter": 1190919,#155767
+    "kitchen": 1803735,#241367
+    "bonsai": 1252367,#206613
+    "truck": 2584171,#136029
+    "train": 1085480,#182686
+    "drjohnson": 3273600,#80861
+    "playroom": 2326100#37005
 }
 
 images={
