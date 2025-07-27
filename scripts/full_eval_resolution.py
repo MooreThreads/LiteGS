@@ -74,7 +74,7 @@ if not args.skip_training:
                     scene_output_path,
                     target_primitives,
                     img_config[dataset],
-                    fast_config
+                    ""
                 ))
 
 for dataset,scenes in datasets.items():
