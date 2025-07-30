@@ -89,10 +89,10 @@ img_config={
     "deepblending":" -i images",
 }
 
-reg_config={
+custom_config={
     "mipnerf360_indoor":"  ",
     "mipnerf360_outdoor":"  ",
-    "tanksandtemples":" --iterations 40000 --position_lr_max_steps 40000 ",
+    "tanksandtemples":" --iterations 40000 --position_lr_max_steps 40000 ",#follow 3d student splatting and scooping
     "deepblending":"  ",
 }
 
@@ -122,7 +122,7 @@ if not args.skip_training:
                     scene_output_path,
                     target_primitives,
                     img_config[dataset],
-                    reg_config[dataset]
+                    custom_config[dataset]
                 ))
 
 for dataset,scenes in datasets.items():
