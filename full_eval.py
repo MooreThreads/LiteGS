@@ -90,10 +90,10 @@ img_config={
 }
 
 reg_config={
-    "mipnerf360_indoor":" --reg_weight 0 ",
-    "mipnerf360_outdoor":" --reg_weight 0 ",
-    "tanksandtemples":" --reg_weight 0 ",
-    "deepblending":" --reg_weight 0 ",
+    "mipnerf360_indoor":"  ",
+    "mipnerf360_outdoor":"  ",
+    "tanksandtemples":" --iterations 40000 --position_lr_max_steps 40000 ",
+    "deepblending":"  ",
 }
 
 
@@ -111,7 +111,7 @@ if not args.skip_training:
                     scene_output_path,
                     target_primitives,
                     img_config[dataset],
-                    reg_config[dataset]
+                    ""
                 ))
             #full
             target_primitives=big_budgets[scene_name]
