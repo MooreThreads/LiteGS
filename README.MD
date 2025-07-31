@@ -15,7 +15,7 @@ This repository provides a refactored codebase aimed at improving the flexibilit
 We're excited to release a preview of LiteGS's latest advancements, achieving 30%-35% speedup over the previous version. Compared to the original 3DGS implementation, LiteGS delivers 4.7x acceleration, making it the fastest 3DGS operator to our knowledge. ​​Note:​​ The preview version has not yet completed adaptation for older GPU architectures - ensure your device is sm_8.x or higher, otherwise use the stable branch. Technical details will be presented in an upcoming paper/report. Thank you for your interest.
 
 ## Roadmap
-* Incorporate latest point cloud density control techniques (tentatively TamingGS's Score-based Densification)
+* [Done] Incorporate latest point cloud density control techniques (tentatively TamingGS's Score-based Densification)
 * Restore depth support
 
 ## Background
@@ -36,12 +36,6 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 
 ## Getting Started
-
-### Via pip
-
-` pip install lite-gaussian-splatting `
-
-### From Source (Recommand for Developers)
 
 1. Clone
 
@@ -72,7 +66,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
     python install .
     ```
 
-    If you need the cmake project：
+    If you need the cmake project(e.g. CUDA Debug in Visual Studio)：
 
     ```bash
     cd litegs/submodules/gaussian_raster
@@ -92,28 +86,17 @@ Begin training with the following command:
 
 ## Faster
 
-The training results of LiteGS using the Mip-NeRF 360 dataset on an NVIDIA A100 GPU are presented below. The training and evaluation command used is:
+The training results of LiteGS using the Mip-NeRF 360 dataset on an RTX 3090 are presented below. The training and evaluation command used is:
 
-`python ./full_eval.py --mipnerf360 SOURCE_PATH`
+LiteGS-turbo:
+`python ./scripts/full_eval_fast.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
 
-|metric\|scene  |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
-|   ----        | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
-|SSIM(Test)     | 0.746   | 0.594   | 0.858   | 0.788   | 0.637   | 0.928   | 0.915   | 0.932   | 0.947   |
-|PSNR(Test)     | 25.15   | 21.67   | 27.50   | 27.11   | 22.69   | 32.00   | 29.22   | 32.01   | 32.43   |
-|LPIPS(Test)    | 0.251   | 0.357   | 0.121   | 0.227   | 0.350   | 0.199   | 0.186   | 0.119   | 0.181   |
+LiteGS:
+`python ./full_eval.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
 
+![image](doc_img/results.png)
 
-Below is a summary of the training times for LiteGS and the original 3DGS implementations on NVIDIA A100 and NVIDIA RTX3090 GPUs. In the current setup, the original 3DGS implementation includes an integrated acceleration scheme from Taming-GS that can be enabled via training parameters. For comparison purposes, we have also included this TamingGS-integrated version in our evaluation.
-
-Our experimental results demonstrate that even with kernel splitting to achieve modularity, LiteGS still delivers remarkable performance improvements. Specifically, compared to the original 3DGS implementation, LiteGS achieves a 4.7x speedup on RTX3090. Moreover, when compared to the TamingGS-integrated version of 3DGS, LiteGS still offers a 2.0x speedup. These results clearly underscore the effectiveness of our approach in enhancing training efficiency while maintaining high performance.
-
-|   |Bicycle  |flowers  |garden   |stump    |treehill |room     |counter  |kitchen  |bonsai   |
-|   ----     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     | ---     |
-| Original-d9fad7b(RTX3090) | 40:06   | 28:46   | 42:18   | 32:40   | 29:39   | 24:53   | 24:16   | 29:30   | 20:15   |
-|Taming-Intergrated(RTX3090)| 15:29   | 11:42   | 16:24   | 11:49   | 11:48   | 10:06   | 12:00   | 16:38   | 09:01   |
-| LiteGS(RTX3090)           | 07:33   | 06:03   | 08:08   | 06:25   | 06:36   | 04:25   | 04:56   | 05:57   | 04:39   |
-
-![image](doc_img/takes_time.png)
+![image](doc_img/primitive_vs_psnr.png)
 
 
 
