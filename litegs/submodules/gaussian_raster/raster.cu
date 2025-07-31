@@ -644,9 +644,10 @@ __global__ void raster_backward_kernel(
                         d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
                         d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
                 }
-                
-                unsigned short last0 = static_cast<unsigned short>(last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x]) - 1;
-                unsigned short last1 = static_cast<unsigned short>(last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]) - 1;
+                unsigned short last0 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x];
+                last0 = last0 == 0 ? 0 : last0 - 1;
+                unsigned short last1 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x];
+                last1 = last1 == 0 ? 0 : last1 - 1;
                 index_in_tile = max(max(index_in_tile, last0), last1);
                 shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = (last1 << 16 | last0);
             }
