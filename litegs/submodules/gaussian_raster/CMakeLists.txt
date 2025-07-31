@@ -25,7 +25,7 @@ endif()
 set_target_properties(litegs_fused PROPERTIES SUFFIX ".pyd" PREFIX "")
 target_compile_definitions(litegs_fused PRIVATE TORCH_EXTENSION_NAME=litegs_fused)
 target_compile_options(litegs_fused PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
-    --expt-relaxed-constexpr
+    --use_fast_math
 >)
 
 #link
