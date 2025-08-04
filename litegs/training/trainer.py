@@ -107,11 +107,6 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
                 loss+=(culled_scale).square().mean()*op.reg_weight
                 loss.backward()
-                # with torch.no_grad():
-                #     if pp.cluster_size>0:
-                #         print(count,opacity.sigmoid()[...,5,112])
-                #     else:
-                #         print(count,opacity.sigmoid()[...,752])
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
                 if pp.sparse_grad:
