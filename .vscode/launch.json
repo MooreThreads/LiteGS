@@ -30,7 +30,7 @@
             "name": "Python: Eval",
             "type": "debugpy",
             "request": "launch",
-            "program": "./full_eval.py",
+            "program": "./scripts/full_eval_fast.py",
             "args":["--mipnerf360","dataset/mipnerf360","--tanksandtemples","dataset/tandt","--deepblending","dataset/db"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",

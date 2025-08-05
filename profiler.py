@@ -40,7 +40,7 @@ if __name__ == "__main__":
     testset=litegs.data.CameraFrameDataset(cameras_info,test_frames,-1,True)
     test_loader = DataLoader(testset, batch_size=1,shuffle=False)
 
-    xyz,scale,rot,sh_0,sh_rest,opacity=litegs.io_manager.load_ply('output/{}-500k/point_cloud/finish/point_cloud.ply'.format(scene_name),3)
+    xyz,scale,rot,sh_0,sh_rest,opacity=litegs.io_manager.load_ply('output/{}-5728k/point_cloud/finish/point_cloud.ply'.format(scene_name),3)
     xyz=torch.Tensor(xyz).cuda()
     scale=torch.Tensor(scale).cuda()
     rot=torch.Tensor(rot).cuda()
