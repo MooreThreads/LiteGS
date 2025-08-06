@@ -335,4 +335,59 @@ std::vector<at::Tensor> create_2d_gaussian_ROI(at::Tensor ndc, at::Tensor view_s
     return { left_up ,right_down,ellipse_f,ellipse_a };
 }
 
+template<int tileH,int tileW>
+__global__ void get_allocate_size_kernel(
+    const torch::PackedTensorAccessor32< int32_t, 3, torch::RestrictPtrTraits> tensor_pixel_left_up,//viewnum,2,pointnum
+    const torch::PackedTensorAccessor32< int32_t, 3, torch::RestrictPtrTraits> tensor_pixel_right_down,//viewnum,2,pointnum
+    int max_tileid_y,int max_tileid_x,
+    torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_tile_left_up,//viewnum,2,pointnum
+    torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_tile_right_down,//viewnum,2,pointnum
+    torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tensor_allocate//viewnum,pointnum
+)
+{
+    int view_id = blockIdx.y;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < tensor_pixel_left_up.size(2))
+    {
+        int pixel_left = tensor_pixel_left_up[view_id][0][index];
+        int pixel_up = tensor_pixel_left_up[view_id][1][index];
+        int pixel_right = tensor_pixel_right_down[view_id][0][index];
+        int pixel_down = tensor_pixel_right_down[view_id][1][index];
 
+        int tile_left = min(max(0, pixel_left / tileW),max_tileid_x);
+        int tile_right = min(max(0, (pixel_right + tileW - 1) / tileW), max_tileid_x);
+        int tile_up = min(max(0, pixel_up / tileH), max_tileid_y);
+        int tile_down = min(max(0, (pixel_down + tileH - 1) / tileH), max_tileid_y);
+
+        tensor_tile_left_up[view_id][0][index] = tile_left;
+        tensor_tile_left_up[view_id][1][index] = tile_up;
+        tensor_tile_right_down[view_id][0][index] = tile_right;
+        tensor_tile_right_down[view_id][1][index] = tile_down;
+
+        int allocate_size = (tile_right - tile_left) * (tile_down - tile_up);
+        tensor_allocate[view_id][index] = allocate_size;
+    }
+}
+
+std::vector<at::Tensor> get_allocate_size(at::Tensor pixel_left_up, at::Tensor pixel_right_down, int64_t tilesize_h, int64_t tilesize_w,
+    int64_t max_tileid_y, int64_t max_tileid_x)
+{
+    at::DeviceGuard guard(pixel_left_up.device());
+    assert((tilesize_h == 8) && (tilesize_w == 16));
+
+    int views_num = pixel_left_up.size(0);
+    int points_num = pixel_left_up.size(2);
+    at::Tensor tile_left_up = torch::empty({ views_num,2,points_num }, pixel_left_up.options());
+    at::Tensor tile_right_down = torch::empty({ views_num,2,points_num }, pixel_left_up.options());
+    at::Tensor allocate_size = torch::empty({ views_num,points_num }, pixel_left_up.options());
+
+    dim3 Block3d(std::ceil(points_num / 256.0f), views_num, 1);
+    get_allocate_size_kernel<8,16> <<<Block3d, 256 >>> (
+        pixel_left_up.packed_accessor32<int, 3, torch::RestrictPtrTraits>(),
+        pixel_right_down.packed_accessor32<int, 3, torch::RestrictPtrTraits>(),
+        max_tileid_y, max_tileid_x,
+        tile_left_up.packed_accessor32<int, 3, torch::RestrictPtrTraits>(),
+        tile_right_down.packed_accessor32<int, 3, torch::RestrictPtrTraits>(),
+        allocate_size.packed_accessor32<int, 2, torch::RestrictPtrTraits>());
+    return { tile_left_up,tile_right_down,allocate_size };
+}

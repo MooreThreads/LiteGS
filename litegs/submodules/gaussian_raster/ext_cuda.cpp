@@ -10,12 +10,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("duplicateWithKeys", &duplicateWithKeys);
   m.def("tileRange", &tileRange);
   m.def("create_2d_gaussian_ROI", &create_2d_gaussian_ROI);
+  m.def("get_allocate_size", &get_allocate_size);
   m.def("rasterize_forward", &rasterize_forward);
   m.def("rasterize_forward_packed", &rasterize_forward_packed);
   m.def("rasterize_backward", &rasterize_backward);
   m.def("jacobianRayspace", &jacobianRayspace);
   m.def("createTransformMatrix_forward", &createTransformMatrix_forward);
   m.def("createTransformMatrix_backward", &createTransformMatrix_backward);
+  m.def("world2ndc_forward", &world2ndc_forward);
   m.def("world2ndc_backword", &world2ndc_backword);
   m.def("createCov2dDirectly_forward", &createCov2dDirectly_forward);
   m.def("createCov2dDirectly_backward", &createCov2dDirectly_backward);
