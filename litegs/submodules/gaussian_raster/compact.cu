@@ -8,7 +8,6 @@
 #include <cuda/atomic>
 namespace cg = cooperative_groups;
 
-#include <c10/cuda/CUDAException.h>
 #include <ATen/core/TensorAccessor.h>
 
 #include "cuda_errchk.h"
@@ -284,7 +283,7 @@ void adamUpdate(torch::Tensor &param,torch::Tensor &param_grad,torch::Tensor &ex
     else if(param.sizes().size() == 2)
     {
         int primitive_num=visible.size(0);
-        sparse_primitive_adam_kernel<<<int(std::ceilf(primitive_num / 256.0f)),256>>> (
+        sparse_primitive_adam_kernel<<<int(std::ceil(primitive_num / 256.0f)),256>>> (
             param.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             param_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
             exp_avg.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),

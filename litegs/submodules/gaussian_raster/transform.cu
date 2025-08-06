@@ -8,7 +8,6 @@
 #include <cuda/atomic>
 namespace cg = cooperative_groups;
 
-#include <c10/cuda/CUDAException.h>
 #include <ATen/core/TensorAccessor.h>
 
 #include "cuda_errchk.h"
