@@ -284,8 +284,9 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         return prune_mask
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
-        var,weight=StatisticsHelperInst.get_var('fragment_err')
-        score=var*weight
+        var,frag_count=StatisticsHelperInst.get_var('fragment_err')
+        #score=(var*frag_count).sqrt()*(opacity.sigmoid())
+        score=var*frag_count*(opacity.sigmoid()*opacity.sigmoid())
         score=score.squeeze().nan_to_num(0)
         score.clamp_min_(0)
         return score

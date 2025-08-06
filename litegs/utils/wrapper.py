@@ -478,7 +478,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,err_sum,err_square_sum=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,_,grad_o_square=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
                                                                                           transmitance,lst_contributor,
                                                                                           grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
                                                                                           img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
@@ -486,7 +486,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
             #if err_sum.isinf().any() or err_square_sum.isinf().any():
             #    breakpoint()
             StatisticsHelperInst.update_mean_std("fragment_weight",fragment_weight,fragment_weight*fragment_weight,fragment_count,None)
-            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_count,None)
+            StatisticsHelperInst.update_mean_std("fragment_err",grad_opacities.unsqueeze(0),grad_o_square*grad_rgb_image_max*grad_rgb_image_max,fragment_count,None)
 
         # if grad_color.isnan().any() or grad_color.isinf().any() \
         #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \

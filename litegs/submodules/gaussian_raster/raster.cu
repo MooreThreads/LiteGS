@@ -694,7 +694,6 @@ __global__ void raster_backward_kernel(
                 half2 grad_r = half2(0, 0);
                 half2 grad_g = half2(0, 0);
                 half2 grad_b = half2(0, 0);
-                half2 err = half2(0, 0);
                 half2 err_square = half2(0, 0);
                 half2 grad_a = half2(0, 0);
                 float grad_bxcy = 0;
@@ -743,8 +742,8 @@ __global__ void raster_backward_kernel(
                         half2 d_power = G * d_G;//G * point_alpha * d_alpha
                         if (enable_statistic)
                         {
-                            half2 cur_err = alpha*d_alpha;
-                            err += cur_err;
+                            half2 cur_err = grad_a;
+                            //err += cur_err;
                             err_square += (cur_err * half2(INV_SCALER, INV_SCALER) * cur_err);
                         }
                         half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
@@ -773,14 +772,14 @@ __global__ void raster_backward_kernel(
                     }
                     if (enable_statistic)
                     {
-                        float err_sum{ float(err.x + err.y) * INV_SCALER };
-                        warp_reduce_sum<float, false>(err_sum);
+                        //float err_sum{ float(err.x + err.y) * INV_SCALER };
+                        //warp_reduce_sum<float, false>(err_sum);
                         float err_square_sum{ float(err_square.x + err_square.y) * INV_SCALER };
                         warp_reduce_sum<float, false>(err_square_sum);
                         if (threadIdx.x == 0)
                         {
                             atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square_sum);
-                            atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum);
+                            //atomicAdd(&out_err_sum[batch_id][0][point_id], err_sum);
                         }
                     }
 
