@@ -1,4 +1,4 @@
-import torch; import torch_musa
+import torch;import torch_musa
 import typing
 from ..scene import cluster
 
@@ -56,20 +56,28 @@ class StatisticsHelper:
         return
     
     @torch.no_grad()
-    def update_visible_count(self,compacted_visible_mask:torch.Tensor):
-        assert(self.compact_mask is not None)
-        self.visible_count[self.compact_mask]+=compacted_visible_mask.sum(0).reshape(-1,self.chunk_size)
+    def update_visible_count(self,visible_mask:torch.Tensor):
+        if self.compact_mask is None:
+            self.visible_count+=visible_mask.sum(0)
+        else:
+            self.visible_count[self.compact_mask]+=visible_mask.sum(0).reshape(-1,self.chunk_size)
         return
     
 
     @torch.no_grad()
-    def update_mean_std(self,key:str,tensor_sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor,bCompacted:bool):
+    def update_mean_std(self,key:str,tensor_sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor,bCompacted:bool=None):
+        if bCompacted is None:
+            bCompacted=(self.compact_mask is not None)
         if bCompacted:
             assert(self.compact_mask is not None)
             tensor_sum=tensor_sum.reshape(*tensor_sum.shape[:-1],-1,self.chunk_size)
             square_sum=square_sum.reshape(*square_sum.shape[:-1],-1,self.chunk_size)
             if count.__class__==torch.Tensor:
                 count=count.reshape(-1,self.chunk_size)
+        else:
+            if count.__class__==torch.Tensor:
+                count=count.squeeze()
+
         
         data:MeanStdData=self.mean_and_std.get(key,None)
         if data is None:
@@ -78,7 +86,7 @@ class StatisticsHelper:
                 cluster_shape=(self.chunk_num,self.chunk_size)
             else:
                 data_shape=tensor_sum.shape[:-1]
-                cluster_shape=(data_shape[-1],)
+                cluster_shape=(tensor_sum.shape[-1],)
             data=MeanStdData(data_shape,cluster_shape,tensor_sum.device)
             self.mean_and_std[key]=data
         
@@ -105,7 +113,7 @@ class StatisticsHelper:
             data[1]=torch.min(tensor_min,data[1])
         else:
             data=(tensor_max,tensor_min)
-            self.mean_and_std[key]=data
+            self.max_and_min[key]=data
         return
 
 
@@ -160,19 +168,20 @@ class StatisticsHelper:
         return mean_val,data.count.reshape(-1)
     
     @torch.no_grad()
-    def get_std(self,key:str):
+    def get_var(self,key:str):
 
-        def calc_std(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):
-            grad_mean=sum/(count+1e-6)
-            grad_square_mean=square_sum/(count+1e-6)
+        def calc_var(sum:torch.Tensor,square_sum:torch.Tensor,count:torch.Tensor):
+            grad_mean=sum/(count+1)
+            grad_square_mean=square_sum/(count+1)
             grad_var=grad_square_mean-grad_mean**2
-            return grad_var.clamp_min(0).sqrt()
+            return grad_var.clamp_min(0)
         
         data = self.mean_and_std.get(key,None)
         std_tensor=None
         if data is not None:
-            std_tensor=calc_std(data.sum,data.square_sum,data.count)
-        std_tensor,=cluster.uncluster(std_tensor)
+            std_tensor=calc_var(data.sum,data.square_sum,data.count)
+        if self.compact_mask is not None:
+            std_tensor,=cluster.uncluster(std_tensor)
         return std_tensor,data.count.reshape(-1)
     
     def get_global_culling(self):

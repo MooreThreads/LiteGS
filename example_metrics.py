@@ -53,12 +53,12 @@ if __name__ == "__main__":
 
     #model
     xyz,scale,rot,sh_0,sh_rest,opacity=litegs.io_manager.load_ply(os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply"),lp.sh_degree)
-    xyz=torch.Tensor(xyz).cuda()
-    scale=torch.Tensor(scale).cuda()
-    rot=torch.Tensor(rot).cuda()
-    sh_0=torch.Tensor(sh_0).cuda()
-    sh_rest=torch.Tensor(sh_rest).cuda()
-    opacity=torch.Tensor(opacity).cuda()
+    xyz=torch.Tensor(xyz).musa()
+    scale=torch.Tensor(scale).musa()
+    rot=torch.Tensor(rot).musa()
+    sh_0=torch.Tensor(sh_0).musa()
+    sh_rest=torch.Tensor(sh_rest).musa()
+    opacity=torch.Tensor(opacity).musa()
     cluster_origin=None
     cluster_extend=None
     if pp.cluster_size>0:
@@ -67,9 +67,9 @@ if __name__ == "__main__":
         cluster_origin,cluster_extend=litegs.scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
 
     #metrics
-    ssim_metrics=ssim.StructuralSimilarityIndexMeasure(data_range=(0.0,1.0)).cuda()
-    psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
-    lpip_metrics=lpip.LearnedPerceptualImagePatchSimilarity(net_type='vgg').cuda()
+    ssim_metrics=ssim.StructuralSimilarityIndexMeasure(data_range=(0.0,1.0)).musa()
+    psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).musa()
+    lpip_metrics=lpip.LearnedPerceptualImagePatchSimilarity(net_type='vgg').musa()
 
     #iter
     loaders={"Trainingset":train_loader,"Testset":test_loader}
@@ -78,10 +78,10 @@ if __name__ == "__main__":
         psnr_list=[]
         lpips_list=[]
         for index,(view_matrix,proj_matrix,frustumplane,gt_image) in enumerate(loader):
-            view_matrix=view_matrix.cuda()
-            proj_matrix=proj_matrix.cuda()
-            frustumplane=frustumplane.cuda()
-            gt_image=gt_image.cuda()/255.0
+            view_matrix=view_matrix.musa()
+            proj_matrix=proj_matrix.musa()
+            frustumplane=frustumplane.musa()
+            gt_image=gt_image.musa()/255.0
             _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=litegs.render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
                                                                                                     xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
             img,transmitance,depth,normal=litegs.render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,

@@ -14,7 +14,7 @@ torch.musa.synchronize()
 # # for y in range(64):
 # #     for x in range(64):
 # #         render_tiles.append(y*82+x)
-# render_tiles=torch.tensor(render_tiles,dtype=torch.int32).unsqueeze(0).cuda()+1
+# render_tiles=torch.tensor(render_tiles,dtype=torch.int32).unsqueeze(0).musa()+1
 # datas[6]=render_tiles
 loop=1000
 start_time=time.time()
