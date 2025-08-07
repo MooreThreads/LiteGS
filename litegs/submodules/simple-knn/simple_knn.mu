@@ -202,7 +202,7 @@ void SimpleKNN::knn(int P, float3* points, float* meanDists)
 
 	thrust::device_vector<uint32_t> morton(P);
 	thrust::device_vector<uint32_t> morton_sorted(P);
-	coord2Morton << <(P + 255) / 256, 256 >> > (P, points, minn, maxx, morton.data().get());
+	coord2Morton <<<(P + 255) / 256, 256 >>> (P, points, minn, maxx, morton.data().get());
 
 	thrust::device_vector<uint32_t> indices(P);
 	thrust::sequence(indices.begin(), indices.end());
@@ -215,8 +215,8 @@ void SimpleKNN::knn(int P, float3* points, float* meanDists)
 
 	uint32_t num_boxes = (P + BOX_SIZE - 1) / BOX_SIZE;
 	thrust::device_vector<MinMax> boxes(num_boxes);
-	boxMinMax << <num_boxes, BOX_SIZE >> > (P, points, indices_sorted.data().get(), boxes.data().get());
-	boxMeanDist << <num_boxes, BOX_SIZE >> > (P, points, indices_sorted.data().get(), boxes.data().get(), meanDists);
+	boxMinMax <<<num_boxes, BOX_SIZE >>> (P, points, indices_sorted.data().get(), boxes.data().get());
+	boxMeanDist <<<num_boxes, BOX_SIZE >>> (P, points, indices_sorted.data().get(), boxes.data().get(), meanDists);
 
 	musaFree(result);
 }

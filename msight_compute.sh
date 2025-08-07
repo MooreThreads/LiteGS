@@ -1,0 +1,1 @@
+/tmp/var/moore-perf-compute# /tmp/var/moore-perf-compute/target-linux-x86_64/mcu --dump-mode interval --dump-type per-submit --force-overwrite --metrics shader,l1_l2 --replay-mode application --sampling-buffer-size 1048576 --sampling-interval 100 --working-directory ~/AIR/LiteGS -o ./raster.mcu-rep /opt/conda/envs/kaimin/bin/python test.py

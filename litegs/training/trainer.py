@@ -1,4 +1,4 @@
-import torch
+import torch;import torch_musa
 from torch.utils.data import DataLoader
 import fused_ssim
 from torchmetrics.image import psnr
@@ -83,9 +83,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     for epoch in range(start_epoch,total_epoch):
 
         with torch.no_grad():
-            if epoch%pp.spatial_refine_interval==0:#spatial refine
+            if pp.cluster_size>0 and (epoch-1)%dp.densification_interval==0:
                 scene.spatial_refine(pp.cluster_size>0,opt,xyz)
-            if pp.cluster_size>0 and (epoch%pp.spatial_refine_interval==0 or density_controller.is_densify_actived(epoch-1)):
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
@@ -100,20 +99,18 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 #cluster culling
                 visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
                                                                                                                xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
-                img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+                img,transmitance,depth,normal,primitive_visible=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                             actived_sh_degree,gt_image.shape[2:],pp)
                 
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
-                loss+=transmitance.abs().mean()*1e-6
-                loss+=culled_opacity.sigmoid().abs().mean()*1e-4
-                loss+=culled_scale.exp().var(0).mean()*1e-4
+                loss+=(culled_scale).square().mean()*op.reg_weight
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
-                if pp.cluster_size and pp.sparse_grad:
-                    opt.step(visible_chunkid)
+                if pp.sparse_grad:
+                    opt.step(visible_chunkid,primitive_visible)
                 else:
                     opt.step()
                 opt.zero_grad(set_to_none = True)
@@ -121,7 +118,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         if epoch in test_epochs:
             with torch.no_grad():
-                _cluster_origin,_cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
+                _cluster_origin=None
+                _cluster_extend=None
+                if pp.cluster_size:
+                    _cluster_origin,_cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
                 psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
                 loaders={"Trainingset":train_loader}
                 if lp.eval:
@@ -135,7 +135,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                         gt_image=gt_image.cuda()/255.0
                         _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(_cluster_origin,_cluster_extend,frustumplane,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
-                        img,transmitance,depth,normal=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+                        img,transmitance,depth,normal,_=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                                     actived_sh_degree,gt_image.shape[2:],pp)
                         psnr_list.append(psnr_metrics(img,gt_image).unsqueeze(0))
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
@@ -146,6 +146,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         if epoch in save_ply or epoch==total_epoch-1:
             if epoch==total_epoch-1:
                 progress_bar.close()
+                print("{} takes: {} s".format(lp.model_path,progress_bar.format_dict['elapsed']))
                 ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
             else:
                 ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")    

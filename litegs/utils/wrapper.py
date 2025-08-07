@@ -2,7 +2,6 @@ import torch
 import typing
 import numpy as np
 import math
-from torch.cuda import nvtx
 
 from .platform import add_cmake_output_path
 from . import spherical_harmonics
@@ -119,7 +118,7 @@ class BaseWrapper:
         inputs = []
         for obj, obj_type,requires_grad in cls.test_inputs:
             if obj_type is not None:
-                obj = torch.randn(obj, dtype=obj_type, device='cuda', requires_grad=requires_grad)
+                obj = torch.randn(obj, dtype=obj_type, device='musa', requires_grad=requires_grad)
             inputs.append(obj)
         return inputs
 
@@ -194,7 +193,7 @@ class CreateTransformMatrix(BaseWrapper):
         return transform_matrix
 
     def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
+        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='musa')
 
         r=rotator_vec[0]
         x=rotator_vec[1]
@@ -286,9 +285,7 @@ class World2NdcFunc(torch.autograd.Function):
     '''
     @staticmethod
     def forward(ctx,position:torch.Tensor,view_project_matrix:torch.Tensor):
-        hom_pos=torch.matmul(view_project_matrix.transpose(-1,-2),position)
-        repc_hom_w=1/(hom_pos[:,3:4]+1e-7)
-        ndc_pos=hom_pos*repc_hom_w
+        ndc_pos,repc_hom_w=litegs_fused.world2ndc_forward(position,view_project_matrix)
         ctx.save_for_backward(view_project_matrix,ndc_pos,repc_hom_w)
         return ndc_pos
     
@@ -480,15 +477,15 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,err_sum,err_square_sum=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,_,grad_o_square=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
                                                                                           transmitance,lst_contributor,
                                                                                           grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
                                                                                           img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
         if StatisticsHelperInst.bStart:
             #if err_sum.isinf().any() or err_square_sum.isinf().any():
             #    breakpoint()
-            StatisticsHelperInst.update_mean_std("fragment_weight",fragment_weight,fragment_weight*fragment_weight,fragment_count,True)
-            StatisticsHelperInst.update_mean_std("fragment_err",err_sum,err_square_sum,fragment_count,True)
+            StatisticsHelperInst.update_mean_std("fragment_weight",fragment_weight,fragment_weight*fragment_weight,fragment_count,None)
+            StatisticsHelperInst.update_mean_std("fragment_err",grad_opacities.unsqueeze(0),grad_o_square*grad_rgb_image_max*grad_rgb_image_max,fragment_count,None)
 
         # if grad_color.isnan().any() or grad_color.isinf().any() \
         #     or grad_opacities.isnan().any() or grad_opacities.isinf().any() \
@@ -585,7 +582,7 @@ class EighAndInverse2x2Matrix(BaseWrapper):
 
     @classmethod
     def gen_inputs(cls):
-        cov2d=torch.randn([1,2,2,512*1024], dtype=torch.float32, device='cuda', requires_grad=False)
+        cov2d=torch.randn([1,2,2,512*1024], dtype=torch.float32, device='musa', requires_grad=False)
         cov2d[:,0,1,:]=cov2d[:,1,0,:]
         cov2d[:,0,0,:]*=10
         cov2d[:,1,1,:]*=10
@@ -623,7 +620,6 @@ class Binning(BaseWrapper):
 
             return left_up,right_down
         
-        nvtx.range_push("binning_allocate")
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
@@ -643,7 +639,6 @@ class Binning(BaseWrapper):
         prefix_sum=tiles_touched.cumsum(1,dtype=torch.int32)#start index of points
         total_tiles_num_batch=prefix_sum[:,-1]
         allocate_size=total_tiles_num_batch.max().cpu()
-        nvtx.range_pop()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         large_points_index=(tiles_touched>=32).nonzero()
@@ -668,19 +663,12 @@ class Binning(BaseWrapper):
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
         pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
-        tile_left_up=torch.empty_like(pixel_left_up)
-        tile_right_down=torch.empty_like(pixel_right_down)
-        tile_left_up[:,0,:]=(pixel_left_up[:,0,:]/float(tile_size[1])).int().clamp(0,img_tile_shape[1])
-        tile_right_down[:,0,:]=(pixel_right_down[:,0,:]/float(tile_size[1])).ceil().int().clamp(0,img_tile_shape[1])
-        tile_left_up[:,1,:]=(pixel_left_up[:,1,:]/float(tile_size[0])).int().clamp(0,img_tile_shape[0])
-        tile_right_down[:,1,:]=(pixel_right_down[:,1,:]/float(tile_size[0])).ceil().int().clamp(0,img_tile_shape[0])
-        rect_length=tile_right_down-tile_left_up
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_max_min_compact('radii',rect_length.max(dim=1).values.float())
+        tile_left_up,tile_right_down,tiles_touched=litegs_fused.get_allocate_size(pixel_left_up,pixel_right_down,tile_size[0],tile_size[1],img_tile_shape[0],img_tile_shape[1])
+        b_visible=(tiles_touched!=0)
 
         #allocate
-        tiles_touched=rect_length[:,0]*rect_length[:,1]
-        b_visible=(tiles_touched!=0)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.update_visible_count(b_visible)
 
         #sort by depth
         values,point_ids=view_depth.sort(dim=-1,descending=False)
@@ -707,7 +695,7 @@ class Binning(BaseWrapper):
         # range
         tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
-        return tile_start_index,sorted_pointId,b_visible
+        return tile_start_index,sorted_pointId,b_visible.sum(0)
     
     
     _fused=__binning_fused
@@ -734,6 +722,7 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
         for grad in args:
             sparse_value=grad.reshape(-1,chunk_size)
             placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
+            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='cuda')), dim=-2)
             grads.append(placeholder_grad)
         return None,*grads
 

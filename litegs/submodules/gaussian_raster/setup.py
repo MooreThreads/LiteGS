@@ -3,6 +3,10 @@ from torch_musa.utils.musa_extension import MUSAExtension, BuildExtension
 from torch_musa.utils.simple_porting import SimplePorting
 from setuptools import setup
 
+musa_flags = {
+    "mcc": ['--offload-arch=mp_31', '-resource-usage'],  
+}
+
 setup(
     name="litegs_fused",
     packages=['litegs_fused'],
@@ -16,7 +20,8 @@ setup(
             "cuda_errchk.cpp",
             "ext_cuda.cpp",
             "raster.mu",
-            "transform.mu"])
+            "transform.mu"],
+            extra_compile_args=musa_flags)
         ],
     cmdclass={
         'build_ext': BuildExtension

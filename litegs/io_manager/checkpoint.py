@@ -1,4 +1,4 @@
-import torch
+import torch; import torch_musa
 import os
 from ..training.optimizer import get_optimizer
 def load_checkpoint(file_path):

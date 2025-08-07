@@ -1,4 +1,4 @@
-import torch
+import torch;import torch_musa
 import math
 
 from ..arguments import DensifyParams
@@ -34,19 +34,38 @@ class DensityControllerBase:
 
     @torch.no_grad()
     def _cat_tensors_to_optimizer(self, tensors_dict:dict,optimizer:torch.optim.Optimizer):
+        cat_dim=-1
+        if self.bCluster:
+            cat_dim=-2
         for group in optimizer.param_groups:
             assert len(group["params"]) == 1
             extension_tensor = tensors_dict[group["name"]]
             stored_state = optimizer.state.get(group['params'][0], None)
             assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
             if stored_state is not None:
-                stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
-                stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=-2).contiguous()
-            new_param=torch.cat((group["params"][0], extension_tensor), dim=-2).contiguous()
+                stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+                stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+            new_param=torch.cat((group["params"][0], extension_tensor), dim=cat_dim).contiguous()
             optimizer.state.pop(group['params'][0])#pop param
             group["params"][0]=torch.nn.Parameter(new_param)
             optimizer.state[group["params"][0]]=stored_state#assign to new param
             assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
+        return
+    
+    @torch.no_grad()
+    def _replace_tensor_to_optimizer(self, tensor:torch.Tensor, name:str,optimizer:torch.optim.Optimizer):
+        for group in optimizer.param_groups:
+            if group["name"] in ["appearance_embeddings", "appearance_network"]:
+                continue
+            if group["name"] == name:
+                stored_state = optimizer.state.get(group['params'][0], None)
+                stored_state["exp_avg"] = torch.zeros_like(tensor)
+                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                #stored_state["step"]=0#bugfix
+
+                del optimizer.state[group['params'][0]]
+                group["params"][0] = torch.nn.Parameter(tensor.requires_grad_(True))
+                optimizer.state[group['params'][0]] = stored_state
         return
     
     @torch.no_grad()
@@ -97,8 +116,6 @@ class DensityControllerOfficial(DensityControllerBase):
         invisible.shape[0]
         prune_mask=transparent
         prune_mask[:invisible.shape[0]]|=invisible
-        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-        prune_mask[:invisible.shape[0]]|=big_points_vs
         return prune_mask
 
     @torch.no_grad()
@@ -209,19 +226,21 @@ class DensityControllerOfficial(DensityControllerBase):
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
-        decay_rate=0.5
-        decay_mask=(actived_opacities>1/(255*decay_rate-1))
-        decay_rate=decay_mask*decay_rate+(~decay_mask)*1.0
-        opacity.data=inverse_sigmoid(actived_opacities*decay_rate)#(actived_opacities.clamp_max(0.005))
-        optimizer.state.clear()
+        if self.densify_params.opacity_reset_mode=='decay':
+            decay_rate=0.5
+            opacity.data=inverse_sigmoid((actived_opacities*decay_rate).clamp_min(1.0/128))
+            optimizer.state.clear()
+        elif self.densify_params.opacity_reset_mode=='reset':
+            opacity.data=inverse_sigmoid(actived_opacities.clamp_max(0.005))
+            self._replace_tensor_to_optimizer(opacity,"opacity",optimizer)
+
         return
     
     @torch.no_grad()
     def is_densify_actived(self,epoch:int):
 
         return epoch<self.densify_params.densify_until and epoch>=self.densify_params.densify_from and (
-            epoch%self.densify_params.densification_interval==0 or
-            epoch%self.densify_params.prune_interval==0)
+            epoch%self.densify_params.densification_interval==0)
 
     @torch.no_grad()
     def step(self,optimizer:torch.optim.Optimizer,epoch:int):
@@ -229,8 +248,6 @@ class DensityControllerOfficial(DensityControllerBase):
             bUpdate=False
             if epoch%self.densify_params.densification_interval==0:
                 self.split_and_clone(optimizer,epoch)
-                bUpdate=True
-            if epoch%self.densify_params.prune_interval==0:
                 self.prune(optimizer,epoch)
                 bUpdate=True
             if epoch%self.densify_params.opacity_reset_interval==0:
@@ -247,38 +264,31 @@ class DensityControllerTamingGS(DensityControllerOfficial):
     @torch.no_grad()
     def __init__(self,screen_extent:int,densify_params:DensifyParams,bCluster:bool,init_points_num:int)->None:
 
-        assert(densify_params.budget!=0.0)
-        if densify_params.densify_mode=='final_count':
-            self.target_points_num=densify_params.budget
-        elif densify_params.densify_mode=='multiplier':
-            self.target_points_num=densify_params.budget*init_points_num
-        else:
-            assert(False)
-
+        assert(densify_params.target_primitives!=0.0)
+        self.target_points_num=densify_params.target_primitives
         super(DensityControllerTamingGS,self).__init__(screen_extent,densify_params,bCluster,init_points_num)
         return
     
     @torch.no_grad()
     def get_prune_mask(self,actived_opacity:torch.Tensor,actived_scale:torch.Tensor)->torch.Tensor:
-        prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
+        if self.densify_params.prune_mode == 'weight':
+            prune_mask=torch.zeros(actived_opacity.shape[1],device=actived_opacity.device).bool()
 
-        frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
-        weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
-        invisible = weight_sum==0
-        prune_mask[:invisible.shape[0]]|=invisible
-
-        big_points_vs = StatisticsHelperInst.get_max('radii') > self.max_screen_size
-        prune_mask[:big_points_vs.shape[0]]|=big_points_vs
+            frag_weight,frag_count=StatisticsHelperInst.get_mean('fragment_weight')
+            weight_sum=(frag_weight*frag_count).nan_to_num(0).squeeze()
+            invisible = weight_sum==0#weight_sum<(weight_sum[weight_sum!=0].quantile(0.05))
+            prune_mask[:invisible.shape[0]]|=invisible
+        elif self.densify_params.prune_mode == 'threshold':
+            prune_mask=super(DensityControllerTamingGS,self).get_prune_mask(actived_opacity,actived_scale)
         
         return prune_mask
     
     def get_score(self,xyz,scale,rot,sh_0,sh_rest,opacity)->torch.Tensor:
-
-        frag_err_std,weight=StatisticsHelperInst.get_std('fragment_err')
-        score=frag_err_std*weight
+        var,frag_count=StatisticsHelperInst.get_var('fragment_err')
+        #score=(var*frag_count).sqrt()*(opacity.sigmoid())
+        score=var*frag_count*(opacity.sigmoid()*opacity.sigmoid())
         score=score.squeeze().nan_to_num(0)
         score.clamp_min_(0)
-
         return score
     
     @torch.no_grad()
@@ -289,8 +299,10 @@ class DensityControllerTamingGS(DensityControllerOfficial):
             chunk_size=xyz.shape[-1]
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
 
+        prune_num=self.get_prune_mask(opacity.sigmoid(),scale.exp()).sum()
+
         cur_target_count = (self.target_points_num - self.init_points_num) / (self.densify_params.densify_until - self.densify_params.densify_from) * (epoch-self.densify_params.densify_from)+self.init_points_num
-        budget=min(max(int(cur_target_count-xyz.shape[-1]),1),xyz.shape[-1])
+        budget=min(max(int(cur_target_count-xyz.shape[-1]),1)+prune_num,xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)
         densify_index = torch.multinomial(score, budget, replacement=False)

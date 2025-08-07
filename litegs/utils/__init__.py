@@ -1,6 +1,6 @@
 import numpy as np
 import math
-import torch
+import torch; import torch_musa
 from .spherical_harmonics import sh0_to_rgb,sh_to_rgb,rgb_to_sh0
 from . import wrapper
 

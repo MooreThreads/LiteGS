@@ -1,4 +1,4 @@
-import torch
+import torch; import torch_musa
 from simple_knn._C import distCUDA2
 from ..utils import rgb_to_sh0
 from . import cluster

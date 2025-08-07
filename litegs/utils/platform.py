@@ -1,5 +1,5 @@
 import platform
-import torch
+import torch; import torch_musa
 import sys
 plat = platform.system().lower()
 

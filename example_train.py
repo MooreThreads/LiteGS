@@ -1,5 +1,5 @@
 from argparse import ArgumentParser, Namespace
-import torch
+import torch; import torch_musa
 import sys
 
 import litegs
