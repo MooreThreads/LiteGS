@@ -70,9 +70,8 @@ class PipelineParams(ParamGroup):
     cluster_size = 128
     tile_size = (8,16)
     sparse_grad = True
-    spatial_refine_interval = 5
     device_preload = True
-    enable_transmitance=True
+    enable_transmitance=False
     enable_depth=False
     def __init__(self, parser):
         super().__init__(parser, "Pipeline Parameters")
@@ -87,21 +86,26 @@ class OptimizationParams(ParamGroup):
     scaling_lr = 0.005
     rotation_lr = 0.001
     lambda_dssim = 0.2
+    reg_weight=0.0
     def __init__(self, parser):
         super().__init__(parser, "Optimization Parameters")
 
 class DensifyParams(ParamGroup):
-    densification_interval = 2
+    densification_interval = 5
     densify_from = 3
     densify_until = -1
-    prune_interval = 10
     opacity_reset_interval = 10
+    opacity_reset_mode='decay'#'decay','reset'
+    prune_mode='weight'#'weight','threshold'
+    target_primitives=1000000
+    
+
+
+    #discard
     densify_grad_threshold = 0.00015
     opacity_threshold=0.005
     screen_size_threshold=128#tile
     percent_dense = 0.01
-    budget=15.0 #0.0 for official densify
-    densify_mode="multiplier"#final_count or multiplier
     def __init__(self, parser):
         super().__init__(parser, "Densify Parameters")
         
