@@ -721,8 +721,8 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
         grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
         for grad in args:
             sparse_value=grad.reshape(-1,chunk_size)
-            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
-            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='cuda')), dim=-2)
+            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='musa'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
+            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='musa')), dim=-2)
             grads.append(placeholder_grad)
         return None,*grads
 

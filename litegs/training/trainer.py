@@ -52,8 +52,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     cluster_extend=None
     init_points_num=init_xyz.shape[0]
     if start_checkpoint is None:
-        init_xyz=torch.tensor(init_xyz,dtype=torch.float32,device='cuda')
-        init_color=torch.tensor(init_color,dtype=torch.float32,device='cuda')
+        init_xyz=torch.tensor(init_xyz,dtype=torch.float32,device='musa')
+        init_color=torch.tensor(init_color,dtype=torch.float32,device='musa')
         xyz,scale,rot,sh_0,sh_rest,opacity=scene.create_gaussians(init_xyz,init_color,lp.sh_degree)
         if pp.cluster_size:
             xyz,scale,rot,sh_0,sh_rest,opacity=scene.cluster.cluster_points(pp.cluster_size,xyz,scale,rot,sh_0,sh_rest,opacity)
