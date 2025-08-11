@@ -50,14 +50,6 @@ struct RGBA16
     half a;
 };
 
-struct RGBA32
-{
-    float r;
-    float g;
-    float b;
-    float a;
-};
-
 struct RGBA16x2
 {
     half2 r;
@@ -190,9 +182,17 @@ __global__ void raster_forward_kernel(
 
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
-    if (specific_tiles.size(1) != 0 && (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1)))
+    if (specific_tiles.size(1) != 0)
     {
         tile_id = specific_tiles[batch_id][blockIdx.x * blockDim.y + threadIdx.y];
+        if (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1))
+        {
+            tile_id = specific_tiles[batch_id][blockIdx.x * blockDim.y + threadIdx.y];
+        }
+        else
+        {
+            tile_id = 0;
+        }
     }
 
     if (tile_id != 0 && tile_id < start_index.size(1) - 1)
@@ -295,7 +295,7 @@ __global__ void raster_forward_kernel(
             }
             
         }
-        int tile_index = blockIdx.x * blockDim.y + threadIdx.y;
+        int tile_index = tile_id - 1;
         auto ourput_r = output_img[batch_id][0][tile_index];
         auto ourput_g = output_img[batch_id][1][tile_index];
         auto ourput_b = output_img[batch_id][2][tile_index];
@@ -386,11 +386,12 @@ std::vector<at::Tensor> rasterize_forward(
     int tilesnum_x = std::ceil(img_w / float(tile_w));
     int tilesnum_y = std::ceil(img_h / float(tile_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
+    int64_t render_tile_num = tilesnum;
     at::Tensor specific_tiles;
     if (specific_tiles_arg.has_value())
     {
         specific_tiles = *specific_tiles_arg;
-        tilesnum = specific_tiles.sizes()[1];
+        render_tile_num = specific_tiles.sizes()[1];
     }
     else
     {
@@ -431,7 +432,7 @@ std::vector<at::Tensor> rasterize_forward(
 
     {
         int tiles_per_block = 4;
-        dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
+        dim3 Block3d(std::ceil(render_tile_num / float(tiles_per_block)), viewsnum, 1);
         dim3 Thread3d(32, tiles_per_block);
         switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
@@ -489,11 +490,12 @@ std::vector<at::Tensor> rasterize_forward_packed(
     int tilesnum_x = std::ceil(img_w / float(tile_w));
     int tilesnum_y = std::ceil(img_h / float(tile_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
+    int64_t render_tile_num = tilesnum;
     at::Tensor specific_tiles;
     if (specific_tiles_arg.has_value())
     {
         specific_tiles = *specific_tiles_arg;
-        tilesnum = specific_tiles.sizes()[1];
+        render_tile_num = specific_tiles.sizes()[1];
     }
     else
     {
@@ -522,7 +524,7 @@ std::vector<at::Tensor> rasterize_forward_packed(
 
     {
         int tiles_per_block = 4;
-        dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
+        dim3 Block3d(std::ceil(render_tile_num / float(tiles_per_block)), viewsnum, 1);
         dim3 Thread3d(32, tiles_per_block);
         switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
@@ -597,9 +599,17 @@ __global__ void raster_backward_kernel(
 
     const int batch_id = blockIdx.y;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
-    if (specific_tiles.size(1) != 0 && (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1)))
+    if (specific_tiles.size(1) != 0)
     {
         tile_id = specific_tiles[batch_id][blockIdx.x * blockDim.y + threadIdx.y];
+        if (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1))
+        {
+            tile_id = specific_tiles[batch_id][blockIdx.x * blockDim.y + threadIdx.y];
+        }
+        else
+        {
+            tile_id = 0;
+        }
     }
 
     if (tile_id != 0 && tile_id < start_index.size(1) - 1)
@@ -621,8 +631,8 @@ __global__ void raster_backward_kernel(
 
                 const int in_tile_x = threadIdx.x % tile_size_x;
                 const int in_tile_y = threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
-                float t0 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x];
-                float t1 = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x];
+                float t0 = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + 2 * i][in_tile_x];
+                float t1 = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x];
                 reg_buffer[i].t = half2(t0 * SCALER, t1 * SCALER);
                 if (enable_trans_grad)
                 {
@@ -630,23 +640,23 @@ __global__ void raster_backward_kernel(
                 }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
-                    d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
-                    d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                    d_img[batch_id][0][tile_id - 1][in_tile_y + 2 * i][in_tile_x],
+                    d_img[batch_id][0][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x]);
                 shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
-                    d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
-                    d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                    d_img[batch_id][1][tile_id - 1][in_tile_y + 2 * i][in_tile_x],
+                    d_img[batch_id][1][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x]);
                 shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
-                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
-                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                    d_img[batch_id][2][tile_id - 1][in_tile_y + 2 * i][in_tile_x],
+                    d_img[batch_id][2][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x]);
                 if (enable_trans_grad)
                 {
                     shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
-                        d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x],
-                        d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x]);
+                        d_trans_img[batch_id][0][tile_id - 1][in_tile_y + 2 * i][in_tile_x],
+                        d_trans_img[batch_id][0][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x]);
                 }
-                unsigned short last0 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i][in_tile_x];
+                unsigned short last0 = last_contributor[batch_id][tile_id - 1][in_tile_y + 2 * i][in_tile_x];
                 last0 = last0 == 0 ? 0 : last0 - 1;
-                unsigned short last1 = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + 2 * i + 1][in_tile_x];
+                unsigned short last1 = last_contributor[batch_id][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x];
                 last1 = last1 == 0 ? 0 : last1 - 1;
                 index_in_tile = max(max(index_in_tile, last0), last1);
                 shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = (last1 << 16 | last0);
@@ -878,11 +888,12 @@ std::vector<at::Tensor> rasterize_backward(
     int tilesnum_x = std::ceil(img_w / float(tilesize_w));
     int tilesnum_y = std::ceil(img_h / float(tilesize_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
+    int64_t render_tile_num = tilesnum;
     at::Tensor specific_tiles;
     if (specific_tiles_arg.has_value())
     {
         specific_tiles = *specific_tiles_arg;
-        tilesnum = specific_tiles.sizes()[1];
+        render_tile_num = specific_tiles.sizes()[1];
     }
     else
     {
@@ -926,7 +937,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor err_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
     
     int tiles_per_block = 4;
-    dim3 Block3d(std::ceil(tilesnum / float(tiles_per_block)), viewsnum, 1);
+    dim3 Block3d(std::ceil(render_tile_num / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     
     switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))
