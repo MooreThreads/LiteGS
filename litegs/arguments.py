@@ -73,6 +73,7 @@ class PipelineParams(ParamGroup):
     device_preload = True
     enable_transmitance=False
     enable_depth=False
+    input_color_type='sh'#'rgb' or 'sh'
     def __init__(self, parser):
         super().__init__(parser, "Pipeline Parameters")
 

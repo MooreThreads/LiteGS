@@ -1,7 +1,7 @@
 import torch
 import litegs_info
 import time
-gs, cam = torch.load('./profiler_input_data.pth')
+gs, cam = torch.load('./profiler_input_data/data.pth')
 
 # init & warmup
 cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity = litegs_info.cluster(

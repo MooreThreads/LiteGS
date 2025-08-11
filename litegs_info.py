@@ -92,6 +92,7 @@ def rasterization(
     far_plane: float = 100.0,
 ):
     pp = Config()
+    pp.input_color_type='rgb'
     # StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],lambda x: True)
     # opacities = torch.log(opacities/(1-opacities))
     # xyz,scale,rot,sh_0,opacity=litegs.scene.cluster.cluster_points(128,means.T.contiguous(),scales.log().T.contiguous(),quats.T.contiguous(),colors.T.contiguous()[None],opacities[None])
