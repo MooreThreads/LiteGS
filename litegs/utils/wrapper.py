@@ -446,9 +446,9 @@ class GaussiansRasterFunc(torch.autograd.Function):
         enable_transmitance:bool=False,
         enable_depth:bool=False
     ):
-        transmitance=None
-        depth=None
-        normal=None
+        if (tiles is None) and (tile_start_index.shape[0]==1):
+            visible_primitives_num=tile_start_index[0,2:]-tile_start_index[0,1:-1]
+            tiles=visible_primitives_num.sort(descending=True)[1].int().reshape(1,-1)+1
    
         img,transmitance,depth,lst_contributor,packed_params,fragment_count,fragment_weight=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,
                                                                                             ndc,cov2d_inv,color,opacities,
@@ -464,6 +464,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
             depth=None
         if enable_transmitance==False:
             transmitance=None
+        normal=None
         return img,transmitance,depth,normal
 
     @staticmethod
