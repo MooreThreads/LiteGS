@@ -659,13 +659,13 @@ class Binning(BaseWrapper):
         return tile_start_index,sorted_pointId,b_visible
     
     @torch.no_grad()
-    def __binning_fused(ndc:torch.Tensor,view_depth:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
+    def __binning_fused(ndc:torch.Tensor,view_depth:torch.Tensor,inv_cov2d:torch.Tensor,opacity:torch.Tensor,
             img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
         
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size[0]))),int(math.ceil(img_pixel_shape[1]/float(tile_size[1]))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        pixel_left_up,pixel_right_down,ellipse_f,ellipse_a=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,eigen_val,eigen_vec,opacity,img_pixel_shape[0],img_pixel_shape[1])
+        pixel_left_up,pixel_right_down=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,inv_cov2d,opacity,img_pixel_shape[0],img_pixel_shape[1])
         tile_left_up,tile_right_down,tiles_touched=litegs_fused.get_allocate_size(pixel_left_up,pixel_right_down,tile_size[0],tile_size[1],img_tile_shape[0],img_tile_shape[1])
         b_visible=(tiles_touched!=0)
 
@@ -684,10 +684,8 @@ class Binning(BaseWrapper):
         allocate_size=total_tiles_num_batch.max().cpu()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        large_points_index=(tiles_touched>=32).nonzero()
-        my_table=litegs_fused.duplicateWithKeys(tile_left_up,tile_right_down,prefix_sum,point_ids,large_points_index,
-                                                ellipse_f,ellipse_a,
-                                                int(allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+        my_table=litegs_fused.duplicateWithKeys(tile_left_up,tile_right_down,prefix_sum,point_ids,int(allocate_size),
+                                                img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
