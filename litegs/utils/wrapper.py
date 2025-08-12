@@ -646,13 +646,13 @@ class Binning(BaseWrapper):
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         large_points_index=(tiles_touched>=32).nonzero()
-        my_table=litegs_fused.duplicateWithKeys(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
-        tileId_table:torch.Tensor=my_table[0]
-        pointId_table:torch.Tensor=my_table[1]
+        my_table=litegs_fused.createTable(left_up,right_down,prefix_sum,point_ids,large_points_index,int(allocate_size),img_tile_shape[1])
+        sorted_tileId:torch.Tensor=my_table[0]
+        sorted_pointId:torch.Tensor=my_table[1]
 
         # sort tile_id with torch.sort
-        sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
-        sorted_pointId=pointId_table.gather(dim=1,index=indices)
+        # sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
+        # sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
         tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
@@ -685,14 +685,14 @@ class Binning(BaseWrapper):
         total_allocate_size=total_tiles_num_batch.max().cpu()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=litegs_fused.duplicateWithKeys(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
+        my_table=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
                                                 int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
-        tileId_table:torch.Tensor=my_table[0]
-        pointId_table:torch.Tensor=my_table[1]
+        sorted_tileId:torch.Tensor=my_table[0]
+        sorted_pointId:torch.Tensor=my_table[1]
 
         # sort tile_id with torch.sort
-        sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
-        sorted_pointId=pointId_table.gather(dim=1,index=indices)
+        # sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
+        # sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
         tile_start_index=litegs_fused.tileRange(sorted_tileId,int(total_allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)

@@ -7,7 +7,7 @@
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("duplicateWithKeys", &duplicateWithKeys);
+  m.def("create_table", &create_table);
   m.def("tileRange", &tileRange);
   m.def("get_allocate_size", &get_allocate_size);
   m.def("rasterize_forward", &rasterize_forward);

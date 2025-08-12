@@ -20,6 +20,8 @@ A copy of the Gaussian-Splatting License is provided in the LICENSE file.
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <cuda/atomic>
+#include <cub/cub.cuh>
+#include <cub/device/device_radix_sort.cuh>
 namespace cg = cooperative_groups;
 
 #include <ATen/core/TensorAccessor.h>
@@ -107,7 +109,7 @@ template<int TileSizeY, int TileSizeX>
      }
 }
 
- std::vector<at::Tensor> duplicateWithKeys(at::Tensor ndc, at::Tensor inv_cov2d, at::Tensor opacity, at::Tensor offset, at::Tensor depth_sorted_pointid,
+ std::vector<at::Tensor> create_table(at::Tensor ndc, at::Tensor inv_cov2d, at::Tensor opacity, at::Tensor offset, at::Tensor depth_sorted_pointid,
      int64_t allocate_size, int64_t height, int64_t width, int64_t tile_size_h, int64_t tile_size_w)
 {
     assert(tile_size_h == 8 && tile_size_w == 16);
@@ -123,8 +125,10 @@ template<int TileSizeY, int TileSizeX>
 
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
     auto table_tileId = torch::zeros(output_shape, opt);
+    auto table_tileId_sorted = torch::zeros(output_shape, opt);
     opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
     auto table_pointId= torch::zeros(output_shape, opt);
+    auto table_pointId_sorted = torch::zeros(output_shape, opt);
 
     dim3 Block3d(std::ceil(points_num/256.0f), view_num, 1);
     
@@ -140,7 +144,31 @@ template<int TileSizeY, int TileSizeX>
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 
-    return { table_tileId ,table_pointId };
+    unsigned int bit = 0;
+    unsigned int max_tiles = tiles_num_h * tiles_num_w;
+    while (max_tiles >>= 1) bit++;
+    bit++;
+
+    size_t sort_tmp_buffer_size;
+    cub::DeviceRadixSort::SortPairs<int,int>(
+        nullptr,
+        sort_tmp_buffer_size,
+        (int*)table_tileId.data_ptr(), (int*)table_tileId_sorted.data_ptr(),
+        (int*)table_pointId.data_ptr(), (int*)table_pointId_sorted.data_ptr(),
+        allocate_size, 0, bit);
+    auto temp_buffer_tensor=torch::empty({ ((int)sort_tmp_buffer_size + 4 - 1) / 4 }, opt);
+    
+    for (int view_id = 0; view_id < view_num; view_id++)
+    {
+        cub::DeviceRadixSort::SortPairs(
+            temp_buffer_tensor.data_ptr(),
+            sort_tmp_buffer_size,
+            (int*)table_tileId.data_ptr(), (int*)table_tileId_sorted.data_ptr(),
+            (int*)table_pointId.data_ptr(), (int*)table_pointId_sorted.data_ptr(),
+            allocate_size, 0, bit);
+    }
+
+    return { table_tileId_sorted ,table_pointId_sorted };
     
 }
 
