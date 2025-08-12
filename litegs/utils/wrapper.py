@@ -666,27 +666,27 @@ class Binning(BaseWrapper):
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size[0]))),int(math.ceil(img_pixel_shape[1]/float(tile_size[1]))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        pixel_left_up,pixel_right_down=litegs_fused.create_2d_gaussian_ROI(ndc,view_depth,inv_cov2d,opacity,img_pixel_shape[0],img_pixel_shape[1])
-        tile_left_up,tile_right_down,tiles_touched=litegs_fused.get_allocate_size(pixel_left_up,pixel_right_down,tile_size[0],tile_size[1],img_tile_shape[0],img_tile_shape[1])
-        b_visible=(tiles_touched!=0)
+        pixel_left_up,pixel_right_down,allocate_size=litegs_fused.get_allocate_size(ndc,view_depth,inv_cov2d,opacity,img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+        b_visible=(allocate_size!=0)
 
         #allocate
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.update_visible_count(b_visible)
 
         #sort by depth
-        values,point_ids=view_depth.sort(dim=-1,descending=False)
+        values,depth_sorted_index=view_depth.sort(dim=-1,descending=False)
         for i in range(ndc.shape[0]):
-            tiles_touched[i]=tiles_touched[i,point_ids[i]]
+            allocate_size[i]=allocate_size[i,depth_sorted_index[i]]
+        depth_sorted_allocate_size=allocate_size
 
         #calc the item num of table and the start index in table of each point
-        prefix_sum=tiles_touched.cumsum(1,dtype=torch.int32)#start index of points
+        prefix_sum=depth_sorted_allocate_size.cumsum(1,dtype=torch.int32)#start index of points
         total_tiles_num_batch=prefix_sum[:,-1]
-        allocate_size=total_tiles_num_batch.max().cpu()
+        total_allocate_size=total_tiles_num_batch.max().cpu()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=litegs_fused.duplicateWithKeys(tile_left_up,tile_right_down,prefix_sum,point_ids,int(allocate_size),
-                                                img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+        my_table=litegs_fused.duplicateWithKeys(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
+                                                int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
 
@@ -695,7 +695,7 @@ class Binning(BaseWrapper):
         sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(total_allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
         return tile_start_index,sorted_pointId,b_visible.sum(0)
     
