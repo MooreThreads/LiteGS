@@ -124,11 +124,11 @@ template<int TileSizeY, int TileSizeX>
     std::vector<int64_t> output_shape{ view_num, allocate_size };
 
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
-    auto table_tileId = torch::zeros(output_shape, opt);
-    auto table_tileId_sorted = torch::zeros(output_shape, opt);
+    auto table_tileId = torch::empty(output_shape, opt);
+    auto table_tileId_sorted = torch::empty(output_shape, opt);
     opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
-    auto table_pointId= torch::zeros(output_shape, opt);
-    auto table_pointId_sorted = torch::zeros(output_shape, opt);
+    auto table_pointId= torch::empty(output_shape, opt);
+    auto table_pointId_sorted = torch::empty(output_shape, opt);
 
     dim3 Block3d(std::ceil(points_num/256.0f), view_num, 1);
     
