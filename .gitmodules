@@ -1,3 +1,0 @@
-[submodule "litegs/submodules/fused_ssim"]
-	path = litegs/submodules/fused_ssim
-	url = https://github.com/rahul-goel/fused-ssim.git
