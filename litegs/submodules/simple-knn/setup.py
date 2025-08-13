@@ -9,26 +9,24 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+import torch; import torch_musa
+from torch_musa.utils.musa_extension import MUSAExtension, BuildExtension
+from torch_musa.utils.simple_porting import SimplePorting
 from setuptools import setup
-from torch.utils.cpp_extension import CUDAExtension, BuildExtension
-import os
 
 cxx_compiler_flags = []
-
-if os.name == 'nt':
-    cxx_compiler_flags.append("/wd4624")
 
 setup(
     name="simple_knn",
     ext_modules=[
-        CUDAExtension(
+        MUSAExtension(
             name="simple_knn._C",
             sources=[
-            "spatial.cu", 
-            "simple_knn.cu",
+            "spatial.mu", 
+            "simple_knn.mu",
             "ext.cpp"],
-            extra_compile_args={"nvcc": [], "cxx": cxx_compiler_flags})
-        ],
+        )
+    ],
     cmdclass={
         'build_ext': BuildExtension
     }
