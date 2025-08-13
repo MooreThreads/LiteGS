@@ -1,11 +1,11 @@
-#ifndef __CUDACC__
-    #define __CUDACC__
+#ifndef __MUSACC__
+    #define __MUSACC__
     #define __NVCC__
 #endif
-#include "cuda_runtime.h"
+#include "musa_runtime.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <cuda/atomic>
+#include <musa/atomic>
 namespace cg = cooperative_groups;
 
 #include <ATen/core/TensorAccessor.h>
@@ -272,7 +272,7 @@ void adamUpdate(torch::Tensor &param,torch::Tensor &param_grad,torch::Tensor &ex
     if (param.sizes().size() == 3)//chunk
     {
         dim3 Block3d(visible.size(0), param.size(0), 1);
-        sparse_chunk_adam_kernel << <Block3d, param.size(2) >> > (
+        sparse_chunk_adam_kernel <<<Block3d, param.size(2) >>> (
             param.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             param_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             exp_avg.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),

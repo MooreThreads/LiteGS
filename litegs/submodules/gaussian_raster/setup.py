@@ -1,41 +1,29 @@
+import torch; import torch_musa
+from torch_musa.utils.musa_extension import MUSAExtension, BuildExtension
+from torch_musa.utils.simple_porting import SimplePorting
 from setuptools import setup
-from torch.utils.cpp_extension import CUDAExtension, BuildExtension,COMMON_NVCC_FLAGS
 
-def remove_unwanted_pytorch_nvcc_flags():
-    REMOVE_NVCC_FLAGS = [
-        '-D__CUDA_NO_HALF_OPERATORS__',
-        '-D__CUDA_NO_HALF_CONVERSIONS__',
-        '-D__CUDA_NO_BFLOAT16_CONVERSIONS__',
-        '-D__CUDA_NO_HALF2_OPERATORS__',
-    ]
-    for flag in REMOVE_NVCC_FLAGS:
-        try:
-            COMMON_NVCC_FLAGS.remove(flag)
-        except ValueError:
-            pass
+musa_flags = {
+    "mcc": ['--offload-arch=mp_31', '-resource-usage'],  
+}
 
-if __name__ == '__main__':
-    remove_unwanted_pytorch_nvcc_flags()
-    setup(
-        name="litegs_fused",
-        packages=['litegs_fused'],
-        package_dir={'litegs_fused':"."},
-        ext_modules=[
-            CUDAExtension(
-                name="litegs_fused",
-                sources=[
-                "binning.cu",
-                "compact.cu",
-                "cuda_errchk.cpp",
-                "ext_cuda.cpp",
-                "raster.cu",
-                "transform.cu"])
-            ],
-        extra_compile_args={
-                'cxx': ['-O3'],
-                'nvcc': ['-O3', '--use_fast_math']
-            },
-        cmdclass={
-            'build_ext': BuildExtension
-        }
-    )
+setup(
+    name="litegs_fused",
+    packages=['litegs_fused'],
+    package_dir={'litegs_fused':"."},
+    ext_modules=[
+        MUSAExtension(
+            name="litegs_fused",
+            sources=[
+            "binning.mu",
+            "compact.mu",
+            "cuda_errchk.cpp",
+            "ext_cuda.cpp",
+            "raster.mu",
+            "transform.mu"],
+            extra_compile_args=musa_flags)
+        ],
+    cmdclass={
+        'build_ext': BuildExtension
+    }
+)

@@ -1,5 +1,5 @@
 #pragma once
-#include "cuda_runtime.h"
+#include "musa_runtime.h"
 void cuda_error_check(const char* file, const char* function);
 
 //#define CUDA_DEBUG
