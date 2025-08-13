@@ -2,7 +2,6 @@ import torch
 import typing
 import numpy as np
 import math
-from torch.cuda import nvtx
 
 from .platform import add_cmake_output_path
 from . import spherical_harmonics
@@ -119,7 +118,7 @@ class BaseWrapper:
         inputs = []
         for obj, obj_type,requires_grad in cls.test_inputs:
             if obj_type is not None:
-                obj = torch.randn(obj, dtype=obj_type, device='cuda', requires_grad=requires_grad)
+                obj = torch.randn(obj, dtype=obj_type, device='musa', requires_grad=requires_grad)
             inputs.append(obj)
         return inputs
 
@@ -194,7 +193,7 @@ class CreateTransformMatrix(BaseWrapper):
         return transform_matrix
 
     def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
-        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
+        rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='musa')
 
         r=rotator_vec[0]
         x=rotator_vec[1]
@@ -584,7 +583,7 @@ class EighAndInverse2x2Matrix(BaseWrapper):
 
     @classmethod
     def gen_inputs(cls):
-        cov2d=torch.randn([1,2,2,512*1024], dtype=torch.float32, device='cuda', requires_grad=False)
+        cov2d=torch.randn([1,2,2,512*1024], dtype=torch.float32, device='musa', requires_grad=False)
         cov2d[:,0,1,:]=cov2d[:,1,0,:]
         cov2d[:,0,0,:]*=10
         cov2d[:,1,1,:]*=10
@@ -622,7 +621,6 @@ class Binning(BaseWrapper):
 
             return left_up,right_down
         
-        nvtx.range_push("binning_allocate")
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size))),int(math.ceil(img_pixel_shape[1]/float(tile_size))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
@@ -642,7 +640,6 @@ class Binning(BaseWrapper):
         prefix_sum=tiles_touched.cumsum(1,dtype=torch.int32)#start index of points
         total_tiles_num_batch=prefix_sum[:,-1]
         allocate_size=total_tiles_num_batch.max().cpu()
-        nvtx.range_pop()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         large_points_index=(tiles_touched>=32).nonzero()
@@ -723,8 +720,8 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
         grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
         for grad in args:
             sparse_value=grad.reshape(-1,chunk_size)
-            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
-            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='cuda')), dim=-2)
+            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='musa'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
+            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='musa')), dim=-2)
             grads.append(placeholder_grad)
         return None,*grads
 

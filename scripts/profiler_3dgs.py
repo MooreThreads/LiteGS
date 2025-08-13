@@ -11,7 +11,7 @@
 
 
 #convert 
-#1. create cfg_args in our model "Namespace(sh_degree=3, source_path='C:\\Users\\admin\\Desktop\\gaussian splatting\\mipnerf360\\garden', model_path='output/garden-5728k', images='images_4', resolution=-1, white_background=False, data_device='cuda',depths="",train_test_exp=False, eval=True)"
+#1. create cfg_args in our model "Namespace(sh_degree=3, source_path='C:\\Users\\admin\\Desktop\\gaussian splatting\\mipnerf360\\garden', model_path='output/garden-5728k', images='images_4', resolution=-1, white_background=False, data_device='musa',depths="",train_test_exp=False, eval=True)"
 #2. rename garden-xxxk/point_cloud/finish to garden-xxxk/point_cloud/iteration_30000
 
 import torch
@@ -44,14 +44,14 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
                 rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
                 rendering.sum().backward()
-    print(prof.key_averages(group_by_input_shape=False).table(sort_by='self_cuda_time_total', row_limit=10))
+    print(prof.key_averages(group_by_input_shape=False).table(sort_by='self_musa_time_total', row_limit=10))
 
 def profiler(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, separate_sh: bool):
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
 
     bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
-    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    background = torch.tensor(bg_color, dtype=torch.float32, device="musa")
 
     render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh)
 

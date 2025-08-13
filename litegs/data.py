@@ -156,18 +156,18 @@ class CameraFrameDataset(Dataset):
         
         if bDevice:
             for camera in cameras.values():
-                camera.proj_matrix=torch.Tensor(camera.proj_matrix).cuda()
+                camera.proj_matrix=torch.Tensor(camera.proj_matrix).musa()
             for frame in frames:
-                frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
+                frame.view_matrix=torch.Tensor(frame.view_matrix).musa()
                 for key in frame.image.keys():
-                    frame.image[key]=torch.tensor(frame.image[key]).cuda()
+                    frame.image[key]=torch.tensor(frame.image[key]).musa()
         
         #init frustumplanes
         self.frustumplanes=[]
         for frame in self.frames:
             frustumplane=self.__get_frustumplane(frame.get_viewmatrix(),self.cameras[frame.camera_id].get_project_matrix())
             if bDevice:
-                self.frustumplanes.append(torch.Tensor(frustumplane).cuda())
+                self.frustumplanes.append(torch.Tensor(frustumplane).musa())
             else:
                 self.frustumplanes.append(frustumplane)
 
@@ -178,9 +178,9 @@ class CameraFrameDataset(Dataset):
             half_W=output_shape[2]*0.5
             half_H=output_shape[1]*0.5
             focal_length=(cameras[frame.camera_id].proj_matrix[0,0]*half_W+cameras[frame.camera_id].proj_matrix[1,1]*half_H)*0.5
-            X=(torch.arange(0,output_shape[2],1,device='cuda')+0.5).unsqueeze(0).repeat(output_shape[1],1)-half_W
-            Y=(torch.arange(0,output_shape[1],1,device='cuda')+0.5).unsqueeze(1).repeat(1,output_shape[2])-half_H
-            Z=torch.ones([output_shape[1],output_shape[2]],device='cuda')*focal_length
+            X=(torch.arange(0,output_shape[2],1,device='musa')+0.5).unsqueeze(0).repeat(output_shape[1],1)-half_W
+            Y=(torch.arange(0,output_shape[1],1,device='musa')+0.5).unsqueeze(1).repeat(1,output_shape[2])-half_H
+            Z=torch.ones([output_shape[1],output_shape[2]],device='musa')*focal_length
             camera_ray_d=torch.concat([X.unsqueeze(-1),Y.unsqueeze(-1),Z.unsqueeze(-1)],dim=-1)
             #camera_ray_d=torch.nn.functional.normalize(camera_ray_d,dim=-1)
             world_ray_d=camera_ray_d@(frame.get_viewmatrix()[:3,:3].transpose(0,1))

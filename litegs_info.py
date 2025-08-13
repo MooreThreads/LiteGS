@@ -59,7 +59,7 @@ def get_frustumplane(view_matrix,proj_matrix):
     frustumplane[5,3]=viewproj_matrix[3,3]-viewproj_matrix[3,2]
     return frustumplane
 
-def get_projection_matrix(znear, zfar, fovX, fovY, device="cuda"):
+def get_projection_matrix(znear, zfar, fovX, fovY, device="musa"):
     """Create OpenGL-style projection matrix"""
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))

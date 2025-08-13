@@ -24,7 +24,7 @@ renders, alphas, info = litegs_info.rasterization(
     height=cam['height'].item(),
 )
 renders.mean().backward()
-torch.cuda.synchronize()
+torch.musa.synchronize()
 
 # test forward + backward time
 start = time.time()
@@ -43,6 +43,6 @@ for _ in range(loop_num):
     rot.grad=None
     sh_0.grad=None
     opacity.grad=None
-torch.cuda.synchronize()
+torch.musa.synchronize()
 print('forward&backward: ', (time.time()-start)*1000/loop_num, 'ms')
 

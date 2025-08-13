@@ -63,7 +63,7 @@ class ModelParams(ParamGroup):
     _images = "images"
     _resolution = -1
     _white_background = False
-    data_device = "cuda"
+    data_device = "musa"
     eval = False
 
 class PipelineParams(ParamGroup):
