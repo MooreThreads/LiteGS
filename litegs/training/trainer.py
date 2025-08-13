@@ -6,7 +6,6 @@ from tqdm import tqdm
 import numpy as np
 import math
 import os
-import torch.cuda.nvtx as nvtx
 
 from .. import arguments
 from .. import data
@@ -52,8 +51,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     cluster_extend=None
     init_points_num=init_xyz.shape[0]
     if start_checkpoint is None:
-        init_xyz=torch.tensor(init_xyz,dtype=torch.float32,device='cuda')
-        init_color=torch.tensor(init_color,dtype=torch.float32,device='cuda')
+        init_xyz=torch.tensor(init_xyz,dtype=torch.float32,device='musa')
+        init_color=torch.tensor(init_color,dtype=torch.float32,device='musa')
         xyz,scale,rot,sh_0,sh_rest,opacity=scene.create_gaussians(init_xyz,init_color,lp.sh_degree)
         if pp.cluster_size:
             xyz,scale,rot,sh_0,sh_rest,opacity=scene.cluster.cluster_points(pp.cluster_size,xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -91,10 +90,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         with StatisticsHelperInst.try_start(epoch):
             for view_matrix,proj_matrix,frustumplane,gt_image in train_loader:
-                view_matrix=view_matrix.cuda()
-                proj_matrix=proj_matrix.cuda()
-                frustumplane=frustumplane.cuda()
-                gt_image=gt_image.cuda()/255.0
+                view_matrix=view_matrix.musa()
+                proj_matrix=proj_matrix.musa()
+                frustumplane=frustumplane.musa()
+                gt_image=gt_image.musa()/255.0
 
                 #cluster culling
                 visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
@@ -122,17 +121,17 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 _cluster_extend=None
                 if pp.cluster_size:
                     _cluster_origin,_cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
-                psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).cuda()
+                psnr_metrics=psnr.PeakSignalNoiseRatio(data_range=(0.0,1.0)).musa()
                 loaders={"Trainingset":train_loader}
                 if lp.eval:
                     loaders["Testset"]=test_loader
                 for name,loader in loaders.items():
                     psnr_list=[]
                     for view_matrix,proj_matrix,frustumplane,gt_image in loader:
-                        view_matrix=view_matrix.cuda()
-                        proj_matrix=proj_matrix.cuda()
-                        frustumplane=frustumplane.cuda()
-                        gt_image=gt_image.cuda()/255.0
+                        view_matrix=view_matrix.musa()
+                        proj_matrix=proj_matrix.musa()
+                        frustumplane=frustumplane.musa()
+                        gt_image=gt_image.musa()/255.0
                         _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(_cluster_origin,_cluster_extend,frustumplane,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                         img,transmitance,depth,normal,_=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,

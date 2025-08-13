@@ -41,12 +41,12 @@ if __name__ == "__main__":
     test_loader = DataLoader(testset, batch_size=1,shuffle=False)
 
     xyz,scale,rot,sh_0,sh_rest,opacity=litegs.io_manager.load_ply('output/{}-5728k/point_cloud/finish/point_cloud.ply'.format(scene_name),3)
-    xyz=torch.Tensor(xyz).cuda()
-    scale=torch.Tensor(scale).cuda()
-    rot=torch.Tensor(rot).cuda()
-    sh_0=torch.Tensor(sh_0).cuda()
-    sh_rest=torch.Tensor(sh_rest).cuda()
-    opacity=torch.Tensor(opacity).cuda()
+    xyz=torch.Tensor(xyz).musa()
+    scale=torch.Tensor(scale).musa()
+    rot=torch.Tensor(rot).musa()
+    sh_0=torch.Tensor(sh_0).musa()
+    sh_rest=torch.Tensor(sh_rest).musa()
+    opacity=torch.Tensor(opacity).musa()
     lp,op,pp,dp=litegs.config.get_default_arg()
     if pp.cluster_size:
         xyz,scale,rot,sh_0,sh_rest,opacity=scene.cluster.cluster_points(pp.cluster_size,xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -74,10 +74,10 @@ if __name__ == "__main__":
     with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=False, profile_memory=False) as prof:
         for i in range(10):
             for view_matrix,proj_matrix,frustumplane,gt_image in train_loader:
-                view_matrix=view_matrix.cuda()
-                proj_matrix=proj_matrix.cuda()
-                frustumplane=frustumplane.cuda()
-                gt_image=gt_image.cuda()/255.0
+                view_matrix=view_matrix.musa()
+                proj_matrix=proj_matrix.musa()
+                frustumplane=frustumplane.musa()
+                gt_image=gt_image.musa()/255.0
 
                 #cluster culling.
                 visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
@@ -94,5 +94,5 @@ if __name__ == "__main__":
                 # opt.zero_grad(set_to_none = True)
                 img.sum().backward()
                 opt.zero_grad(set_to_none = True)
-    print(prof.key_averages(group_by_input_shape=False).table(sort_by='self_cuda_time_total', row_limit=10))
+    print(prof.key_averages(group_by_input_shape=False).table(sort_by='self_musa_time_total', row_limit=10))
     pass

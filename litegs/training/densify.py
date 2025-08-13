@@ -169,7 +169,7 @@ class DensityControllerOfficial(DensityControllerBase):
 
         #split
         stds=scale[...,split_mask].exp()
-        means=torch.zeros((3,stds.size(-1)),device="cuda")
+        means=torch.zeros((3,stds.size(-1)),device="musa")
         samples = torch.normal(mean=means, std=stds).unsqueeze(0)
         transform_matrix=wrapper.CreateTransformMatrix.call_fused(torch.ones_like(scale[...,split_mask].exp()),torch.nn.functional.normalize(rot[...,split_mask],dim=0))
         transform_matrix=transform_matrix[:3,:3]
@@ -256,7 +256,7 @@ class DensityControllerOfficial(DensityControllerBase):
             if bUpdate:
                 xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
                 StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],self.is_densify_actived)
-                torch.cuda.empty_cache()
+                torch.musa.empty_cache()
         return self._get_params_from_optimizer(optimizer)
     
 
@@ -311,7 +311,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
         #split
         stds=scale[...,split_index].exp()
-        means=torch.zeros((3,stds.size(-1)),device="cuda")
+        means=torch.zeros((3,stds.size(-1)),device="musa")
         samples = torch.normal(mean=means, std=stds).unsqueeze(0)
         transform_matrix=wrapper.CreateTransformMatrix.call_fused(torch.ones_like(scale[...,split_index]),torch.nn.functional.normalize(rot[...,split_index],dim=0))
         transform_matrix=transform_matrix[:3,:3]
