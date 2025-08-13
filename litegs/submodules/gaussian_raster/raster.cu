@@ -524,24 +524,24 @@ __global__ void raster_backward_kernel(
 
                 const int in_tile_x = threadIdx.x % tile_size_x;
                 const int in_tile_y = threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
-                reg_buffer[i].t = final_transmitance[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                reg_buffer[i].t = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 if (enable_trans_grad)
                 {
                     final_t[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t;
                 }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = 
-                    d_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                    d_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x] =
-                    d_img[batch_id][1][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                    d_img[batch_id][1][tile_id - 1][in_tile_y + i][in_tile_x];
                 shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] =
-                    d_img[batch_id][2][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                    d_img[batch_id][2][tile_id - 1][in_tile_y + i][in_tile_x];
                 if (enable_trans_grad)
                 {
                     shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] =
-                        d_trans_img[batch_id][0][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x];
+                        d_trans_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 }
-                int last = last_contributor[batch_id][blockIdx.x * blockDim.y + threadIdx.y][in_tile_y + i][in_tile_x] - 1;
+                int last = last_contributor[batch_id][tile_id - 1][in_tile_y + i][in_tile_x] - 1;
                 shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = last;
                 index_in_tile = std::max(last, index_in_tile);
             }
