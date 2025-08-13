@@ -2,8 +2,8 @@
 #include<stdio.h>
 void cuda_error_check(const char* file, const char* function)
 {
-    cudaDeviceSynchronize();
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess)
-        printf("Error in %s.%s : %s\n", file, function, cudaGetErrorString(err));
+    musaDeviceSynchronize();
+    musaError_t err = musaGetLastError();
+    if (err != musaSuccess)
+        printf("Error in %s.%s : %s\n", file, function, musaGetErrorString(err));
 }

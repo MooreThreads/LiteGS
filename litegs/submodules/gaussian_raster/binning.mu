@@ -12,14 +12,14 @@ and conditions of the Gaussian-Splatting License.
 A copy of the Gaussian-Splatting License is provided in the LICENSE file.
 */
 
-#ifndef __CUDACC__
-    #define __CUDACC__
+#ifndef __MUSACC__
+    #define __MUSACC__
     #define __NVCC__
 #endif
-#include "cuda_runtime.h"
+#include "musa_runtime.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <cuda/atomic>
+#include <musa/atomic>
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
 namespace cg = cooperative_groups;
