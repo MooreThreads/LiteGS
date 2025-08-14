@@ -125,10 +125,10 @@ template<int TileSizeY, int TileSizeX>
 
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
     auto table_tileId = torch::empty(output_shape, opt);
-    auto table_tileId_sorted = torch::empty(output_shape, opt);
+    //auto table_tileId_sorted = torch::empty(output_shape, opt);
     opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
     auto table_pointId= torch::empty(output_shape, opt);
-    auto table_pointId_sorted = torch::empty(output_shape, opt);
+    //auto table_pointId_sorted = torch::empty(output_shape, opt);
 
     dim3 Block3d(std::ceil(points_num/256.0f), view_num, 1);
     
@@ -144,7 +144,9 @@ template<int TileSizeY, int TileSizeX>
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 
-    unsigned int bit = 0;
+    return { table_tileId ,table_pointId };
+
+    /*unsigned int bit = 0;
     unsigned int max_tiles = tiles_num_h * tiles_num_w;
     while (max_tiles >>= 1) bit++;
     bit++;
@@ -168,7 +170,7 @@ template<int TileSizeY, int TileSizeX>
             allocate_size, 0, bit);
     }
 
-    return { table_tileId_sorted ,table_pointId_sorted };
+    return { table_tileId_sorted ,table_pointId_sorted };*/
     
 }
 
