@@ -1,7 +1,7 @@
-import torch
+import torch;import torch_musa
 import litegs_info
 import time
-gs, cam = torch.load('./profiler_input_data/data.pth')
+gs, cam = torch.load('./profiler_input_data/data.pth',map_location=torch.device('musa'))
 
 # init & warmup
 cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity = litegs_info.cluster(
