@@ -311,8 +311,8 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
         #split
         stds=scale[...,split_index].exp()
-        means=torch.zeros((3,stds.size(-1)),device="musa")
-        samples = torch.normal(mean=means, std=stds).unsqueeze(0)
+        means=torch.zeros((3,stds.size(-1)),device="cpu")
+        samples = torch.normal(mean=means, std=stds.cpu()).unsqueeze(0).musa()
         transform_matrix=wrapper.CreateTransformMatrix.call_fused(torch.ones_like(scale[...,split_index]),torch.nn.functional.normalize(rot[...,split_index],dim=0))
         transform_matrix=transform_matrix[:3,:3]
         shift=(samples.permute(2,0,1))@transform_matrix.permute(2,0,1)
