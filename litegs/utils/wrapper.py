@@ -446,7 +446,11 @@ class GaussiansRasterFunc(torch.autograd.Function):
         enable_depth:bool=False
     ):
         if (tiles is None) and (tile_start_index.shape[0]==1):
-            visible_primitives_num=tile_start_index[0,2:]-tile_start_index[0,1:-1]
+            end=tile_start_index[0,2:]
+            start=tile_start_index[0,1:-1]
+            valid=(end!=-1)&(start!=-1)
+
+            visible_primitives_num=(end-start)*valid
             tiles=visible_primitives_num.sort(descending=True)[1].int().reshape(1,-1)+1
    
         img,transmitance,depth,lst_contributor,packed_params,fragment_count,fragment_weight=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,
