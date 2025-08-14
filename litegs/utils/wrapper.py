@@ -688,15 +688,17 @@ class Binning(BaseWrapper):
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
         my_table=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
                                                 int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
-        sorted_tileId:torch.Tensor=my_table[0]
-        sorted_pointId:torch.Tensor=my_table[1]
+        tileId_table:torch.Tensor=my_table[0]
+        pointId_table:torch.Tensor=my_table[1]
+        if tiles_num<65536:
+            tileId_table=tileId_table.short()
 
         # sort tile_id with torch.sort
-        # sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
-        # sorted_pointId=pointId_table.gather(dim=1,index=indices)
+        sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
+        sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(total_allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start_index=litegs_fused.tileRange(sorted_tileId.int(),int(total_allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
             
         return tile_start_index,sorted_pointId,b_visible.sum(0)
     
