@@ -8,7 +8,7 @@ from litegs.utils.statistic_helper import StatisticsHelperInst
 
 class Config:
     cluster_size = 128
-    sparse_grad = True
+    sparse_grad = False
     tile_size = (8, 16)
     enable_transmitance = True
     enable_depth = False    
