@@ -8,6 +8,7 @@
 #include <musa/atomic>
 #include <math.h>
 #include <musa_fp16.h>
+// #include <musa_burst.h>
 namespace cg = cooperative_groups;
 
 #include <ATen/core/TensorAccessor.h>
@@ -67,6 +68,17 @@ struct RegisterBuffer
     half2 alpha;
 };
 
+#define __HALF2_TO_UI(var) *(reinterpret_cast<unsigned int *>(&(var)))
+#define __HALF2_TO_CUI(var) *(reinterpret_cast<const unsigned int *>(&(var)))
+// inline __device__ half2 fast_exp_approx(half2 input) {
+//     half2 output;
+//     half2 log2_e(1.4426950409f, 1.4426950409f);
+//     half2 scaled_input = input * log2_e;
+//     asm("ex2.approx.f16x2 %0, %1;" : "=r"(__HALF2_TO_UI(output)) : "r"(__HALF2_TO_CUI(scaled_input)));
+//     return output;
+// }
+
+
 template<class T, bool boardcast>
 inline __device__ void warp_reduce_sum(T& data)
 {
@@ -77,6 +89,96 @@ inline __device__ void warp_reduce_sum(T& data)
     data += __shfl_down_sync(0xffffffff, data, 1);
     if (boardcast)
         data = __shfl_sync(0xffffffff, data, 0);
+}
+
+// template<>
+// inline __device__ void warp_reduce_sum<half2, true>(half2& data)
+// {
+//     data = add(__shfl_down_sync(0xffffffff, data, 16), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 8), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 4), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 2), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 1), data);
+//     if (true)
+//         data = __shfl_sync(0xffffffff, data, 0);
+// }
+
+// template<>
+// inline __device__ void warp_reduce_sum<half2, false>(half2& data)
+// {
+//     data = add(__shfl_down_sync(0xffffffff, data, 16), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 8), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 4), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 2), data);
+//     data = add(__shfl_down_sync(0xffffffff, data, 1), data);
+//     if (false)
+//         data = __shfl_sync(0xffffffff, data, 0);
+// }
+
+template<>
+inline __device__ void warp_reduce_sum<unsigned int, false>(unsigned int& data)
+{
+    data = __reduce_add_sync(0xffffffff, data);
+}
+
+template<>
+inline __device__ void warp_reduce_sum<float, false>(float& data)
+{
+    int exponent = (__float_as_uint(data) >> 23) & 0xff;
+    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    int scale_exponent = 23 - exponent;
+    bool valid = (exponent > -127) && (scale_exponent < 128);
+
+    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
+    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
+    int scaled_value = static_cast<int>(data * scaler);
+    scaled_value = __reduce_add_sync(0xffffffff, scaled_value) * valid;
+
+    data = scaled_value * inv_scaler;
+}
+
+template<>
+inline __device__ void warp_reduce_sum<float2, false>(float2& data)
+{
+    int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
+    exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
+    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    int scale_exponent = 23 - exponent;
+    bool valid = (exponent > -127) && (scale_exponent < 128);
+
+    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
+    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
+
+    int scaled_value_x = static_cast<int>(data.x * scaler);
+    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
+    data.x = scaled_value_x * inv_scaler;
+    int scaled_value_y = static_cast<int>(data.y * scaler);
+    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
+    data.y = scaled_value_y * inv_scaler;
+}
+
+template<>
+inline __device__ void warp_reduce_sum<float3, false>(float3& data)
+{
+    int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
+    exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
+    exponent = max(exponent, (__float_as_uint(data.z) >> 23) & 0xff);
+    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    int scale_exponent = 23 - exponent;
+    bool valid = (exponent > -127) && (scale_exponent < 128);
+
+    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
+    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
+
+    int scaled_value_x = static_cast<int>(data.x * scaler);
+    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
+    data.x = scaled_value_x * inv_scaler;
+    int scaled_value_y = static_cast<int>(data.y * scaler);
+    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
+    data.y = scaled_value_y * inv_scaler;
+    int scaled_value_z = static_cast<int>(data.z * scaler);
+    scaled_value_z = __reduce_add_sync(0xffffffff, scaled_value_z) * valid;
+    data.z = scaled_value_z * inv_scaler;
 }
 
 
@@ -177,7 +279,7 @@ __global__ void raster_forward_kernel(
 
                     unsigned int alpha_valid_mask = active_mask;
                     //alpha_valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
-                    reg_buffer[i].alpha = point_color_x2.a * h2exp(power);
+                    reg_buffer[i].alpha = point_color_x2.a * h2exp(power);//fast_exp_approx(power);
                     alpha_valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
                     reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
 
@@ -624,7 +726,7 @@ __global__ void raster_backward_kernel(
                 {
                     half2 power{ basic + 2 * i * bxcy + 2 * i * 2 * i * neg_half_c,
                         basic + (2 * i + 1) * bxcy + (2 * i + 1) * (2 * i + 1) * neg_half_c };
-                    half2 G = h2exp(power);
+                    half2 G = h2exp(power);//fast_exp_approx(power);
                     half2 alpha = point_color_x2.a * G;
                     alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), alpha);
 
@@ -642,6 +744,9 @@ __global__ void raster_backward_kernel(
                         grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        // grad_r += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x]);
+                        // grad_g += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x]);
+                        // grad_b += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x]);
 
 
                         half2 d_alpha = half2(0,0);
@@ -651,6 +756,12 @@ __global__ void raster_backward_kernel(
                         reg_buffer[i].r += alpha * (point_color_x2.r - reg_buffer[i].r);//0-256
                         reg_buffer[i].g += alpha * (point_color_x2.g - reg_buffer[i].g);
                         reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
+                        // d_alpha = add(mul(mul((point_color_x2.r - reg_buffer[i].r), reg_buffer[i].t), shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
+                        // d_alpha = add(mul(mul((point_color_x2.g - reg_buffer[i].g), reg_buffer[i].t), shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
+                        // d_alpha = add(mul(mul((point_color_x2.b - reg_buffer[i].b), reg_buffer[i].t), shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
+                        // reg_buffer[i].r = add(mul(alpha, (point_color_x2.r - reg_buffer[i].r)), reg_buffer[i].r);//0-256
+                        // reg_buffer[i].g = add(mul(alpha, (point_color_x2.g - reg_buffer[i].g)), reg_buffer[i].g);
+                        // reg_buffer[i].b = add(mul(alpha, (point_color_x2.b - reg_buffer[i].b)), reg_buffer[i].b);
                         if (enable_trans_grad)
                         {
                             d_alpha -= __h2div(shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x], 
@@ -668,6 +779,8 @@ __global__ void raster_backward_kernel(
                         }
                         half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
                         half2 grad_neg_half_c_x2 = d_power * half2(2 * i, 2 * i + 1) * half2(2 * i, 2 * i + 1);
+                        // half2 grad_bxcy_x2 = mul(d_power, half2(2 * i, 2 * i + 1));
+                        // half2 grad_neg_half_c_x2 = mul(mul(d_power, half2(2 * i, 2 * i + 1)), half2(2 * i, 2 * i + 1));
                         half2 grad_basic_x2 = d_power;
                         grad_bxcy += ((float)grad_bxcy_x2.x + (float)grad_bxcy_x2.y);
                         grad_neg_half_c+= ((float)grad_neg_half_c_x2.x + (float)grad_neg_half_c_x2.y);
@@ -859,6 +972,20 @@ std::vector<at::Tensor> rasterize_backward(
     int tiles_per_block = 4;
     dim3 Block3d(std::ceil(render_tile_num / float(tiles_per_block)), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
+
+    printf("blocks: x,y,z: %d, %d, %d.\n", Block3d.x, Block3d.y, Block3d.z);
+    printf("threads: x,y,z: %d, %d, %d.\n", Thread3d.x, Thread3d.y, Thread3d.z);
+    int numBlocks = 0;
+    musaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocks, raster_backward_kernel<8, 16, false, true, false>, 128, 0);
+    printf("[1]raster_backward_kernel<8, 16, false, true, false> numBlocks is %d\n", numBlocks);
+    musaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocks, raster_backward_kernel<8, 16, true, true, false>, 128, 0);
+    printf("[2]raster_backward_kernel<8, 16, true, true, false> numBlocks is %d\n", numBlocks);
+    
+    
+    musaEvent_t gpu_start, gpu_stop;
+    musaEventCreate(&gpu_start);
+    musaEventCreate(&gpu_stop);
+    musaEventRecord(gpu_start);
     
     switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))
     {
@@ -889,6 +1016,14 @@ std::vector<at::Tensor> rasterize_backward(
     default:
         break;
     }
+
+    musaEventRecord(gpu_stop);
+    musaEventSynchronize(gpu_stop);
+    float gpu_time = 0.f;
+    musaEventElapsedTime(&gpu_time, gpu_start, gpu_stop);
+    musaEventDestroy(gpu_start);
+    musaEventDestroy(gpu_stop);
+    std::cout << "-------raser backward gpu time:" << gpu_time << " ms" << std::endl;
 
     CUDA_CHECK_ERRORS;
 
