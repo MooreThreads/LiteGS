@@ -5,10 +5,10 @@
 #include "musa_runtime.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <musa/atomic>
+// #include <musa/atomic>
 #include <math.h>
 #include <musa_fp16.h>
-// #include <musa_burst.h>
+#include <musa_burst.h>
 namespace cg = cooperative_groups;
 
 #include <ATen/core/TensorAccessor.h>
@@ -91,30 +91,31 @@ inline __device__ void warp_reduce_sum(T& data)
         data = __shfl_sync(0xffffffff, data, 0);
 }
 
-// template<>
-// inline __device__ void warp_reduce_sum<half2, true>(half2& data)
-// {
-//     data = add(__shfl_down_sync(0xffffffff, data, 16), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 8), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 4), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 2), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 1), data);
-//     if (true)
-//         data = __shfl_sync(0xffffffff, data, 0);
-// }
+template<>
+inline __device__ void warp_reduce_sum<half2, true>(half2& data)
+{
+    data = add(__shfl_down_sync(0xffffffff, data, 16), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 8), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 4), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 2), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 1), data);
+    if (true)
+        data = __shfl_sync(0xffffffff, data, 0);
+}
 
-// template<>
-// inline __device__ void warp_reduce_sum<half2, false>(half2& data)
-// {
-//     data = add(__shfl_down_sync(0xffffffff, data, 16), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 8), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 4), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 2), data);
-//     data = add(__shfl_down_sync(0xffffffff, data, 1), data);
-//     if (false)
-//         data = __shfl_sync(0xffffffff, data, 0);
-// }
+template<>
+inline __device__ void warp_reduce_sum<half2, false>(half2& data)
+{
+    data = add(__shfl_down_sync(0xffffffff, data, 16), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 8), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 4), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 2), data);
+    data = add(__shfl_down_sync(0xffffffff, data, 1), data);
+    if (false)
+        data = __shfl_sync(0xffffffff, data, 0);
+}
 
+/*
 template<>
 inline __device__ void warp_reduce_sum<unsigned int, false>(unsigned int& data)
 {
@@ -180,7 +181,7 @@ inline __device__ void warp_reduce_sum<float3, false>(float3& data)
     scaled_value_z = __reduce_add_sync(0xffffffff, scaled_value_z) * valid;
     data.z = scaled_value_z * inv_scaler;
 }
-
+*/
 
 
 template <int tile_size_y, int tile_size_x, bool enable_statistic, bool enable_trans, bool enable_depth>
@@ -741,27 +742,27 @@ __global__ void raster_backward_kernel(
                         reinterpret_cast<unsigned int*>(&G)[0] &= valid_mask;
 
                         reg_buffer[i].t = __h2div(reg_buffer[i].t,(half2(1.0f,1.0f) - alpha));//0-2^(-10)
-                        grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        // grad_r += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x]);
-                        // grad_g += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x]);
-                        // grad_b += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x]);
+                        // grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        // grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        // grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        grad_r += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x]);
+                        grad_g += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x]);
+                        grad_b += mul(mul(alpha, reg_buffer[i].t), shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x]);
 
 
                         half2 d_alpha = half2(0,0);
-                        d_alpha += (point_color_x2.r - reg_buffer[i].r) * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        d_alpha += (point_color_x2.g - reg_buffer[i].g) * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        d_alpha += (point_color_x2.b - reg_buffer[i].b) * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
-                        reg_buffer[i].r += alpha * (point_color_x2.r - reg_buffer[i].r);//0-256
-                        reg_buffer[i].g += alpha * (point_color_x2.g - reg_buffer[i].g);
-                        reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
-                        // d_alpha = add(mul(mul((point_color_x2.r - reg_buffer[i].r), reg_buffer[i].t), shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
-                        // d_alpha = add(mul(mul((point_color_x2.g - reg_buffer[i].g), reg_buffer[i].t), shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
-                        // d_alpha = add(mul(mul((point_color_x2.b - reg_buffer[i].b), reg_buffer[i].t), shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
-                        // reg_buffer[i].r = add(mul(alpha, (point_color_x2.r - reg_buffer[i].r)), reg_buffer[i].r);//0-256
-                        // reg_buffer[i].g = add(mul(alpha, (point_color_x2.g - reg_buffer[i].g)), reg_buffer[i].g);
-                        // reg_buffer[i].b = add(mul(alpha, (point_color_x2.b - reg_buffer[i].b)), reg_buffer[i].b);
+                        // d_alpha += (point_color_x2.r - reg_buffer[i].r) * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        // d_alpha += (point_color_x2.g - reg_buffer[i].g) * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        // d_alpha += (point_color_x2.b - reg_buffer[i].b) * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        // reg_buffer[i].r += alpha * (point_color_x2.r - reg_buffer[i].r);//0-256
+                        // reg_buffer[i].g += alpha * (point_color_x2.g - reg_buffer[i].g);
+                        // reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
+                        d_alpha = add(mul(mul((point_color_x2.r - reg_buffer[i].r), reg_buffer[i].t), shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
+                        d_alpha = add(mul(mul((point_color_x2.g - reg_buffer[i].g), reg_buffer[i].t), shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
+                        d_alpha = add(mul(mul((point_color_x2.b - reg_buffer[i].b), reg_buffer[i].t), shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x]), d_alpha);
+                        reg_buffer[i].r = add(mul(alpha, (point_color_x2.r - reg_buffer[i].r)), reg_buffer[i].r);//0-256
+                        reg_buffer[i].g = add(mul(alpha, (point_color_x2.g - reg_buffer[i].g)), reg_buffer[i].g);
+                        reg_buffer[i].b = add(mul(alpha, (point_color_x2.b - reg_buffer[i].b)), reg_buffer[i].b);
                         if (enable_trans_grad)
                         {
                             d_alpha -= __h2div(shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x], 
@@ -777,10 +778,10 @@ __global__ void raster_backward_kernel(
                             //err += cur_err;
                             err_square += (cur_err * half2(INV_SCALER, INV_SCALER) * cur_err);
                         }
-                        half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
-                        half2 grad_neg_half_c_x2 = d_power * half2(2 * i, 2 * i + 1) * half2(2 * i, 2 * i + 1);
-                        // half2 grad_bxcy_x2 = mul(d_power, half2(2 * i, 2 * i + 1));
-                        // half2 grad_neg_half_c_x2 = mul(mul(d_power, half2(2 * i, 2 * i + 1)), half2(2 * i, 2 * i + 1));
+                        // half2 grad_bxcy_x2 = d_power * half2(2 * i, 2 * i + 1);
+                        // half2 grad_neg_half_c_x2 = d_power * half2(2 * i, 2 * i + 1) * half2(2 * i, 2 * i + 1);
+                        half2 grad_bxcy_x2 = mul(d_power, half2(2 * i, 2 * i + 1));
+                        half2 grad_neg_half_c_x2 = mul(mul(d_power, half2(2 * i, 2 * i + 1)), half2(2 * i, 2 * i + 1));
                         half2 grad_basic_x2 = d_power;
                         grad_bxcy += ((float)grad_bxcy_x2.x + (float)grad_bxcy_x2.y);
                         grad_neg_half_c+= ((float)grad_neg_half_c_x2.x + (float)grad_neg_half_c_x2.y);
