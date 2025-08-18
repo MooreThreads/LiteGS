@@ -67,17 +67,6 @@ struct RegisterBuffer
     half2 alpha;
 };
 
-#define __HALF2_TO_UI(var) *(reinterpret_cast<unsigned int *>(&(var)))
-#define __HALF2_TO_CUI(var) *(reinterpret_cast<const unsigned int *>(&(var)))
-inline __device__ half2 fast_exp_approx(half2 input) {
-    half2 output;
-    half2 log2_e(1.4426950409f, 1.4426950409f);
-    half2 scaled_input = input * log2_e;
-    asm("ex2.approx.f16x2 %0, %1;" : "=r"(__HALF2_TO_UI(output)) : "r"(__HALF2_TO_CUI(scaled_input)));
-    return output;
-}
-
-
 template<class T, bool boardcast>
 inline __device__ void warp_reduce_sum(T& data)
 {
@@ -88,72 +77,6 @@ inline __device__ void warp_reduce_sum(T& data)
     data += __shfl_down_sync(0xffffffff, data, 1);
     if (boardcast)
         data = __shfl_sync(0xffffffff, data, 0);
-}
-
-template<>
-inline __device__ void warp_reduce_sum<unsigned int, false>(unsigned int& data)
-{
-    data = __reduce_add_sync(0xffffffff, data);
-}
-
-template<>
-inline __device__ void warp_reduce_sum<float, false>(float& data)
-{
-    int exponent = (__float_as_uint(data) >> 23) & 0xff;
-    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
-    int scale_exponent = 23 - exponent;
-    bool valid = (exponent > -127) && (scale_exponent < 128);
-
-    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
-    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
-    int scaled_value = static_cast<int>(data * scaler);
-    scaled_value = __reduce_add_sync(0xffffffff, scaled_value) * valid;
-
-    data = scaled_value * inv_scaler;
-}
-
-template<>
-inline __device__ void warp_reduce_sum<float2, false>(float2& data)
-{
-    int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
-    exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
-    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
-    int scale_exponent = 23 - exponent;
-    bool valid = (exponent > -127) && (scale_exponent < 128);
-
-    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
-    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
-
-    int scaled_value_x = static_cast<int>(data.x * scaler);
-    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
-    data.x = scaled_value_x * inv_scaler;
-    int scaled_value_y = static_cast<int>(data.y * scaler);
-    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
-    data.y = scaled_value_y * inv_scaler;
-}
-
-template<>
-inline __device__ void warp_reduce_sum<float3, false>(float3& data)
-{
-    int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
-    exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
-    exponent = max(exponent, (__float_as_uint(data.z) >> 23) & 0xff);
-    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
-    int scale_exponent = 23 - exponent;
-    bool valid = (exponent > -127) && (scale_exponent < 128);
-
-    float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
-    float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
-
-    int scaled_value_x = static_cast<int>(data.x * scaler);
-    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
-    data.x = scaled_value_x * inv_scaler;
-    int scaled_value_y = static_cast<int>(data.y * scaler);
-    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
-    data.y = scaled_value_y * inv_scaler;
-    int scaled_value_z = static_cast<int>(data.z * scaler);
-    scaled_value_z = __reduce_add_sync(0xffffffff, scaled_value_z) * valid;
-    data.z = scaled_value_z * inv_scaler;
 }
 
 
@@ -254,7 +177,7 @@ __global__ void raster_forward_kernel(
 
                     unsigned int alpha_valid_mask = active_mask;
                     //alpha_valid_mask &= __hle2_mask(power, half2(1.0f / (1 << 24), 1.0f / (1 << 24)));//1 ULP:2^(-14) * (0 + 1/1024)
-                    reg_buffer[i].alpha = point_color_x2.a * fast_exp_approx(power);
+                    reg_buffer[i].alpha = point_color_x2.a * h2exp(power);
                     alpha_valid_mask &= __hge2_mask(reg_buffer[i].alpha, half2(1.0f / 256, 1.0f / 256));
                     reg_buffer[i].alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), reg_buffer[i].alpha);
 
@@ -701,7 +624,7 @@ __global__ void raster_backward_kernel(
                 {
                     half2 power{ basic + 2 * i * bxcy + 2 * i * 2 * i * neg_half_c,
                         basic + (2 * i + 1) * bxcy + (2 * i + 1) * (2 * i + 1) * neg_half_c };
-                    half2 G = fast_exp_approx(power);
+                    half2 G = h2exp(power);
                     half2 alpha = point_color_x2.a * G;
                     alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), alpha);
 
@@ -804,7 +727,8 @@ __global__ void raster_backward_kernel(
                     float d_dx = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * grad_basic + params.inv_cov01 * grad_bxcy;
                     float d_dy = (-params.inv_cov11 * d.y - params.inv_cov01 * d.x) * grad_basic + params.inv_cov11 * grad_bxcy;
                     float2 d_ndc_xy{ d_dx * 0.5f * img_w,d_dy * 0.5f * img_h };
-                    warp_reduce_sum<float2, false>(d_ndc_xy);
+                    warp_reduce_sum<float, false>(d_ndc_xy.x);
+                    warp_reduce_sum<float, false>(d_ndc_xy.y);
                     if (threadIdx.x == 0)
                     {
                         atomicAdd(&grad_addr->ndc_x, d_ndc_xy.x);
