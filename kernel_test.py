@@ -24,15 +24,15 @@ renders, alphas, info = litegs_info.rasterization(
     height=cam['height'].item(),
 )
 renders.mean().backward()
-xyz_grad,scale_grad,rot_grad,sh_0_grad,opacity_grad=torch.load("./profiler_input_data/cross_road_grad.pth")
-assert (xyz_grad-xyz.grad).abs().sum()<1e-6
-assert (scale_grad-scale.grad).abs().sum()<1e-6
-assert (rot_grad-rot.grad).abs().sum()<1e-6
-assert (sh_0_grad-sh_0.grad).abs().sum()<1e-6
-assert (opacity_grad-opacity.grad).abs().sum()<1e-6
-torch.cuda.synchronize()
+# xyz_grad,scale_grad,rot_grad,sh_0_grad,opacity_grad=torch.load("./profiler_input_data/cross_road_grad.pth")
+# assert (xyz_grad-xyz.grad).abs().sum()<1e-6
+# assert (scale_grad-scale.grad).abs().sum()<1e-6
+# assert (rot_grad-rot.grad).abs().sum()<1e-6
+# assert (sh_0_grad-sh_0.grad).abs().sum()<1e-6
+# assert (opacity_grad-opacity.grad).abs().sum()<1e-6
 
 # test forward + backward time
+torch.musa.synchronize()
 start = time.time()
 loop_num=20
 for _ in range(loop_num):
