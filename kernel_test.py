@@ -1,7 +1,14 @@
 import torch
 import litegs_info
 import time
+from litegs.utils.statistic_helper import StatisticsHelperInst
+
 gs, cam = torch.load('./profiler_input_data/data.pth')
+complex_tile_id=torch.load('./profiler_input_data/complex_tileid.pth')
+sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pth')
+StatisticsHelperInst.cur_sample="cross_roat"
+StatisticsHelperInst.cached_complex_tile["cross_roat"]=complex_tile_id
+StatisticsHelperInst.cached_sorted_tile_list["cross_roat"]=sorted_tile_list
 
 # init & warmup
 cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity = litegs_info.cluster(

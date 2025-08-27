@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset
 
 from . import utils
+from .utils.statistic_helper import StatisticsHelperInst
 
 class CameraInfo:
     def __init__(self):
@@ -199,6 +200,7 @@ class CameraFrameDataset(Dataset):
         frustumplane=self.frustumplanes[idx]
         ray_o=self.frames[idx].get_camera_center()
         ray_d=self.ray_d[idx]
+        StatisticsHelperInst.cur_sample=self.frames[idx].name
         return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(frustumplane),torch.Tensor(image)
     
     def get_norm(self)->tuple[float,float]:
