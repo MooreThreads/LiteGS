@@ -368,20 +368,19 @@ __global__ void create_subtile_kernel(
     const int SUBTILE_H = 4;
 
     int view_id = 0;
-    int tile_id = complex_tileid[blockIdx.x];
+    int warp_id = threadIdx.x / 32;
+    if (blockIdx.x * (blockDim.x / 32) + warp_id >= complex_tileid.size(0))
+    {
+        return;
+    }
+    int lane_id = threadIdx.x % 32;
+    int tile_id = complex_tileid[blockIdx.x * (blockDim.x / 32) + warp_id];
     int start_offset = tile_start[view_id][tile_id];
     int end_offset = tile_end[view_id][tile_id];
-    __shared__ int shared_block_offset;
-    __shared__ int inter_offset;
-    if (threadIdx.x == 0)
-    {
-        shared_block_offset = 0;
-        inter_offset = 0;
-    }
-    __syncthreads();
 
     //allocate pass
-    for (int i = threadIdx.x; i < end_offset - start_offset; i += blockDim.x)
+    int subtile_num_in_warp[4]{ 0,0,0,0 };
+    for (int i = lane_id; i < end_offset - start_offset; i += 32)
     {
         int primitive_id = primitive_list[view_id][start_offset + i];
 
@@ -397,8 +396,8 @@ __global__ void create_subtile_kernel(
         bool subtile_valid[4]{ false,false,false,false };
         int tile_y = tile_index / tile_num_w;
         int tile_x = tile_index % tile_num_w;
-        int pixel_x_min = tile_x * TILE_W + 0.5f;
-        int pixel_x_max = pixel_x_min + TILE_W - 0.5f;
+        float pixel_x_min = tile_x * TILE_W + 0.5f;
+        float pixel_x_max = pixel_x_min + TILE_W - 0.5f;
         bool tmp_valid = false;
         {
             //bottom
@@ -439,21 +438,53 @@ __global__ void create_subtile_kernel(
             tmp_valid &= !(scan_line_range.y < pixel_x_min || pixel_x_max < scan_line_range.x);//cover
             subtile_valid[3] |= tmp_valid;
         }
-        int valid_num = subtile_valid[0] + subtile_valid[1] + subtile_valid[2] + subtile_valid[3];
-        atomicAdd(&inter_offset, valid_num);
+        subtile_num_in_warp[0] += subtile_valid[0];
+        subtile_num_in_warp[1] += subtile_valid[1];
+        subtile_num_in_warp[2] += subtile_valid[2];
+        subtile_num_in_warp[3] += subtile_valid[3];
     }
-    __syncthreads();
+    //warp sum
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 16);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 8);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 4);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 2);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 1);
+    subtile_num_in_warp[0] = __shfl_sync(0xffffffff, subtile_num_in_warp[0], 0);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 16);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 8);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 4);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 2);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 1);
+    subtile_num_in_warp[1] = __shfl_sync(0xffffffff, subtile_num_in_warp[1], 0);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 16);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 8);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 4);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 2);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 1);
+    subtile_num_in_warp[2] = __shfl_sync(0xffffffff, subtile_num_in_warp[2], 0);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 16);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 8);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 4);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 2);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 1);
+    subtile_num_in_warp[3] = __shfl_sync(0xffffffff, subtile_num_in_warp[3], 0);
 
-    if (threadIdx.x == 0)
+    //global offset
+    int new_tile_offset = 0;
+    if (lane_id == 0)
     {
-        shared_block_offset = atomicAdd(&subtile_item_num[0], inter_offset);
-        inter_offset = 0;
+        new_tile_offset = atomicAdd(&subtile_item_num[0], subtile_num_in_warp[0] + subtile_num_in_warp[1] + subtile_num_in_warp[2] + subtile_num_in_warp[3]);
     }
-    __syncthreads();
+    new_tile_offset = __shfl_sync(0xffffffff, new_tile_offset, 0);
+
 
     //fill pass
-    int block_offset = shared_block_offset;
-    for (int i = threadIdx.x; i < end_offset - start_offset; i += blockDim.x)
+    int subtile_offset[4] = { 0,0,0,0 };
+    subtile_offset[0] = new_tile_offset;
+    subtile_offset[1] = subtile_offset[0] + subtile_num_in_warp[0];
+    subtile_offset[2] = subtile_offset[1] + subtile_num_in_warp[1];
+    subtile_offset[3] = subtile_offset[2] + subtile_num_in_warp[2];
+    for (int i = lane_id; i < end_offset - start_offset; i += 32)
     {
         int primitive_id = primitive_list[view_id][start_offset + i];
 
@@ -469,8 +500,8 @@ __global__ void create_subtile_kernel(
         bool subtile_valid[4]{ false,false,false,false };
         int tile_y = tile_index / tile_num_w;
         int tile_x = tile_index % tile_num_w;
-        int pixel_x_min = tile_x * TILE_W + 0.5f;
-        int pixel_x_max = pixel_x_min + TILE_W - 0.5f;
+        float pixel_x_min = tile_x * TILE_W + 0.5f;
+        float pixel_x_max = pixel_x_min + TILE_W - 0.5f;
         bool tmp_valid = false;
         {
             //bottom
@@ -511,20 +542,23 @@ __global__ void create_subtile_kernel(
             tmp_valid &= !(scan_line_range.y < pixel_x_min || pixel_x_max < scan_line_range.x);//cover
             subtile_valid[3] |= tmp_valid;
         }
-        int valid_num = subtile_valid[0] + subtile_valid[1] + subtile_valid[2] + subtile_valid[3];
-        int subtile_index = block_offset + atomicAdd(&inter_offset, valid_num);
+
+        unsigned int prev_mask = (1 << lane_id) - 1;
         for (int j = 0; j < 4; j++)
         {
+            unsigned int active_mask = __ballot_sync(0xffffffff, subtile_valid[j]);
+            int item_offset = __popc(active_mask & prev_mask);
             if (subtile_valid[j])
             {
-                subtileid_list[subtile_index] = (tile_id << 2) + j;
-                subtile_primitives[subtile_index] = primitive_id;
-                subtile_index++;
+                int tmp_index = subtile_offset[j] + item_offset;
+                subtileid_list[tmp_index] = (tile_id << 2) + j;
+                subtile_primitives[tmp_index] = primitive_id;
             }
+            subtile_offset[j] += __popc(active_mask);
         }
     }
-    __syncthreads();
-    if (threadIdx.x == 0)
+
+    if (lane_id == 0)
     {
         tile_start[view_id][tile_id] = 0;
         tile_end[view_id][tile_id] = 0;
@@ -539,13 +573,14 @@ std::vector<at::Tensor> create_subtile(at::Tensor primitive_list, at::Tensor til
     assert(tile_size_h == 16 && tile_size_w == 8);
     int tiles_num_h = (height + tile_size_h - 1) / tile_size_h;
     int tiles_num_w = (width + tile_size_w - 1) / tile_size_w;
-    int complex_tilenum = complex_tileid.size(0);
+    int thread_num = 512;
+    int block_num = std::ceil(complex_tileid.size(0)/(thread_num/32.0f));
 
     at::Tensor subtile_item_num = torch::zeros({ 1 }, primitive_list.options());
     at::Tensor subtileid_list = torch::zeros({ allocate_size }, primitive_list.options());
     at::Tensor subtile_primitives = torch::zeros({ allocate_size }, primitive_list.options());
 
-    create_subtile_kernel<<<complex_tilenum,512>>>(
+    create_subtile_kernel<<<block_num, thread_num >>>(
         primitive_list.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
         tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
