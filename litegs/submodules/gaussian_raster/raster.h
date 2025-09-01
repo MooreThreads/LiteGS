@@ -2,7 +2,7 @@
 #include <torch/extension.h>
 std::vector<at::Tensor> rasterize_forward(
     at::Tensor sorted_points,
-    at::Tensor start_index,
+    at::Tensor tile_start, at::Tensor tile_end,
     at::Tensor ndc,
     at::Tensor cov2d_inv,
     at::Tensor color,
@@ -19,7 +19,7 @@ std::vector<at::Tensor> rasterize_forward(
 
 std::vector<at::Tensor> rasterize_forward_packed(
     at::Tensor sorted_points,
-    at::Tensor start_index,
+    at::Tensor tile_start, at::Tensor tile_end,
     at::Tensor packed_params,
     std::optional<at::Tensor>  specific_tiles_arg,
     int64_t img_h,
@@ -33,7 +33,7 @@ std::vector<at::Tensor> rasterize_forward_packed(
 
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
-    at::Tensor start_index,
+    at::Tensor tile_start, at::Tensor tile_end,
     at::Tensor packed_params,
     std::optional<at::Tensor> specific_tiles,
     at::Tensor final_transmitance,

@@ -79,7 +79,8 @@ inline __device__ void warp_reduce_sum(T& data)
 template <int tile_size_y, int tile_size_x, bool enable_statistic, bool enable_trans, bool enable_depth>
 __global__ void raster_forward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<float/*torch::Half*/, 3, torch::RestrictPtrTraits> packed_params,         //[batch,point_num,sizeof(PackedParams)/4]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_img,    //[batch,3,tile,tilesize,tilesize]
@@ -110,11 +111,11 @@ __global__ void raster_forward_kernel(
         }
     }
 
-    if (tile_id != 0 && tile_id < start_index.size(1) - 1)
+    if (tile_id != 0 && tile_id < tile_start.size(1) )
     {
 
-        int start_index_in_tile = start_index[batch_id][tile_id];
-        int end_index_in_tile = start_index[batch_id][tile_id + 1];
+        int start_index_in_tile = tile_start[batch_id][tile_id];
+        int end_index_in_tile = tile_end[batch_id][tile_id];
         RegisterBuffer reg_buffer[PIXELS_PER_THREAD];
         #pragma unroll
         for (int i = 0; i < PIXELS_PER_THREAD; i++)
@@ -126,79 +127,78 @@ __global__ void raster_forward_kernel(
             reg_buffer[i].lst_contributor = 0;
         }
 
-        if (start_index_in_tile != -1)
+
+
+        unsigned int any_active = 0xffffffffu;
+        int index_in_tile = 0;
+        auto points_id_in_tile = &sorted_points[batch_id][start_index_in_tile];
+        for (; (index_in_tile + start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
         {
+            int point_id = points_id_in_tile[index_in_tile];
+            PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
+            RGBA32 point_color;
+            point_color.r = params.rg.x;
+            point_color.g = params.rg.y;
+            point_color.b = params.ba.x;
+            point_color.a = params.ba.y;
+            float2 xy{ params.pixel_x,params.pixel_y };
 
-            unsigned int any_active = 0xffffffffu;
-            int index_in_tile = 0;
-            auto points_id_in_tile = &sorted_points[batch_id][start_index_in_tile];
-            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
-            {
-                int point_id = points_id_in_tile[index_in_tile];
-                PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
-                RGBA32 point_color;
-                point_color.r = params.rg.x;
-                point_color.g = params.rg.y;
-                point_color.b = params.ba.x;
-                point_color.a = params.ba.y;
-                float2 xy{ params.pixel_x,params.pixel_y };
+            const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x ;
+            const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
+            float2 d { xy.x - pixel_x,xy.y - pixel_y };
+            float basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
+            float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
+            float neg_half_c = -0.5f * params.inv_cov11;
+            //basic+=(cy+bx)*delta - 0.5*c*delta*delta
 
-                const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x ;
-                const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
-                float2 d { xy.x - pixel_x,xy.y - pixel_y };
-                float basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
-                float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
-                float neg_half_c = -0.5f * params.inv_cov11;
-                //basic+=(cy+bx)*delta - 0.5*c*delta*delta
-
-                any_active = 0;
-                unsigned int fragment_count = 0x0;//ushort2
-                float weight_sum = 0;
+            any_active = 0;
+            unsigned int fragment_count = 0x0;//ushort2
+            float weight_sum = 0;
 #pragma unroll
-                for (int i = 0; i < PIXELS_PER_THREAD; i++)
-                {
-                    float power = basic + i * bxcy + i * i * neg_half_c;
+            for (int i = 0; i < PIXELS_PER_THREAD; i++)
+            {
+                float power = basic + i * bxcy + i * i * neg_half_c;
 
-                    bool bActive = true;
-                    bActive = reg_buffer[i].t > 1.0f / 8192;
-                    reg_buffer[i].lst_contributor += bActive;
-                    any_active |= bActive;
+                bool bActive = true;
+                bActive = reg_buffer[i].t > 1.0f / 8192;
+                reg_buffer[i].lst_contributor += bActive;
+                any_active |= bActive;
 
-                    reg_buffer[i].alpha = point_color.a * __expf(power);
-                    bool alpha_valid = reg_buffer[i].alpha > 1.0f / 256;
-                    reg_buffer[i].alpha = (bActive&alpha_valid) * std::min(255.0f / 256, reg_buffer[i].alpha);
+                reg_buffer[i].alpha = point_color.a * __expf(power);
+                bool alpha_valid = reg_buffer[i].alpha > 1.0f / 256;
+                reg_buffer[i].alpha = (bActive&alpha_valid) * std::min(255.0f / 256, reg_buffer[i].alpha);
 
-                    float weight = reg_buffer[i].t * reg_buffer[i].alpha;
-                    if (enable_statistic)
-                    {
-                        fragment_count += bActive;
-                        weight_sum += weight;
-                    }
-
-                    reg_buffer[i].r += (point_color.r * weight);
-                    reg_buffer[i].g += (point_color.g * weight);
-                    reg_buffer[i].b += (point_color.b * weight);
-                    reg_buffer[i].t = reg_buffer[i].t * (1.0f - reg_buffer[i].alpha);
-                }
-                //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
-                //reg_buffer[2].alpha = (reg_buffer[0].alpha + half2(2.0f, 2.0f) * reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
-
-
-                //reduce statistic
+                float weight = reg_buffer[i].t * reg_buffer[i].alpha;
                 if (enable_statistic)
                 {
-                    warp_reduce_sum<unsigned int, false>(fragment_count);
-                    warp_reduce_sum<float, false>(weight_sum);
-                    if (threadIdx.x == 0)
-                    {
-                        atomicAdd(&out_fragment_count[batch_id][0][point_id], fragment_count);
-                        atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight_sum);
-                    }
-
+                    fragment_count += bActive;
+                    weight_sum += weight;
                 }
+
+                reg_buffer[i].r += (point_color.r * weight);
+                reg_buffer[i].g += (point_color.g * weight);
+                reg_buffer[i].b += (point_color.b * weight);
+                reg_buffer[i].t = reg_buffer[i].t * (1.0f - reg_buffer[i].alpha);
             }
-            
+            //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
+            //reg_buffer[2].alpha = (reg_buffer[0].alpha + half2(2.0f, 2.0f) * reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
+
+
+            //reduce statistic
+            if (enable_statistic)
+            {
+                warp_reduce_sum<unsigned int, false>(fragment_count);
+                warp_reduce_sum<float, false>(weight_sum);
+                if (threadIdx.x == 0)
+                {
+                    atomicAdd(&out_fragment_count[batch_id][0][point_id], fragment_count);
+                    atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight_sum);
+                }
+
+            }
         }
+            
+        
         int tile_index = tile_id - 1;
         auto ourput_r = output_img[batch_id][0][tile_index];
         auto ourput_g = output_img[batch_id][1][tile_index];
@@ -245,7 +245,8 @@ __global__ void pack_forward_params(
 }
 
 #define RASTER_FORWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
-start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
@@ -260,7 +261,7 @@ tilesnum_x
 
 std::vector<at::Tensor> rasterize_forward(
     at::Tensor sorted_points,
-    at::Tensor start_index,
+    at::Tensor tile_start, at::Tensor tile_end,
     at::Tensor ndc,// 
     at::Tensor cov2d_inv,
     at::Tensor color,
@@ -276,8 +277,9 @@ std::vector<at::Tensor> rasterize_forward(
 )
 {
     at::DeviceGuard guard(ndc.device());
+    assert(tile_h == 16 && tile_w == 8);
 
-    int64_t viewsnum = start_index.sizes()[0];
+    int64_t viewsnum = tile_start.sizes()[0];
     int tilesnum_x = std::ceil(img_w / float(tile_w));
     int tilesnum_y = std::ceil(img_h / float(tile_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
@@ -307,10 +309,10 @@ std::vector<at::Tensor> rasterize_forward(
     }
     //raster
     
-    torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
+    torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(tile_start.device()).requires_grad(true);
     at::Tensor output_img = torch::empty({ viewsnum,3, tilesnum,tile_h,tile_w }, opt_img);
 
-    torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(enable_trans);
+    torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(tile_start.device()).requires_grad(enable_trans);
     at::Tensor output_transmitance = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t);
 
     at::Tensor output_depth = torch::empty({ 0,0, 0, 0, 0 }, opt_t);
@@ -319,7 +321,7 @@ std::vector<at::Tensor> rasterize_forward(
         output_depth = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t.requires_grad(true));
     }
 
-    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
+    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(tile_start.device()).requires_grad(false);
     at::Tensor output_last_contributor = torch::empty({ viewsnum, tilesnum, tile_h, tile_w }, opt_c);
 
     at::Tensor fragment_count = torch::zeros({ viewsnum,1,points_num }, packed_params.options().dtype(torch::kI32));
@@ -332,28 +334,28 @@ std::vector<at::Tensor> rasterize_forward(
         switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
         case ENCODE(false,false,false):
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, false, false):
-            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(false, true, false):
-            raster_forward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(false, false, true):
-            raster_forward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, true, false):
-            raster_forward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, false, true):
-            raster_forward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(false, true, true):
-            raster_forward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, true, true):
-            raster_forward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         default:
             break;
@@ -367,7 +369,7 @@ std::vector<at::Tensor> rasterize_forward(
 
 std::vector<at::Tensor> rasterize_forward_packed(
     at::Tensor sorted_points,
-    at::Tensor start_index,
+    at::Tensor tile_start, at::Tensor tile_end,
     at::Tensor packed_params,
     std::optional<at::Tensor>  specific_tiles_arg,
     int64_t img_h,
@@ -380,8 +382,9 @@ std::vector<at::Tensor> rasterize_forward_packed(
 )
 {
     at::DeviceGuard guard(packed_params.device());
+    assert(tile_h == 16 && tile_w == 8);
 
-    int64_t viewsnum = start_index.sizes()[0];
+    int64_t viewsnum = tile_start.sizes()[0];
     int tilesnum_x = std::ceil(img_w / float(tile_w));
     int tilesnum_y = std::ceil(img_h / float(tile_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
@@ -398,10 +401,10 @@ std::vector<at::Tensor> rasterize_forward_packed(
     }
     //raster
 
-    torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
+    torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(tile_start.device()).requires_grad(true);
     at::Tensor output_img = torch::empty({ viewsnum,3, tilesnum,tile_h,tile_w }, opt_img);
 
-    torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(enable_trans);
+    torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(tile_start.device()).requires_grad(enable_trans);
     at::Tensor output_transmitance = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t);
 
     at::Tensor output_depth = torch::empty({ 0,0, 0, 0, 0 }, opt_t);
@@ -410,7 +413,7 @@ std::vector<at::Tensor> rasterize_forward_packed(
         output_depth = torch::empty({ viewsnum,1, tilesnum, tile_h, tile_w }, opt_t.requires_grad(true));
     }
 
-    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
+    torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(tile_start.device()).requires_grad(false);
     at::Tensor output_last_contributor = torch::empty({ viewsnum, tilesnum, tile_h, tile_w }, opt_c);
 
     int points_num = packed_params.size(1);
@@ -424,28 +427,28 @@ std::vector<at::Tensor> rasterize_forward_packed(
         switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
         case ENCODE(false, false, false):
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, false, false):
-            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(false, true, false):
-            raster_forward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(false, false, true):
-            raster_forward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, true, false):
-            raster_forward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, false, true):
-            raster_forward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(false, true, true):
-            raster_forward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         case ENCODE(true, true, true):
-            raster_forward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            raster_forward_kernel<16, 8, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
             break;
         default:
             break;
@@ -470,7 +473,8 @@ struct BackwardRegisterBuffer
 template <int tile_size_y, int tile_size_x,bool enable_statistic, bool enable_trans_grad, bool enable_depth_grad>
 __global__ void raster_backward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_params,         // //[batch,point_num,sizeof(PackedParams)/sizeof(float)]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
     const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> final_transmitance,    //[batch,1,tile,tilesize,tilesize]
@@ -505,10 +509,10 @@ __global__ void raster_backward_kernel(
         }
     }
 
-    if (tile_id != 0 && tile_id < start_index.size(1) - 1)
+    if (tile_id != 0 && tile_id < tile_start.size(1))
     {
 
-        int start_index_in_tile = start_index[batch_id][tile_id];
+        int start_index_in_tile = tile_start[batch_id][tile_id];
         int index_in_tile = 0;
 
         if (start_index_in_tile != -1)
@@ -725,7 +729,8 @@ __global__ void unpack_gradient(
 
 
 #define RASTER_BACKWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
-start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),\
@@ -740,7 +745,7 @@ tilesnum_x, img_h, img_w
 
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
-    at::Tensor start_index,
+    at::Tensor tile_start, at::Tensor tile_end,
     at::Tensor packed_params,
     std::optional<at::Tensor> specific_tiles_arg,
     at::Tensor final_transmitance,
@@ -757,8 +762,9 @@ std::vector<at::Tensor> rasterize_backward(
 )
 {
     at::DeviceGuard guard(packed_params.device());
+    assert(tile_size_h == 16 && tile_size_w == 8);
 
-    int64_t viewsnum = start_index.sizes()[0];
+    int64_t viewsnum = tile_start.sizes()[0];
     int tilesnum_x = std::ceil(img_w / float(tilesize_w));
     int tilesnum_y = std::ceil(img_h / float(tilesize_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
@@ -817,28 +823,28 @@ std::vector<at::Tensor> rasterize_backward(
     switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))
     {
     case ENCODE(false, false, false):
-        raster_backward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, false, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(true, false, false):
-        raster_backward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, true, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(false, true, false):
-        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, false, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(false, false, true):
-        raster_backward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, false, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(true, true, false):
-        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, true, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(true, false, true):
-        raster_backward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, true, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(false, true, true):
-        raster_backward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, false, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     case ENCODE(true, true, true):
-        raster_backward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        raster_backward_kernel<16, 8, true, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
         break;
     default:
         break;

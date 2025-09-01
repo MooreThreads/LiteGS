@@ -7,6 +7,7 @@
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("create_subtile", &create_subtile);
   m.def("create_table", &create_table);
   m.def("tileRange", &tileRange);
   m.def("get_allocate_size", &get_allocate_size);
