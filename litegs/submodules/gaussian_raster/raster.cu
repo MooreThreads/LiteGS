@@ -63,22 +63,22 @@ struct RegisterBuffer
 
 
 template<class T, bool boardcast>
-inline __device__ void warp_reduce_sum(T& data)
+inline __device__ void warp_reduce_sum(T& data, unsigned int mask=0xffffffff)
 {
-    data += __shfl_down_sync(0xffffffff, data, 16);
-    data += __shfl_down_sync(0xffffffff, data, 8);
-    data += __shfl_down_sync(0xffffffff, data, 4);
-    data += __shfl_down_sync(0xffffffff, data, 2);
-    data += __shfl_down_sync(0xffffffff, data, 1);
+    data += __shfl_down_sync(mask, data, 16);
+    data += __shfl_down_sync(mask, data, 8);
+    data += __shfl_down_sync(mask, data, 4);
+    data += __shfl_down_sync(mask, data, 2);
+    data += __shfl_down_sync(mask, data, 1);
     if (boardcast)
-        data = __shfl_sync(0xffffffff, data, 0);
+        data = __shfl_sync(mask, data, 0);
 }
 
 
 
 template <int tile_size_y, int tile_size_x, bool enable_statistic, bool enable_trans, bool enable_depth>
 __global__ void raster_forward_kernel(
-    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,items] 
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<float/*torch::Half*/, 3, torch::RestrictPtrTraits> packed_params,         //[batch,point_num,sizeof(PackedParams)/4]
@@ -130,9 +130,8 @@ __global__ void raster_forward_kernel(
 
 
         unsigned int any_active = 0xffffffffu;
-        int index_in_tile = 0;
         auto points_id_in_tile = &sorted_points[batch_id][start_index_in_tile];
-        for (; (index_in_tile + start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
+        for (int index_in_tile = 0; (index_in_tile + start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
         {
             int point_id = points_id_in_tile[index_in_tile];
             PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
@@ -220,6 +219,94 @@ __global__ void raster_forward_kernel(
     }
 }
 
+template <int tile_size_y, int tile_size_x,int subtile_size_y, bool enable_statistic, bool enable_trans, bool enable_depth>
+__global__ void raster_subtile_forward_kernel(
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,items]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<float/*torch::Half*/, 3, torch::RestrictPtrTraits> packed_params,         //[batch,point_num,sizeof(PackedParams)/4]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
+    torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_img,    //[batch,3,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_transmitance,    //[batch,1,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_depth,     //[batch,1,tile,tilesize, tilesize]
+    torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> output_last_contributor,    //[batch,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> out_fragment_count,  //[batch,1,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_fragment_weight_sum,  //[batch,1,point_num]
+    int tiles_num_x)
+{
+
+    const int batch_id = blockIdx.y;
+    const int warp_id = threadIdx.y;
+    const int lane_id = threadIdx.x;
+    const int tile_id = specific_tiles[batch_id][blockIdx.x];
+    const int subtile_id = (tile_id << 2) + warp_id;
+
+
+    const int x_in_tile = lane_id % tile_size_x;
+    const int y_in_tile = warp_id * subtile_size_y + lane_id / tile_size_x;
+
+    const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + x_in_tile;
+    const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + y_in_tile;
+
+    if (tile_id != 0)
+    {
+        int start_index_in_tile = tile_start[batch_id][subtile_id];
+        int end_index_in_tile = tile_end[batch_id][subtile_id];
+
+        float transmittance = 1.0f;
+        float depth = 0.0f;
+        float3 final_color{ 0,0,0 };
+        int last_contributor = 0;
+
+        for (int index_in_tile = 0; (index_in_tile + start_index_in_tile < end_index_in_tile)&&(transmittance > 1.0f / 8192); index_in_tile++)
+        {
+            int point_id = sorted_points[batch_id][start_index_in_tile+index_in_tile];
+            PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
+            float3 cur_color{ params.rg.x,params.rg.y,params.ba.x };
+            float cur_opacity = params.ba.y;
+            float2 xy{ params.pixel_x,params.pixel_y };
+            float2 d = { xy.x - pixel_x,xy.y - pixel_y };
+
+            float power = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y) - params.inv_cov01 * d.x * d.y;
+            float alpha = min(255.0f / 256, cur_opacity * __expf(power));
+            alpha = (alpha < 1.0f / 256) ? 0 : alpha;
+
+            float weight= alpha * transmittance;
+            if (enable_statistic)
+            {
+                unsigned int active_mask = __activemask();
+                int fragment_count = __popc(active_mask);
+                warp_reduce_sum<float, false>(weight, active_mask);
+                if (lane_id == 0)
+                {
+                    atomicAdd(&out_fragment_count[batch_id][0][point_id], fragment_count);
+                    atomicAdd(&out_fragment_weight_sum[batch_id][0][point_id], weight);
+                }
+            }
+            final_color.x += cur_color.x * weight;
+            final_color.y += cur_color.y * weight;
+            final_color.z += cur_color.z * weight;
+            if (enable_depth)
+            {
+                depth += params.depth * weight;
+            }
+            transmittance *= (1 - alpha);
+            last_contributor = index_in_tile;
+        }
+
+        output_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] = final_color.x;
+        output_img[batch_id][1][tile_id - 1][y_in_tile][x_in_tile] = final_color.y;
+        output_img[batch_id][2][tile_id - 1][y_in_tile][x_in_tile] = final_color.z;
+        output_transmitance[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] = transmittance;
+        if (enable_depth)
+        {
+            output_depth[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] = depth;
+        }
+        output_last_contributor[batch_id][tile_id - 1][y_in_tile][x_in_tile] = last_contributor;
+
+    }
+}
+
 __global__ void pack_forward_params(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> ndc,         //[batch,3,point_num]
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> cov2d_inv,      //[batch,2,2,point_num]
@@ -244,7 +331,7 @@ __global__ void pack_forward_params(
     }
 }
 
-#define RASTER_FORWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+#define RASTER_FORWARD_PARAMS primitives_in_tile.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
@@ -257,16 +344,28 @@ fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),\
 fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
 tilesnum_x
 
+#define SUBTILE_RASTER_FORWARD_PARAMS primitives_in_subtile.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+subtile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+subtile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+complex_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+output_last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),\
+fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),\
+fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+tilesnum_x
+
 #define ENCODE(STATISTIC, TRANS, DEPTH) (((STATISTIC)*1)<<2)|(((TRANS)*1)<<1)|((DEPTH)*1)
 
 std::vector<at::Tensor> rasterize_forward(
-    at::Tensor sorted_points,
-    at::Tensor tile_start, at::Tensor tile_end,
+    at::Tensor primitives_in_tile, at::Tensor tile_start, at::Tensor tile_end, std::optional<at::Tensor>  specific_tiles_arg,
+    std::optional<at::Tensor> primitives_in_subtile_arg, std::optional<at::Tensor> subtile_start_arg, std::optional<at::Tensor> subtile_end_arg, std::optional<at::Tensor>  complex_tiles_arg,
     at::Tensor ndc,// 
     at::Tensor cov2d_inv,
     at::Tensor color,
     at::Tensor opacity,
-    std::optional<at::Tensor>  specific_tiles_arg,
     int64_t img_h,
     int64_t img_w,
     int64_t tile_h,
@@ -363,15 +462,58 @@ std::vector<at::Tensor> rasterize_forward(
         CUDA_CHECK_ERRORS;
     }
 
+    if (complex_tiles_arg.has_value()&& primitives_in_subtile_arg.has_value()&& subtile_start_arg.has_value()&& subtile_end_arg.has_value())
+    {
+
+        at::Tensor complex_tiles = *complex_tiles_arg;
+        at::Tensor primitives_in_subtile = *primitives_in_subtile_arg;
+        at::Tensor subtile_start = *subtile_start_arg;
+        at::Tensor subtile_end = *subtile_end_arg;
+
+        int tiles_per_block = 4;
+        dim3 Block3d(complex_tiles.size(1), viewsnum, 1);
+        dim3 Thread3d(32, tiles_per_block);
+
+        switch (ENCODE(enable_statistic, enable_trans, enable_depth))
+        {
+        case ENCODE(false, false, false):
+            raster_subtile_forward_kernel<16, 8, 4, false, false, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, false, false):
+            raster_subtile_forward_kernel<16, 8, 4, true, false, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, true, false):
+            raster_subtile_forward_kernel<16, 8, 4, false, true, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, false, true):
+            raster_subtile_forward_kernel<16, 8, 4, false, false, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, true, false):
+            raster_subtile_forward_kernel<16, 8, 4, true, true, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, false, true):
+            raster_subtile_forward_kernel<16, 8, 4, true, false, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(false, true, true):
+            raster_subtile_forward_kernel<16, 8, 4, false, true, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        case ENCODE(true, true, true):
+            raster_subtile_forward_kernel<16, 8, 4, true, true, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_FORWARD_PARAMS);
+            break;
+        default:
+            break;
+        }
+        
+    }
+
     return { output_img ,output_transmitance,output_depth ,output_last_contributor,packed_params,fragment_count,fragment_weight_sum };
 }
 
 
 std::vector<at::Tensor> rasterize_forward_packed(
-    at::Tensor sorted_points,
-    at::Tensor tile_start, at::Tensor tile_end,
+    at::Tensor primitives_in_tile, at::Tensor tile_start, at::Tensor tile_end, std::optional<at::Tensor>  specific_tiles_arg,
+    std::optional<at::Tensor> primitives_in_subtile_arg, std::optional<at::Tensor> subtile_start_arg, std::optional<at::Tensor> subtile_end_arg, std::optional<at::Tensor>  complex_tiles_arg,
     at::Tensor packed_params,
-    std::optional<at::Tensor>  specific_tiles_arg,
     int64_t img_h,
     int64_t img_w,
     int64_t tile_h,
@@ -698,6 +840,164 @@ __global__ void raster_backward_kernel(
     }
 }
 
+template <int tile_size_y, int tile_size_x, int subtile_size_y, bool enable_statistic, bool enable_trans_grad, bool enable_depth_grad>
+__global__ void raster_subtile_backward_kernel(
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,    //[batch,tile]  p.s. tile_id 0 is invalid!
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_params,         // //[batch,point_num,sizeof(PackedParams)/sizeof(float)]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> complex_tiles,          //[batch,tiles_num]
+    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> final_transmitance,    //[batch,1,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<int32_t, 4, torch::RestrictPtrTraits> last_contributor,    //[batch,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_img,    //[batch,3,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_trans_img,    //[batch,1,tile,tilesize,tilesize]
+    const torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> d_depth_img,    //[batch,1,tile,tilesize,tilesize]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,         //[batch,point_num,9]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_err_sum,  //[batch,1,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_err_square_sum,  //[batch,1,point_num]
+    int tiles_num_x, int img_h, int img_w)
+{
+    const int batch_id = blockIdx.y;
+    const int warp_id = threadIdx.y;
+    const int lane_id = threadIdx.x;
+    const int tile_id = complex_tiles[batch_id][blockIdx.x];
+    const int subtile_id = (tile_id << 2) + warp_id;
+
+
+    const int x_in_tile = lane_id % tile_size_x;
+    const int y_in_tile = warp_id * subtile_size_y + lane_id / tile_size_x;
+
+    const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + x_in_tile;
+    const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + y_in_tile;
+
+    if (tile_id != 0)
+    {
+        int start_index_in_tile = tile_start[batch_id][subtile_id];
+
+        float transmittance = final_transmitance[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
+        float accum_depth = 0.0f;
+        float3 accum_rec{ 0,0,0 };
+        int lst_index = max(last_contributor[batch_id][tile_id - 1][y_in_tile][x_in_tile] - 1, 0);
+        int warp_lst_index=__reduce_max_sync(0xffffffff, lst_index);
+
+        for (int index_in_tile = warp_lst_index; index_in_tile >= 0; index_in_tile--)
+        {
+            int point_id = sorted_points[batch_id][start_index_in_tile + index_in_tile];
+            PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
+            PackedGrad* grad_addr = (PackedGrad*)&packed_grad[batch_id][point_id][0];
+            float3 cur_color{ params.rg.x,params.rg.y,params.ba.x };
+            float cur_opacity = params.ba.y;
+            float2 xy{ params.pixel_x,params.pixel_y };
+            float2 d = { xy.x - pixel_x,xy.y - pixel_y };
+
+            float power = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y) - params.inv_cov01 * d.x * d.y;
+            float G = __expf(power);
+            float alpha = min(255.0f / 256, cur_opacity * G);
+            alpha = (alpha < 1.0f / 256) ? 0 : alpha;
+            alpha = (index_in_tile > lst_index) ? 0 : alpha;
+
+            float3 grad_color{ 0,0,0 };
+            float3 grad_invcov{ 0,0,0 };
+            float2 grad_ndc_xy{ 0,0 };
+            float grad_ndc_z = 0;
+            float grad_opacity{ 0 };
+            if (__any_sync(0xffffffff, alpha != 0))
+            {
+                transmittance /= (1 - alpha);
+                //color
+                grad_color.x = alpha * transmittance * d_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
+                grad_color.y = alpha * transmittance * d_img[batch_id][1][tile_id - 1][y_in_tile][x_in_tile];
+                grad_color.z = alpha * transmittance * d_img[batch_id][2][tile_id - 1][y_in_tile][x_in_tile];
+                warp_reduce_sum<float, false>(grad_color.x);
+                warp_reduce_sum<float, false>(grad_color.y);
+                warp_reduce_sum<float, false>(grad_color.z);
+                if (lane_id == 0)
+                {
+                    atomicAdd(&grad_addr->r, grad_color.x);
+                    atomicAdd(&grad_addr->g, grad_color.y);
+                    atomicAdd(&grad_addr->b, grad_color.z);
+                }
+                if (enable_depth_grad)
+                {
+                    grad_ndc_z = alpha * transmittance * d_depth_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
+                    warp_reduce_sum<float, false>(grad_ndc_z);
+                    if (lane_id == 0)
+                    {
+                        //TODO Z
+                    }
+                }
+
+                //alpha
+                float d_alpha = 0;
+                d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
+                d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_img[batch_id][1][tile_id - 1][y_in_tile][x_in_tile];
+                d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_img[batch_id][2][tile_id - 1][y_in_tile][x_in_tile];
+                accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
+                accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
+                accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
+                if (enable_trans_grad)
+                {
+                    d_alpha -= d_trans_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] * final_transmitance[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] / (1 - alpha);
+                }
+                if (enable_depth_grad)
+                {
+                    d_alpha += (params.depth - accum_depth) * transmittance * d_depth_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
+                    accum_depth = alpha * params.depth + (1.0f - alpha) * accum_depth;
+                }
+
+                //opacity
+                grad_opacity = G * d_alpha;
+                warp_reduce_sum<float, false>(grad_opacity);
+                if (lane_id == 0)
+                {
+                    atomicAdd(&grad_addr->a, grad_opacity);
+                }
+                if (enable_statistic)
+                {
+                    float cur_err = grad_opacity;
+                    float err_square = cur_err * cur_err;
+                    warp_reduce_sum<float, false>(err_square);
+                    if (lane_id == 0)
+                    {
+                        atomicAdd(&out_err_square_sum[batch_id][0][point_id], err_square);
+                    }
+                }
+
+                //cov2d_inv
+                float d_G = cur_opacity * d_alpha;
+                float d_power = G * d_G;
+                grad_invcov.x = -0.5f * d.x * d.x * d_power;
+                grad_invcov.y = -0.5f * d.x * d.y * d_power;
+                grad_invcov.z = -0.5f * d.y * d.y * d_power;
+                warp_reduce_sum<float, false>(grad_invcov.x);
+                warp_reduce_sum<float, false>(grad_invcov.y);
+                warp_reduce_sum<float, false>(grad_invcov.z);
+                if (lane_id == 0)
+                {
+                    atomicAdd(&grad_addr->inv_cov00, grad_invcov.x);
+                    atomicAdd(&grad_addr->inv_cov01, grad_invcov.y);
+                    atomicAdd(&grad_addr->inv_cov11, grad_invcov.z);
+                }
+
+                //mean2d
+                float d_deltax = (-params.inv_cov00 * d.x - params.inv_cov01 * d.y) * d_power;
+                float d_deltay = (-params.inv_cov11 * d.y - params.inv_cov01 * d.x) * d_power;
+                grad_ndc_xy.x = d_deltax;
+                grad_ndc_xy.y = d_deltay;
+                warp_reduce_sum<float, false>(grad_ndc_xy.x);
+                warp_reduce_sum<float, false>(grad_ndc_xy.y);
+                if (lane_id == 0)
+                {
+                    atomicAdd(&grad_addr->ndc_x, grad_ndc_xy.x);
+                    atomicAdd(&grad_addr->ndc_y, grad_ndc_xy.y);
+                }
+
+            }
+        }
+    }
+}
+
+
 __global__ void unpack_gradient(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,//[batch,point_num,property_num]
     const float* grad_inv_scaler,
@@ -728,7 +1028,7 @@ __global__ void unpack_gradient(
 }
 
 
-#define RASTER_BACKWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+#define RASTER_BACKWARD_PARAMS primitives_in_tile.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
@@ -743,11 +1043,25 @@ err_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
 err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
 tilesnum_x, img_h, img_w
 
+#define SUBTILE_RASTER_BACKWARD_PARAMS primitives_in_subtile.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+subtile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+subtile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+complex_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
+final_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits >(),\
+last_contributor.packed_accessor32<int32_t, 4, torch::RestrictPtrTraits>(),\
+d_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+d_trans_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+d_depth_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
+packed_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+err_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
+err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
+tilesnum_x, img_h, img_w
+
 std::vector<at::Tensor> rasterize_backward(
-    at::Tensor sorted_points,
-    at::Tensor tile_start, at::Tensor tile_end,
+    at::Tensor primitives_in_tile, at::Tensor tile_start, at::Tensor tile_end, std::optional<at::Tensor>  specific_tiles_arg,
+    std::optional<at::Tensor> primitives_in_subtile_arg, std::optional<at::Tensor> subtile_start_arg, std::optional<at::Tensor> subtile_end_arg, std::optional<at::Tensor>  complex_tiles_arg,
     at::Tensor packed_params,
-    std::optional<at::Tensor> specific_tiles_arg,
     at::Tensor final_transmitance,
     at::Tensor last_contributor,
     at::Tensor d_img,
@@ -848,6 +1162,50 @@ std::vector<at::Tensor> rasterize_backward(
         break;
     default:
         break;
+    }
+
+    if (complex_tiles_arg.has_value() && primitives_in_subtile_arg.has_value() && subtile_start_arg.has_value() && subtile_end_arg.has_value())
+    {
+
+        at::Tensor complex_tiles = *complex_tiles_arg;
+        at::Tensor primitives_in_subtile = *primitives_in_subtile_arg;
+        at::Tensor subtile_start = *subtile_start_arg;
+        at::Tensor subtile_end = *subtile_end_arg;
+
+        int tiles_per_block = 4;
+        dim3 Block3d(complex_tiles.size(1), viewsnum, 1);
+        dim3 Thread3d(32, tiles_per_block);
+
+        switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))
+        {
+        case ENCODE(false, false, false):
+            raster_subtile_backward_kernel<16, 8, 4, false, false, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(true, false, false):
+            raster_subtile_backward_kernel<16, 8, 4, true, false, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(false, true, false):
+            raster_subtile_backward_kernel<16, 8, 4, false, true, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(false, false, true):
+            raster_subtile_backward_kernel<16, 8, 4, false, false, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(true, true, false):
+            raster_subtile_backward_kernel<16, 8, 4, true, true, false> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(true, false, true):
+            raster_subtile_backward_kernel<16, 8, 4, true, false, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(false, true, true):
+            raster_subtile_backward_kernel<16, 8, 4, false, true, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        case ENCODE(true, true, true):
+            raster_subtile_backward_kernel<16, 8, 4, true, true, true> << <Block3d, Thread3d >> > (SUBTILE_RASTER_BACKWARD_PARAMS);
+            break;
+        default:
+            break;
+        }
+
     }
 
     CUDA_CHECK_ERRORS;

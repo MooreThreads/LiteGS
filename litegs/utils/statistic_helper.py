@@ -66,7 +66,7 @@ class StatisticsHelper:
         tiles_blend_count=piexel_blend_count.detach().reshape(T,H*W).max(dim=1).values.int()
         self.cached_tiles_blend_count[self.cur_sample]=tiles_blend_count
         self.cached_sorted_tile_list[self.cur_sample]=tiles_blend_count.sort(descending=True)[1].int()+1
-        self.cached_complex_tile[self.cur_sample]=(self.cached_tiles_blend_count[self.cur_sample]>1024).nonzero()[:,0]+1
+        self.cached_complex_tile[self.cur_sample]=(self.cached_tiles_blend_count[self.cur_sample]>2048).nonzero()[:,0].int()+1
         return
     
     @torch.no_grad()
