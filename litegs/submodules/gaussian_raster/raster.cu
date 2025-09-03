@@ -1076,7 +1076,7 @@ std::vector<at::Tensor> rasterize_backward(
 )
 {
     at::DeviceGuard guard(packed_params.device());
-    assert(tile_size_h == 16 && tile_size_w == 8);
+    assert(tilesize_h == 16 && tilesize_w == 8);
 
     int64_t viewsnum = tile_start.sizes()[0];
     int tilesnum_x = std::ceil(img_w / float(tilesize_w));
