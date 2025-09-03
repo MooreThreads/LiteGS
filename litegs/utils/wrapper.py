@@ -699,7 +699,7 @@ class Binning(BaseWrapper):
         sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start,tile_end=litegs_fused.tileRange(sorted_tileId,int(total_allocate_size),int(tiles_num))
+        tile_start,tile_end=litegs_fused.tileRange(sorted_tileId.int(),int(total_allocate_size),int(tiles_num))
         
         complex_tile_id=None
         try:
