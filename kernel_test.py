@@ -1,7 +1,14 @@
 import torch;import torch_musa
 import litegs_info
 import time
+from litegs.utils.statistic_helper import StatisticsHelperInst
+
 gs, cam = torch.load('./profiler_input_data/data.pth',map_location=torch.device('musa'))
+complex_tile_id=torch.load('./profiler_input_data/complex_tile_2048.pth',map_location=torch.device('musa')).int()
+sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pth',map_location=torch.device('musa')).int()
+StatisticsHelperInst.cur_sample="cross_road"
+StatisticsHelperInst.cached_complex_tile["cross_road"]=complex_tile_id
+StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_tile_list
 
 # init & warmup
 cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity = litegs_info.cluster(

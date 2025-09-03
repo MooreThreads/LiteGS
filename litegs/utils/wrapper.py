@@ -431,13 +431,12 @@ class GaussiansRasterFunc(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        sorted_pointId:torch.Tensor,
-        tile_start_index:torch.Tensor,
+        primitives_in_tile:torch.Tensor,tile_start:torch.Tensor,tile_end:torch.Tensor,tiles:torch.Tensor,
+        primitives_in_subtile:torch.Tensor,subtile_start:torch.Tensor,subtile_end:torch.Tensor,complex_tiles:torch.Tensor,
         ndc:torch.Tensor,
         cov2d_inv:torch.Tensor,
         color:torch.Tensor,
         opacities:torch.Tensor,
-        tiles:torch.Tensor,
         img_h:int,
         img_w:int,
         tile_h:int,
@@ -445,21 +444,18 @@ class GaussiansRasterFunc(torch.autograd.Function):
         enable_transmitance:bool=False,
         enable_depth:bool=False
     ):
-        if (tiles is None) and (tile_start_index.shape[0]==1):
-            end=tile_start_index[0,2:]
-            start=tile_start_index[0,1:-1]
-            valid=(end!=-1)&(start!=-1)
+        img,transmitance,depth,lst_contributor,packed_params,fragment_count,fragment_weight=litegs_fused.rasterize_forward(primitives_in_tile,tile_start,tile_end,tiles,
+                                                                                                                            primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
+                                                                                                                            ndc,cov2d_inv,color,opacities,
+                                                                                                                            img_h,img_w,tile_h,tile_w,
+                                                                                                                            StatisticsHelperInst.bStart,
+                                                                                                                            enable_transmitance,enable_depth)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.update_tile_blend_count(lst_contributor)
 
-            visible_primitives_num=(end-start)*valid
-            tiles=visible_primitives_num.sort(descending=True)[1].int().reshape(1,-1)+1
-   
-        img,transmitance,depth,lst_contributor,packed_params,fragment_count,fragment_weight=litegs_fused.rasterize_forward(sorted_pointId,tile_start_index,
-                                                                                            ndc,cov2d_inv,color,opacities,
-                                                                                            tiles,img_h,img_w,tile_h,tile_w,
-                                                                                            StatisticsHelperInst.bStart,
-                                                                                            enable_transmitance,enable_depth)
-
-        ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles,fragment_count,fragment_weight)
+        ctx.save_for_backward(primitives_in_tile,tile_start,tile_end,tiles,
+                              primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
+                              transmitance,lst_contributor,packed_params,fragment_count,fragment_weight)
         ctx.arg_tile_size=(tile_h,tile_w)
         ctx.img_hw=(img_h,img_w)
 
@@ -472,7 +468,11 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor):
-        sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles,fragment_count,fragment_weight=ctx.saved_tensors
+        
+        (primitives_in_tile,tile_start,tile_end,tiles,
+         primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
+         transmitance,lst_contributor,packed_params,fragment_count,fragment_weight)=ctx.saved_tensors
+        
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
 
@@ -482,10 +482,12 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
-        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,_,grad_o_square=litegs_fused.rasterize_backward(sorted_pointId,tile_start_index,packed_params,tiles,
-                                                                                          transmitance,lst_contributor,
-                                                                                          grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
-                                                                                          img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
+        grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,_,grad_o_square=litegs_fused.rasterize_backward(primitives_in_tile,tile_start,tile_end,tiles,
+                                                                                                            primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
+                                                                                                            packed_params,
+                                                                                                            transmitance,lst_contributor,
+                                                                                                            grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
+                                                                                                            img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
         if StatisticsHelperInst.bStart:
             #if err_sum.isinf().any() or err_square_sum.isinf().any():
             #    breakpoint()
@@ -499,13 +501,12 @@ class GaussiansRasterFunc(torch.autograd.Function):
         #     breakpoint()
 
         grads = (
-            None,
-            None,
+            None,None,None,None,
+            None,None,None,None,
             grad_ndc,
             grad_cov2d_inv,
             grad_color,
             grad_opacities,
-            None,
             None,
             None,
             None,
@@ -698,9 +699,28 @@ class Binning(BaseWrapper):
         sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=litegs_fused.tileRange(sorted_tileId.int(),int(total_allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start,tile_end=litegs_fused.tileRange(sorted_tileId,int(total_allocate_size),int(tiles_num))
+        
+        complex_tile_id=None
+        try:
+            complex_tile_id=StatisticsHelperInst.cached_complex_tile[StatisticsHelperInst.cur_sample]
+        except:
+            pass
+        subtile_start=None
+        subtile_end=None
+        subtile_primitive=None
+        if complex_tile_id is not None and complex_tile_id.shape[0]>0:
+            subtile_allocate_num=(tile_end[0,complex_tile_id]-tile_start[0,complex_tile_id]).sum().cpu()*4
+            subtile_id,subtile_primitive,num=litegs_fused.create_subtile(sorted_pointId,tile_start,tile_end,complex_tile_id,subtile_allocate_num,
+                                        ndc,inv_cov2d,opacity,
+                                        img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+            subtile_id=subtile_id.unsqueeze(0)
+            subtile_primitive=subtile_primitive.unsqueeze(0)
+            complex_tile_id=complex_tile_id.unsqueeze(0)
+            subtile_start,subtile_end=litegs_fused.tileRange(subtile_id,int(subtile_allocate_num),int(tiles_num*4))
+
             
-        return tile_start_index,sorted_pointId,b_visible.sum(0)
+        return sorted_pointId,tile_start,tile_end,subtile_primitive,subtile_start,subtile_end,complex_tile_id,b_visible.sum(0)
     
     
     _fused=__binning_fused

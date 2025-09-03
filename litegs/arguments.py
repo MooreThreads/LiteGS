@@ -68,7 +68,7 @@ class ModelParams(ParamGroup):
 
 class PipelineParams(ParamGroup):
     cluster_size = 128
-    tile_size = (8,16)
+    tile_size = (16,8)
     sparse_grad = True
     device_preload = True
     enable_transmitance=False

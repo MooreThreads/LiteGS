@@ -57,14 +57,20 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
         assert(False)
     
     #visibility table
-    tile_start_index,sorted_pointId,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,output_shape,pp.tile_size)
+    primitives_in_tile,tile_start,tile_end,primitives_in_subtile,subtile_start,subtile_end,complex_tile_id,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,output_shape,pp.tile_size)
 
     #raster
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))
     tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size[0])))
-    #tiles=torch.arange(1,tiles_x*tiles_y+1,device=xyz.device,dtype=torch.int32).unsqueeze(0)#0 is invalid
-    img,transmitance,depth,normal=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,None,
-                                            output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
+    tiles=None
+    try:
+        tiles=StatisticsHelperInst.cached_sorted_tile_list[StatisticsHelperInst.cur_sample].unsqueeze(0)
+    except:
+        tiles=None
+    img,transmitance,depth,normal=utils.wrapper.GaussiansRasterFunc.apply(primitives_in_tile,tile_start,tile_end,tiles,
+                                                                            primitives_in_subtile,subtile_start,subtile_end,complex_tile_id,
+                                                                            ndc_pos,inv_cov2d,color,opacity,
+                                                                            output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
     img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     if transmitance is not None:
         transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
