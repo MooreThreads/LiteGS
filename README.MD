@@ -160,11 +160,14 @@ axis_length=(coefficient*eigen_val.abs()).sqrt().ceil()
 If you find this project useful in your research, please consider cite:
 
 ```
-@misc{LiteGS,
-    title={LiteGS},
-    author={LiteGS Contributors},
-    howpublished = {\url{https://github.com/MooreThreads/LiteGS}},
-    year={2024}
+@misc{liao2025litegshighperformanceframeworktrain,
+      title={LiteGS: A High-performance Framework to Train 3DGS in Subminutes via System and Algorithm Codesign}, 
+      author={Kaimin Liao and Hua Wang and Zhi Chen and Luchao Wang and Yaohua Tang},
+      year={2025},
+      eprint={2503.01199},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2503.01199}, 
 }
 ```
 
