@@ -4,7 +4,7 @@ from torch_musa.utils.simple_porting import SimplePorting
 from setuptools import setup
 
 musa_flags = {
-    "mcc": ['--offload-arch=mp_31', '-resource-usage'],  
+    "mcc": ['--offload-arch=mp_31', '-resource-usage','-use_fast_math'],  
 }
 
 setup(
