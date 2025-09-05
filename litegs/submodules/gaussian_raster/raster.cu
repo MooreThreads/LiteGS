@@ -592,8 +592,8 @@ __global__ void raster_backward_kernel(
     constexpr float SCALER = 128.0f;
     constexpr float INV_SCALER = 1.0f / 128;
 
-    __shared__ half2 shared_img_grad[4][PIXELS_PER_THREAD][4 * 32];
-    __shared__ half2 final_t[PIXELS_PER_THREAD][4 * 32];
+    __shared__ half2 shared_img_grad[3][PIXELS_PER_THREAD][4 * 32];
+    __shared__ half2 shared_trans_grad_buffer[PIXELS_PER_THREAD][4 * 32];
     __shared__ unsigned int shared_last_contributor[PIXELS_PER_THREAD][4 * 32];//ushort2
 
     const int batch_id = blockIdx.y;
@@ -635,7 +635,9 @@ __global__ void raster_backward_kernel(
                 reg_buffer[i].t = half2(t0 * SCALER, t1 * SCALER);
                 if (enable_trans_grad)
                 {
-                    final_t[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t;
+                    shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t * 
+                        half2(d_trans_img[batch_id][0][tile_id - 1][in_tile_y + 2 * i][in_tile_x],
+                        d_trans_img[batch_id][0][tile_id - 1][in_tile_y + 2 * i + 1][in_tile_x]);
                 }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = half2(
@@ -732,7 +734,7 @@ __global__ void raster_backward_kernel(
                         reg_buffer[i].b += alpha * (point_color_x2.b - reg_buffer[i].b);
                         if (enable_trans_grad)
                         {
-                            d_alpha -= __h2div(shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x], 
+                            d_alpha -= __h2div(shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x],
                                 (half2(1.0f, 1.0f) - alpha));
                         }
 

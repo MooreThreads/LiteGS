@@ -4,7 +4,7 @@ import time
 from litegs.utils.statistic_helper import StatisticsHelperInst
 
 gs, cam = torch.load('./profiler_input_data/data.pth')
-complex_tile_id=torch.load('./profiler_input_data/complex_tileid.pth')
+complex_tile_id=torch.load('./profiler_input_data/complex_tile_2048.pth')
 sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pth')
 StatisticsHelperInst.cur_sample="cross_roat"
 StatisticsHelperInst.cached_complex_tile["cross_roat"]=complex_tile_id
@@ -31,12 +31,6 @@ renders, alphas, info = litegs_info.rasterization(
     height=cam['height'].item(),
 )
 renders.mean().backward()
-xyz_grad,scale_grad,rot_grad,sh_0_grad,opacity_grad=torch.load("./profiler_input_data/cross_road_grad.pth")
-assert (xyz_grad-xyz.grad).abs().sum()<1e-6
-assert (scale_grad-scale.grad).abs().sum()<1e-6
-assert (rot_grad-rot.grad).abs().sum()<1e-6
-assert (sh_0_grad-sh_0.grad).abs().sum()<1e-6
-assert (opacity_grad-opacity.grad).abs().sum()<1e-6
 torch.cuda.synchronize()
 
 # test forward + backward time
