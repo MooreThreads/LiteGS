@@ -68,10 +68,13 @@ class StatisticsHelper:
 
         sorted_counts,sorted_index=tiles_blend_count.sort(descending=True)
         sorted_tileid=sorted_index.int()+1
-        self.cached_sorted_tile_list[self.cur_sample]=sorted_tileid
+        try:
+            complex_end_index=(sorted_counts>2048).nonzero().max()+1
+        except:
+            complex_end_index=0
 
-        end_index=(sorted_counts>2048).nonzero().max()+1
-        self.cached_complex_tile[self.cur_sample]=sorted_tileid[:end_index]
+        self.cached_sorted_tile_list[self.cur_sample]=sorted_tileid[complex_end_index:]
+        self.cached_complex_tile[self.cur_sample]=sorted_tileid[:complex_end_index]
         return
     
     @torch.no_grad()

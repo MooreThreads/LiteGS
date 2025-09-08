@@ -857,8 +857,7 @@ __global__ void raster_backward_kernel(
                 reg_buffer[i].t = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 if (enable_trans_grad)
                 {
-                    shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x] = 
-                        final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x] * d_trans_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
+                    shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x] = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x] * d_trans_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = 
