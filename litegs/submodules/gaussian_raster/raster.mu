@@ -827,15 +827,10 @@ __global__ void raster_backward_kernel(
     __shared__ int shared_last_contributor[PIXELS_PER_THREAD][4 * 32];
 
     const int batch_id = blockIdx.y;
-    int task_id = 0;// +1, tile_id 0 is invalid
+    int task_id = blockIdx.x*4+threadIdx.y;
     int render_tiles_num = specific_tiles.size(1);
-    if (threadIdx.x == 0)
-    {
-        task_id = atomicAdd(&task_top[batch_id], 1);
-    }
-    task_id = __shfl_sync(0xffffffff, task_id, 0);
 
-    while (task_id < render_tiles_num)
+    if (task_id < render_tiles_num)
     {
         int tile_id = specific_tiles[batch_id][task_id];
         if (tile_id != 0 && tile_id < tile_start.size(1))
@@ -1016,12 +1011,6 @@ __global__ void raster_backward_kernel(
             }
         }
 
-        //next tile
-        if (threadIdx.x == 0)
-        {
-            task_id = atomicAdd((int*)&task_top[batch_id], 1);
-        }
-        task_id = __shfl_sync(0xffffffff, task_id, 0);
     }
 }
 
@@ -1319,7 +1308,7 @@ std::vector<at::Tensor> rasterize_backward(
     at::Tensor err_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
     
     int tiles_per_block = 4;
-    dim3 Block3d(56*16, viewsnum, 1);
+    dim3 Block3d( std::ceil(render_tile_num/4.0f), viewsnum, 1);
     dim3 Thread3d(32, tiles_per_block);
     
     switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))

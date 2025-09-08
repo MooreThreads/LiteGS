@@ -4,8 +4,8 @@ import time
 from litegs.utils.statistic_helper import StatisticsHelperInst
 
 gs, cam = torch.load('./profiler_input_data/data.pth',map_location=torch.device('musa'))
-complex_tile_id=torch.load('./profiler_input_data/complex_tile.pth',map_location=torch.device('musa')).int()
-sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pth',map_location=torch.device('musa')).int()
+complex_tile_id=torch.load('./profiler_input_data/complex_tile_2048.pth',map_location=torch.device('musa')).int()
+sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list_2048.pth',map_location=torch.device('musa')).int()
 StatisticsHelperInst.cur_sample="cross_road"
 StatisticsHelperInst.cached_complex_tile["cross_road"]=complex_tile_id
 StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_tile_list
