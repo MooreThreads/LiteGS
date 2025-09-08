@@ -69,7 +69,7 @@ class StatisticsHelper:
         sorted_counts,sorted_index=tiles_blend_count.sort(descending=True)
         sorted_tileid=sorted_index.int()+1
         try:
-            complex_end_index=(sorted_counts>1024).nonzero().max()+1
+            complex_end_index=(sorted_counts>2048).nonzero().max()+1
         except:
             complex_end_index=0
 
