@@ -632,8 +632,8 @@ __global__ void raster_backward_kernel(
     constexpr int VECTOR_SIZE = 1;
     constexpr int PIXELS_PER_THREAD = (tile_size_x * tile_size_y) / (32 * VECTOR_SIZE);//half2: 32 pixel per warp->64 pixel per warp
 
-    __shared__ float shared_img_grad[4][PIXELS_PER_THREAD][4 * 32];
-    __shared__ float final_t[PIXELS_PER_THREAD][4 * 32];
+    __shared__ float shared_img_grad[3][PIXELS_PER_THREAD][4 * 32];
+    __shared__ float shared_trans_grad_buffer[PIXELS_PER_THREAD][4 * 32];
     __shared__ int shared_last_contributor[PIXELS_PER_THREAD][4 * 32];
 
     const int batch_id = blockIdx.y;
@@ -673,7 +673,7 @@ __global__ void raster_backward_kernel(
                 reg_buffer[i].t = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 if (enable_trans_grad)
                 {
-                    final_t[i][threadIdx.y * blockDim.x + threadIdx.x] = reg_buffer[i].t;
+                    shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x] = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x] * d_trans_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = 
@@ -682,11 +682,7 @@ __global__ void raster_backward_kernel(
                     d_img[batch_id][1][tile_id - 1][in_tile_y + i][in_tile_x];
                 shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x] =
                     d_img[batch_id][2][tile_id - 1][in_tile_y + i][in_tile_x];
-                if (enable_trans_grad)
-                {
-                    shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] =
-                        d_trans_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
-                }
+
                 int last = last_contributor[batch_id][tile_id - 1][in_tile_y + i][in_tile_x] - 1;
                 shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = last;
                 index_in_tile = std::max(last, index_in_tile);
@@ -762,7 +758,7 @@ __global__ void raster_backward_kernel(
                         reg_buffer[i].b += alpha * (point_color.b - reg_buffer[i].b);
                         if (enable_trans_grad)
                         {
-                            d_alpha -= shared_img_grad[3][i][threadIdx.y * blockDim.x + threadIdx.x] * final_t[i][threadIdx.y * blockDim.x + threadIdx.x] / (1.0f - alpha);
+                            d_alpha -= shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x] / (1.0f - alpha);
                         }
 
                         grad_a += d_alpha * G;
