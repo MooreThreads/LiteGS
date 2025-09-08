@@ -100,7 +100,6 @@ __global__ void raster_forward_kernel(
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
     if (specific_tiles.size(1) != 0)
     {
-        tile_id = specific_tiles[batch_id][blockIdx.x * blockDim.y + threadIdx.y];
         if (blockIdx.x * blockDim.y + threadIdx.y < specific_tiles.size(1))
         {
             tile_id = specific_tiles[batch_id][blockIdx.x * blockDim.y + threadIdx.y];
@@ -829,12 +828,23 @@ __global__ void raster_backward_kernel(
 
     const int batch_id = blockIdx.y;
     int task_id = blockIdx.x*blockDim.y+threadIdx.y;
-    int render_tiles_num = specific_tiles.size(1);
     int render_subtiles_num = complex_tiles.size(1)*4;
 
-    if (render_subtiles_num<=task_id && task_id < render_subtiles_num+render_tiles_num)
+    if (render_subtiles_num<=task_id)
     {
-        int tile_id = specific_tiles[batch_id][task_id-render_subtiles_num];
+        task_id-=render_subtiles_num;
+        int tile_id = task_id + 1;// +1, tile_id 0 is invalid
+        if (specific_tiles.size(1) != 0)
+        {
+            if (task_id < specific_tiles.size(1))
+            {
+                tile_id = specific_tiles[batch_id][task_id];
+            }
+            else
+            {
+                tile_id = 0;
+            }
+        }
         if (tile_id != 0 && tile_id < tile_start.size(1))
         {
 
@@ -1410,7 +1420,7 @@ std::vector<at::Tensor> rasterize_backward(
     {
         complex_tiles = torch::empty({ 0,0 }, packed_params.options().dtype(torch::kInt32));
         primitives_in_subtile = torch::empty({ 0,0 }, packed_params.options().dtype(torch::kInt32));
-        subtile_start = torch::empty({ 0,0 }, packed_params.options());
+        subtile_start = torch::empty({ 0,0 }, packed_params.options().dtype(torch::kInt32));
     }
 
     at::Tensor d_trans_img;
