@@ -834,6 +834,9 @@ __global__ void raster_backward_kernel(
 
         const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + x_in_tile;
         const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + y_in_tile;
+
+        float3 pixel_d_img{d_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile],d_img[batch_id][1][tile_id - 1][y_in_tile][x_in_tile],d_img[batch_id][2][tile_id - 1][y_in_tile][x_in_tile]};
+        float trans_grad_tmp=d_trans_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] * final_transmitance[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
         if (tile_id != 0)
         {
             int start_index_in_tile = subtile_start[batch_id][subtile_id];
@@ -869,9 +872,9 @@ __global__ void raster_backward_kernel(
                 {
                     transmittance /= (1 - alpha);
                     //color
-                    grad_color.x = alpha * transmittance * d_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
-                    grad_color.y = alpha * transmittance * d_img[batch_id][1][tile_id - 1][y_in_tile][x_in_tile];
-                    grad_color.z = alpha * transmittance * d_img[batch_id][2][tile_id - 1][y_in_tile][x_in_tile];
+                    grad_color.x = alpha * transmittance * pixel_d_img.x;
+                    grad_color.y = alpha * transmittance * pixel_d_img.y;
+                    grad_color.z = alpha * transmittance * pixel_d_img.z;
                     warp_reduce_sum<float, false>(grad_color.x);
                     warp_reduce_sum<float, false>(grad_color.y);
                     warp_reduce_sum<float, false>(grad_color.z);
@@ -893,15 +896,15 @@ __global__ void raster_backward_kernel(
 
                     //alpha
                     float d_alpha = 0;
-                    d_alpha += (cur_color.x - accum_rec.x) * transmittance * d_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile];
-                    d_alpha += (cur_color.y - accum_rec.y) * transmittance * d_img[batch_id][1][tile_id - 1][y_in_tile][x_in_tile];
-                    d_alpha += (cur_color.z - accum_rec.z) * transmittance * d_img[batch_id][2][tile_id - 1][y_in_tile][x_in_tile];
+                    d_alpha += (cur_color.x - accum_rec.x) * transmittance * pixel_d_img.x;
+                    d_alpha += (cur_color.y - accum_rec.y) * transmittance * pixel_d_img.y;
+                    d_alpha += (cur_color.z - accum_rec.z) * transmittance * pixel_d_img.z;
                     accum_rec.x = alpha * cur_color.x + (1.0f - alpha) * accum_rec.x;
                     accum_rec.y = alpha * cur_color.y + (1.0f - alpha) * accum_rec.y;
                     accum_rec.z = alpha * cur_color.z + (1.0f - alpha) * accum_rec.z;
                     if (enable_trans_grad)
                     {
-                        d_alpha -= d_trans_img[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] * final_transmitance[batch_id][0][tile_id - 1][y_in_tile][x_in_tile] / (1 - alpha);
+                        d_alpha -= trans_grad_tmp / (1 - alpha);
                     }
                     if (enable_depth_grad)
                     {
