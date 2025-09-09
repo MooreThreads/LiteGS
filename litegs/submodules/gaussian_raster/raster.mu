@@ -32,6 +32,7 @@ struct PackedGrad
 {
     float ndc_x;
     float ndc_y;
+    float ndc_z;
     float inv_cov00;
     float inv_cov01;
     float inv_cov11;
@@ -56,6 +57,7 @@ struct RegisterBuffer
     float r;
     float g;
     float b;
+    float d;
     float t;
     int lst_contributor;
     float alpha;
@@ -134,6 +136,10 @@ __global__ void raster_forward_kernel(
                 reg_buffer[i].r = 0;
                 reg_buffer[i].g = 0;
                 reg_buffer[i].b = 0;
+                if(enable_depth)
+                {
+                    reg_buffer[i].d=0;
+                }
                 reg_buffer[i].t = 1.0f;
                 reg_buffer[i].lst_contributor = 0;
             }
@@ -188,6 +194,10 @@ __global__ void raster_forward_kernel(
                     reg_buffer[i].r += (point_color.r * weight);
                     reg_buffer[i].g += (point_color.g * weight);
                     reg_buffer[i].b += (point_color.b * weight);
+                    if (enable_depth)
+                    {
+                        reg_buffer[i].d += (params.depth * weight);
+                    }
                     reg_buffer[i].t = reg_buffer[i].t * (1.0f - reg_buffer[i].alpha);
                 }
                 //reg_buffer[1].alpha = (half2(2.0f, 2.0f) * reg_buffer[0].alpha + reg_buffer[3].alpha) * half2(1.0f / 3, 1.0f / 3);
@@ -210,10 +220,11 @@ __global__ void raster_forward_kernel(
                 
             
             int tile_index = tile_id - 1;
-            auto ourput_r = output_img[batch_id][0][tile_index];
-            auto ourput_g = output_img[batch_id][1][tile_index];
-            auto ourput_b = output_img[batch_id][2][tile_index];
-            auto ourput_t = output_transmitance[batch_id][0][tile_index];
+            auto output_r = output_img[batch_id][0][tile_index];
+            auto output_g = output_img[batch_id][1][tile_index];
+            auto output_b = output_img[batch_id][2][tile_index];
+            auto output_d = output_depth[batch_id][0][tile_index];
+            auto output_t = output_transmitance[batch_id][0][tile_index];
             auto output_last_index = output_last_contributor[batch_id][tile_index];
             #pragma unroll
             for (int i = 0; i < PIXELS_PER_THREAD; i++)
@@ -221,10 +232,11 @@ __global__ void raster_forward_kernel(
                 const int output_x = threadIdx.x % tile_size_x;
                 const int output_y = threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE + i;
 
-                ourput_r[output_y][output_x] = std::min(reg_buffer[i].r, 1.0f);
-                ourput_g[output_y][output_x] = std::min(reg_buffer[i].g, 1.0f);
-                ourput_b[output_y][output_x] = std::min(reg_buffer[i].b, 1.0f);
-                ourput_t[output_y][output_x] = reg_buffer[i].t;
+                output_r[output_y][output_x] = std::min(reg_buffer[i].r, 1.0f);
+                output_g[output_y][output_x] = std::min(reg_buffer[i].g, 1.0f);
+                output_b[output_y][output_x] = std::min(reg_buffer[i].b, 1.0f);
+                output_d[output_y][output_x] = reg_buffer[i].d;
+                output_t[output_y][output_x] = reg_buffer[i].t;
                 output_last_index[output_y][output_x] = reg_buffer[i].lst_contributor;
             }
         }
@@ -620,6 +632,7 @@ __global__ void raster_backward_kernel(
     constexpr int PIXELS_PER_THREAD = (tile_size_x * tile_size_y) / (32 * VECTOR_SIZE);
 
     __shared__ float shared_img_grad[3][PIXELS_PER_THREAD][4 * 32];
+    __shared__ float shared_depth_grad[PIXELS_PER_THREAD][4 * 32];
     __shared__ float shared_trans_grad_buffer[PIXELS_PER_THREAD][4 * 32];
     __shared__ int shared_last_contributor[PIXELS_PER_THREAD][4 * 32];
 
@@ -662,6 +675,10 @@ __global__ void raster_backward_kernel(
                 if (enable_trans_grad)
                 {
                     shared_trans_grad_buffer[i][threadIdx.y * blockDim.x + threadIdx.x] = final_transmitance[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x] * d_trans_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
+                }
+                if (enable_depth_grad)
+                {
+                    shared_depth_grad[i][threadIdx.y * blockDim.x + threadIdx.x] = d_depth_img[batch_id][0][tile_id - 1][in_tile_y + i][in_tile_x];
                 }
 
                 shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x] = 
@@ -707,6 +724,7 @@ __global__ void raster_backward_kernel(
                 float grad_r = 0;
                 float grad_g = 0;
                 float grad_b = 0;
+                float grad_d = 0;
                 float grad_a = 0;
                 float err_square = 0;
                 float grad_bxcy = 0;
@@ -733,6 +751,10 @@ __global__ void raster_backward_kernel(
                         grad_r += alpha * reg_buffer[i].t * shared_img_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_g += alpha * reg_buffer[i].t * shared_img_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
                         grad_b += alpha * reg_buffer[i].t * shared_img_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+                        if(enable_depth_grad)
+                        {
+                            grad_d += alpha * reg_buffer[i].t * shared_depth_grad[i][threadIdx.y * blockDim.x + threadIdx.x];
+                        }
 
 
                         float d_alpha = 0;
@@ -770,12 +792,20 @@ __global__ void raster_backward_kernel(
                     warp_reduce_sum<float, false>(grad_g);
                     warp_reduce_sum<float, false>(grad_b);
                     warp_reduce_sum<float, false>(grad_a);
+                    if(enable_depth_grad)
+                    {
+                        warp_reduce_sum<float, false>(grad_d);
+                    }
                     if (threadIdx.x == 0)
                     {
                         atomicAdd(&grad_addr->r, grad_r);
                         atomicAdd(&grad_addr->g, grad_g);
                         atomicAdd(&grad_addr->b, grad_b);
                         atomicAdd(&grad_addr->a, grad_a);
+                        if(enable_depth_grad)
+                        {
+                            atomicAdd(&grad_addr->ndc_z,grad_d);
+                        }
                     }
                     if (enable_statistic)
                     {
@@ -890,7 +920,7 @@ __global__ void raster_backward_kernel(
                         warp_reduce_sum<float, false>(grad_ndc_z);
                         if (lane_id == 0)
                         {
-                            //TODO Z
+                            atomicAdd(&grad_addr->ndc_z, grad_ndc_z);
                         }
                     }
 
@@ -981,6 +1011,7 @@ __global__ void unpack_gradient(
         PackedGrad* grads = (PackedGrad*)&packed_grad[blockIdx.y][index][0];
         d_ndc[blockIdx.y][0][index] = grads->ndc_x * grad_inv_scaler[0];
         d_ndc[blockIdx.y][1][index] = grads->ndc_y * grad_inv_scaler[0];
+        d_ndc[blockIdx.y][2][index] = grads->ndc_z * grad_inv_scaler[0];
         d_cov2d_inv[blockIdx.y][0][0][index] = grads->inv_cov00 * grad_inv_scaler[0];
         d_cov2d_inv[blockIdx.y][0][1][index] = grads->inv_cov01 * grad_inv_scaler[0];
         d_cov2d_inv[blockIdx.y][1][0][index] = grads->inv_cov01 * grad_inv_scaler[0];
