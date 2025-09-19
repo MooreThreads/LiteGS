@@ -729,5 +729,8 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
                        lr:float, b1:float, b2:float, eps:float):
-    litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+    if param.shape[0]!=0:
+        litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+    else:
+        pass
     return
