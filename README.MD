@@ -48,14 +48,14 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
     ```bash
     cd litegs/submodules/simple-knn
-    python install .
+    pip install .
     ```
 
 3. Install fused-ssim
 
     ```bash
     cd litegs/submodules/fussed_ssim
-    python intsall .
+    pip install .
     ```
     
 
@@ -63,7 +63,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
     
     ```bash
     cd litegs/submodules/gaussian_raster
-    python install .
+    pip install .
     ```
 
     If you need the cmake project(e.g. CUDA Debug in Visual Studio)：
