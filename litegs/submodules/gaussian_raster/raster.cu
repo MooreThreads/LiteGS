@@ -362,6 +362,18 @@ tilesnum_x
 
 #define ENCODE(STATISTIC, TRANS, DEPTH) (((STATISTIC)*1)<<2)|(((TRANS)*1)<<1)|((DEPTH)*1)
 
+#define LAUNCH_RASTER_FORWARD_KERNEL(TILE_H, TILE_W, STATISTIC, TRANS, DEPTH) \
+    raster_forward_kernel<TILE_H, TILE_W, STATISTIC, TRANS, DEPTH> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+
+#define DISPATCH_RASTER_FORWARD_KERNEL(STATISTIC, TRANS, DEPTH) \
+    if (tile_h == 8 && tile_w == 16) { \
+        LAUNCH_RASTER_FORWARD_KERNEL(8, 16, STATISTIC, TRANS, DEPTH); } \
+    else if (tile_h == 16 && tile_w == 16) { \
+        LAUNCH_RASTER_FORWARD_KERNEL(16, 16, STATISTIC, TRANS, DEPTH); } \
+    else if (tile_h == 8 && tile_w == 8) { \
+        LAUNCH_RASTER_FORWARD_KERNEL(8, 8, STATISTIC, TRANS, DEPTH); }
+
+
 std::vector<at::Tensor> rasterize_forward(
     at::Tensor sorted_points,
     at::Tensor start_index,
@@ -436,28 +448,28 @@ std::vector<at::Tensor> rasterize_forward(
         switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
         case ENCODE(false,false,false):
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, false, false)
             break;
         case ENCODE(true, false, false):
-            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, false, false)
             break;
         case ENCODE(false, true, false):
-            raster_forward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, true, false)
             break;
         case ENCODE(false, false, true):
-            raster_forward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, false, true)
             break;
         case ENCODE(true, true, false):
-            raster_forward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, true, false)
             break;
         case ENCODE(true, false, true):
-            raster_forward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, false, true)
             break;
         case ENCODE(false, true, true):
-            raster_forward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, true, true)
             break;
         case ENCODE(true, true, true):
-            raster_forward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, true, true)
             break;
         default:
             break;
@@ -528,28 +540,28 @@ std::vector<at::Tensor> rasterize_forward_packed(
         switch (ENCODE(enable_statistic, enable_trans, enable_depth))
         {
         case ENCODE(false, false, false):
-            raster_forward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, false, false)
             break;
         case ENCODE(true, false, false):
-            raster_forward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, false, false)
             break;
         case ENCODE(false, true, false):
-            raster_forward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, true, false)
             break;
         case ENCODE(false, false, true):
-            raster_forward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, false, true)
             break;
         case ENCODE(true, true, false):
-            raster_forward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, true, false)
             break;
         case ENCODE(true, false, true):
-            raster_forward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, false, true)
             break;
         case ENCODE(false, true, true):
-            raster_forward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(false, true, true)
             break;
         case ENCODE(true, true, true):
-            raster_forward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+            DISPATCH_RASTER_FORWARD_KERNEL(true, true, true)
             break;
         default:
             break;
@@ -864,6 +876,18 @@ err_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
 err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
 tilesnum_x, img_h, img_w
 
+#define LAUNCH_RASTER_BACKWARD_KERNEL(TILE_H, TILE_W, STATISTIC, TRANS, DEPTH) \
+    raster_backward_kernel<TILE_H, TILE_W, STATISTIC, TRANS, DEPTH> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+
+#define DISPATCH_RASTER_BACKWARD_KERNEL(STATISTIC, TRANS, DEPTH) \
+    if (tile_h == 8 && tile_w == 16) { \
+        LAUNCH_RASTER_BACKWARD_KERNEL(8, 16, STATISTIC, TRANS, DEPTH); } \
+    else if (tile_h == 16 && tile_w == 16) { \
+        LAUNCH_RASTER_BACKWARD_KERNEL(16, 16, STATISTIC, TRANS, DEPTH); } \
+    else if (tile_h == 8 && tile_w == 8) { \
+        LAUNCH_RASTER_BACKWARD_KERNEL(8, 8, STATISTIC, TRANS, DEPTH); }
+
+
 std::vector<at::Tensor> rasterize_backward(
     at::Tensor sorted_points,
     at::Tensor start_index,
@@ -877,16 +901,16 @@ std::vector<at::Tensor> rasterize_backward(
     std::optional<at::Tensor> grad_inv_sacler_arg,
     int64_t img_h,
     int64_t img_w,
-    int64_t tilesize_h,
-    int64_t tilesize_w,
+    int64_t tile_h,
+    int64_t tile_w,
     bool enable_statistic
 )
 {
     at::DeviceGuard guard(packed_params.device());
 
     int64_t viewsnum = start_index.sizes()[0];
-    int tilesnum_x = std::ceil(img_w / float(tilesize_w));
-    int tilesnum_y = std::ceil(img_h / float(tilesize_h));
+    int tilesnum_x = std::ceil(img_w / float(tile_w));
+    int tilesnum_y = std::ceil(img_h / float(tile_h));
     int64_t tilesnum = tilesnum_x * tilesnum_y;
     int64_t render_tile_num = tilesnum;
     at::Tensor specific_tiles;
@@ -943,28 +967,28 @@ std::vector<at::Tensor> rasterize_backward(
     switch (ENCODE(enable_statistic, d_trans_img_arg.has_value(), d_depth_img_arg.has_value()))
     {
     case ENCODE(false, false, false):
-        raster_backward_kernel<8, 16, false, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(false, false, false)
         break;
     case ENCODE(true, false, false):
-        raster_backward_kernel<8, 16, true, false, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(true, false, false)
         break;
     case ENCODE(false, true, false):
-        raster_backward_kernel<8, 16, false, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(false, true, false)
         break;
     case ENCODE(false, false, true):
-        raster_backward_kernel<8, 16, false, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(false, false, true)
         break;
     case ENCODE(true, true, false):
-        raster_backward_kernel<8, 16, true, true, false> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(true, true, false)
         break;
     case ENCODE(true, false, true):
-        raster_backward_kernel<8, 16, true, false, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(true, false, true)
         break;
     case ENCODE(false, true, true):
-        raster_backward_kernel<8, 16, false, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(false, true, true)
         break;
     case ENCODE(true, true, true):
-        raster_backward_kernel<8, 16, true, true, true> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+        DISPATCH_RASTER_BACKWARD_KERNEL(true, true, true)
         break;
     default:
         break;

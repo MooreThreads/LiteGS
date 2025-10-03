@@ -29,12 +29,13 @@ if __name__ == '__main__':
                 "cuda_errchk.cpp",
                 "ext_cuda.cpp",
                 "raster.cu",
-                "transform.cu"])
-            ],
-        extra_compile_args={
-                'cxx': ['-O3'],
-                'nvcc': ['-O3', '--use_fast_math']
-            },
+                "transform.cu"],
+                extra_compile_args={
+                        'cxx': ['-O3'],
+                        'nvcc': ['-O3', '--use_fast_math']
+                },
+            )
+        ],
         cmdclass={
             'build_ext': BuildExtension
         }
