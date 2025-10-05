@@ -109,10 +109,21 @@ template<int TileSizeY, int TileSizeX>
      }
 }
 
+#define LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(TILE_SIZE_H, TILE_SIZE_W)                     \
+    duplicate_with_keys_kernel<TILE_SIZE_H, TILE_SIZE_W><<<Block3d,256>>>(              \
+        ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),                    \
+        inv_cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),              \
+        opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),                \
+        offset.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),               \
+        depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(), \
+        height,width, tiles_num_h, tiles_num_w,                                         \
+        table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),         \
+        table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+
  std::vector<at::Tensor> create_table(at::Tensor ndc, at::Tensor inv_cov2d, at::Tensor opacity, at::Tensor offset, at::Tensor depth_sorted_pointid,
      int64_t allocate_size, int64_t height, int64_t width, int64_t tile_size_h, int64_t tile_size_w)
 {
-    assert(tile_size_h == 8 && tile_size_w == 16);
+    // assert(tile_size_h == 8 && tile_size_w == 16);
     int tiles_num_h = (height + tile_size_h - 1) / tile_size_h;
     int tiles_num_w = (width + tile_size_w - 1) / tile_size_w;
 
@@ -132,16 +143,18 @@ template<int TileSizeY, int TileSizeX>
 
     dim3 Block3d(std::ceil(points_num/256.0f), view_num, 1);
     
-
-    duplicate_with_keys_kernel<8,16><<<Block3d,256>>>(
-        ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        inv_cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        offset.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        depth_sorted_pointid.packed_accessor32<int64_t, 2, torch::RestrictPtrTraits>(),
-        height,width, tiles_num_h, tiles_num_w,
-        table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
-        table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+    if (tile_size_h == 8 && tile_size_w == 16)
+    {
+        LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(8,16);
+    }
+    else if (tile_size_h == 16 && tile_size_w == 16)
+    {
+        LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(16,16);
+    }
+    else if (tile_size_h == 8 && tile_size_w == 8)
+    {
+        LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(8,8);
+    }
     CUDA_CHECK_ERRORS;
 
     unsigned int bit = 0;
@@ -325,12 +338,22 @@ __global__ void get_allocate_size_kernel(
     }
 }
 
+#define LAUNCH_GET_ALLOCATE_SIZE_KERNEL(TILE_SIZE_H, TILE_SIZE_W)                                                \
+    get_allocate_size_kernel<TILE_SIZE_H, TILE_SIZE_W><<<Block3d,256>>>(ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(), \
+    view_space_z.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),                                        \
+    inv_cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),                                           \
+    opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),                                             \
+    height, width,tiles_num_h, tiles_num_w,                                                                      \
+    left_up.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),                                           \
+    right_down.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),                                        \
+    allocated_size.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+
 std::vector<at::Tensor> get_allocate_size(at::Tensor ndc, at::Tensor view_space_z, at::Tensor inv_cov2d, at::Tensor opacity,
     int64_t height,int64_t width, int64_t tile_size_h, int64_t tile_size_w)
 {
     at::DeviceGuard guard(ndc.device());
 
-    assert(tile_size_h == 8 && tile_size_w == 16);
+    // assert(tile_size_h == 8 && tile_size_w == 16);
     int tiles_num_h = (height + tile_size_h - 1) / tile_size_h;
     int tiles_num_w = (width + tile_size_w - 1) / tile_size_w;
 
@@ -341,14 +364,18 @@ std::vector<at::Tensor> get_allocate_size(at::Tensor ndc, at::Tensor view_space_
     at::Tensor allocated_size = torch::empty({ views_num,points_num }, ndc.options().dtype(torch::kInt32));
 
     dim3 Block3d(std::ceil(points_num / 256.0f), views_num, 1);
-    get_allocate_size_kernel<8,16><<<Block3d,256>>>(ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        view_space_z.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        inv_cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        height, width,tiles_num_h, tiles_num_w,
-        left_up.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-        right_down.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
-        allocated_size.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+    if (tile_size_h == 8 && tile_size_w == 16)
+    {
+        LAUNCH_GET_ALLOCATE_SIZE_KERNEL(8,16);
+    }
+    else if (tile_size_h == 16 && tile_size_w == 16)
+    {
+        LAUNCH_GET_ALLOCATE_SIZE_KERNEL(16,16);
+    }
+    else if (tile_size_h == 8 && tile_size_w == 8)
+    {
+        LAUNCH_GET_ALLOCATE_SIZE_KERNEL(8,8);
+    }
     CUDA_CHECK_ERRORS;
     return { left_up ,right_down,allocated_size };
 }
