@@ -691,7 +691,7 @@ class Binning(BaseWrapper):
                                                 int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
         tileId_table:torch.Tensor=my_table[0]
         pointId_table:torch.Tensor=my_table[1]
-        if tiles_num<65536:
+        if tiles_num<32768:
             tileId_table=tileId_table.short()
 
         # sort tile_id with torch.sort
