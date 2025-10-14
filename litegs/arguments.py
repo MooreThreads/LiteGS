@@ -58,6 +58,7 @@ class ParamGroup:
 class ModelParams(ParamGroup): 
 
     sh_degree = 3
+    source_type = "colmap"#'slam' or 'colmap'
     _source_path = ""
     _model_path = ""
     _images = "images"

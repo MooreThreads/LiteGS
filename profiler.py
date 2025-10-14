@@ -25,7 +25,7 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
 
     cameras_info:dict[int,litegs.data.CameraInfo]=None
-    camera_frames:list[litegs.data.CameraFrame]=None
+    camera_frames:list[litegs.data.ImageFrame]=None
     cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result('./dataset/mipnerf360/{}'.format(scene_name),'images_4')
 
     #preload

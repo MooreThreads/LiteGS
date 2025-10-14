@@ -31,7 +31,7 @@ if __name__ == "__main__":
     dp=litegs.arguments.DensifyParams.extract(args)
 
     cameras_info:dict[int,litegs.data.CameraInfo]=None
-    camera_frames:list[litegs.data.CameraFrame]=None
+    camera_frames:list[litegs.data.ImageFrame]=None
     cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
 
     if OUTPUT_FILE:

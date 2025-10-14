@@ -7,6 +7,7 @@ import numpy as np
 import math
 import os
 import torch.cuda.nvtx as nvtx
+import matplotlib.pyplot as plt
 
 from .. import arguments
 from .. import data
@@ -25,8 +26,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
           test_epochs=[],save_ply=[],save_checkpoint=[],start_checkpoint:str=None):
     
     cameras_info:dict[int,data.CameraInfo]=None
-    camera_frames:list[data.CameraFrame]=None
-    cameras_info,camera_frames,init_xyz,init_color=io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
+    camera_frames:list[data.ImageFrame]=None
+    if lp.source_type=="colmap":
+        cameras_info,camera_frames,init_xyz,init_color=io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
+    elif lp.source_type=="slam":
+        cameras_info,camera_frames,init_xyz,init_color=io_manager.load_slam_result(lp.source_path)#lp.sh_degree,lp.resolution
 
     #preload
     for camera_frame in camera_frames:
@@ -40,7 +44,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         training_frames=camera_frames
         test_frames=None
     trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
-    train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
+    train_loader = DataLoader(trainingset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
     test_loader=None
     if lp.eval:
         testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)

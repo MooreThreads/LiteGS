@@ -3,6 +3,7 @@ import numpy as np
 import numpy.typing as npt
 import os
 import PIL.Image
+import cv2
 import torch
 from torch.utils.data import Dataset
 
@@ -54,7 +55,7 @@ class PinHoleCameraInfo(CameraInfo):
     
 WARNED = False
 
-class CameraFrame:
+class ImageFrame:
     def __init__(self):
         self.id:int=0
         self.viewtransform_rotation:npt.NDArray=np.array((0,0,0,0))
@@ -110,6 +111,25 @@ class CameraFrame:
     def get_camera_center(self)->npt.NDArray:
         return self.camera_center
     
+class VideoFrame(ImageFrame):
+    def load_image(self,downsample:int=-1):
+        cap = cv2.VideoCapture(self.img_source)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, self.name)
+        ret, frame = cap.read()
+        if ret:
+            if downsample==-1 or downsample==1:
+                self.image[downsample]=frame.transpose(2,0,1)[(2,1,0),...]
+            else:
+                image=PIL.Image.fromarray(frame)
+                orig_w, orig_h = image.size
+                resolution = round(orig_w/ downsample), round(orig_h/ downsample)
+                self.image[downsample]=np.array(image.resize(resolution),dtype=np.uint8).transpose(2,0,1)[(2,1,0),...]
+        else:
+            print(f"Failed to read frame {self.name}")
+        return self.image[downsample]
+
 class CameraFrameDataset(Dataset):
     def __get_frustumplane(self,view_matrix:npt.NDArray,proj_matrix:npt.NDArray)->npt.NDArray:
         viewproj_matrix=view_matrix@proj_matrix
@@ -150,7 +170,7 @@ class CameraFrameDataset(Dataset):
         frustumplane[5,3]=viewproj_matrix[3,3]-viewproj_matrix[3,2]
         return frustumplane
     
-    def __init__(self,cameras:dict[int,PinHoleCameraInfo],frames:list[CameraFrame],downsample:int=-1,bDevice=True):
+    def __init__(self,cameras:dict[int,PinHoleCameraInfo],frames:list[ImageFrame],downsample:int=-1,bDevice=True):
         self.cameras=cameras
         self.frames=frames
         self.downsample=downsample
