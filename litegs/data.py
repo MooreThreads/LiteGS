@@ -113,21 +113,22 @@ class ImageFrame:
     
 class VideoFrame(ImageFrame):
     def load_image(self,downsample:int=-1):
-        cap = cv2.VideoCapture(self.img_source)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.set(cv2.CAP_PROP_POS_FRAMES, self.name)
-        ret, frame = cap.read()
-        if ret:
-            if downsample==-1 or downsample==1:
-                self.image[downsample]=frame.transpose(2,0,1)[(2,1,0),...]
+        if self.image.get(downsample,None) is None:
+            cap = cv2.VideoCapture(self.img_source)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, self.name)
+            ret, frame = cap.read()
+            if ret:
+                if downsample==-1 or downsample==1:
+                    self.image[downsample]=frame.transpose(2,0,1)[(2,1,0),...]
+                else:
+                    image=PIL.Image.fromarray(frame)
+                    orig_w, orig_h = image.size
+                    resolution = round(orig_w/ downsample), round(orig_h/ downsample)
+                    self.image[downsample]=np.array(image.resize(resolution),dtype=np.uint8).transpose(2,0,1)[(2,1,0),...]
             else:
-                image=PIL.Image.fromarray(frame)
-                orig_w, orig_h = image.size
-                resolution = round(orig_w/ downsample), round(orig_h/ downsample)
-                self.image[downsample]=np.array(image.resize(resolution),dtype=np.uint8).transpose(2,0,1)[(2,1,0),...]
-        else:
-            print(f"Failed to read frame {self.name}")
+                print(f"Failed to read frame {self.name}")
         return self.image[downsample]
 
 class CameraFrameDataset(Dataset):

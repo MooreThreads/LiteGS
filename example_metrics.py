@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import litegs
 import litegs.config
 
-OUTPUT_FILE=False
+OUTPUT_FILE=True
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
@@ -32,7 +32,10 @@ if __name__ == "__main__":
 
     cameras_info:dict[int,litegs.data.CameraInfo]=None
     camera_frames:list[litegs.data.ImageFrame]=None
-    cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
+    if lp.source_type=="colmap":
+        cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
+    elif lp.source_type=="slam":
+        cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_slam_result(lp.source_path)#lp.sh_degree,lp.resolution
 
     if OUTPUT_FILE:
         os.makedirs(os.path.join(lp.model_path,"Trainingset"),exist_ok=True)

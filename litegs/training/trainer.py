@@ -44,7 +44,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         training_frames=camera_frames
         test_frames=None
     trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
-    train_loader = DataLoader(trainingset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
+    train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
     test_loader=None
     if lp.eval:
         testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
