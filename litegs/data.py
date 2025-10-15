@@ -37,6 +37,8 @@ class PinHoleCameraInfo(CameraInfo):
         focal_length_y=parameters[1]
         focal_x=focal_length_x/(width*0.5)
         focal_y=focal_length_y/(height*0.5)
+        self.focal_x=focal_x
+        self.focal_y=focal_y
         self.proj_matrix=np.array([[focal_x,0,0,0],
                   [0,focal_y,0,0],
                   [0,0,z_far/(z_far-z_near),-z_far*z_near/(z_far-z_near)],
@@ -70,6 +72,8 @@ class ImageFrame:
         self.id:int=id
         viewtransform_rotation:npt.NDArray=utils.qvec2rotmat(np.array(qvec))
         viewtransform_position:npt.NDArray=np.array(tvec)
+        self.qvec=qvec
+        self.tvec=tvec
         self.view_matrix = utils.get_view_matrix(viewtransform_rotation,viewtransform_position).transpose()
         self.camera_center = -viewtransform_rotation.transpose()@viewtransform_position
         self.camera_id:int=camera_id
@@ -222,7 +226,7 @@ class CameraFrameDataset(Dataset):
         ray_o=self.frames[idx].get_camera_center()
         ray_d=self.ray_d[idx]
         StatisticsHelperInst.cur_sample=self.frames[idx].name
-        return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(frustumplane),torch.Tensor(image)
+        return view_matrix,proj_matrix,frustumplane,image,idx
     
     def get_norm(self)->tuple[float,float]:
         def get_center_and_diag(cam_centers):

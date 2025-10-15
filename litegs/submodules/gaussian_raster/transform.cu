@@ -93,8 +93,8 @@ at::Tensor jacobianRayspace(
 }
 
 __global__ void create_transform_matrix_forward_kernel(
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[3,point_num]  
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[4,point_num] 
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[4,point_num]  
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[3,point_num] 
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> transform         //[3,3,point_num]
 )
 {
