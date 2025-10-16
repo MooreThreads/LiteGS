@@ -452,8 +452,8 @@ class GaussiansRasterFunc(torch.autograd.Function):
                                                                                             tiles,img_h,img_w,tile_h,tile_w,
                                                                                             StatisticsHelperInst.bStart,
                                                                                             enable_transmitance,enable_depth)
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_tile_blend_count(lst_contributor)
+        # if StatisticsHelperInst.bStart:
+        #     StatisticsHelperInst.update_tile_blend_count(lst_contributor)
 
         ctx.save_for_backward(sorted_pointId,tile_start_index,transmitance,lst_contributor,packed_params,tiles,fragment_count,fragment_weight)
         ctx.arg_tile_size=(tile_h,tile_w)

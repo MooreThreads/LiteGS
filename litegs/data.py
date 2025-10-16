@@ -121,7 +121,7 @@ class VideoFrame(ImageFrame):
             cap = cv2.VideoCapture(self.img_source)
             fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.set(cv2.CAP_PROP_POS_FRAMES, self.name)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, self.name-1)
             ret, frame = cap.read()
             if ret:
                 if downsample==-1 or downsample==1:

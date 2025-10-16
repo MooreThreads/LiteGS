@@ -77,12 +77,13 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     actived_sh_degree=0
 
     #learnable view matrix
-    view_params=[np.concatenate([frame.qvec,frame.tvec])[None,:] for frame in trainingset.frames]
-    view_params=torch.tensor(np.concatenate(view_params),dtype=torch.float32,device='cuda')
-    view_params=torch.nn.Embedding(view_params.shape[0],view_params.shape[1],_weight=view_params,sparse=True)
-    camera_focal_params=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].focal_x,dtype=torch.float32,device='cuda'))#todo fix multi cameras
-    view_opt=torch.optim.SparseAdam(view_params.parameters(),lr=1e-4)
-    proj_opt=torch.optim.Adam([camera_focal_params,],lr=1e-5)
+    if op.learnable_viewproj:
+        view_params=[np.concatenate([frame.qvec,frame.tvec])[None,:] for frame in trainingset.frames]
+        view_params=torch.tensor(np.concatenate(view_params),dtype=torch.float32,device='cuda')
+        view_params=torch.nn.Embedding(view_params.shape[0],view_params.shape[1],_weight=view_params,sparse=True)
+        camera_focal_params=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].focal_x,dtype=torch.float32,device='cuda'))#todo fix multi cameras
+        view_opt=torch.optim.SparseAdam(view_params.parameters(),lr=1e-4)
+        proj_opt=torch.optim.Adam([camera_focal_params,],lr=1e-5)
 
     #init
     total_epoch=int(op.iterations/len(trainingset))
@@ -108,20 +109,20 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 proj_matrix=proj_matrix.cuda()
                 frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()/255.0
+                if op.learnable_viewproj:
+                    #fix view matrix
+                    view_param_vec=view_params(idx.cuda())
+                    qvec=torch.nn.functional.normalize(view_param_vec[:,:4],dim=1)
+                    tvec=view_param_vec[:,4:]
+                    rot_matrix=utils.wrapper.CreateTransformMatrix.call_fused(torch.ones((3,qvec.shape[0]),device='cuda'),qvec.transpose(0,1).contiguous())
+                    view_matrix[:,:3, :3] = rot_matrix.permute(2,0,1)
+                    view_matrix[:,3, :3] = tvec
 
-                #fix view matrix
-                view_param_vec=view_params(idx.cuda())
-                qvec=torch.nn.functional.normalize(view_param_vec[:,:4],dim=1)
-                tvec=view_param_vec[:,4:]
-                rot_matrix=utils.wrapper.CreateTransformMatrix.call_fused(torch.ones((3,qvec.shape[0]),device='cuda'),qvec.transpose(0,1).contiguous())
-                view_matrix[:,:3, :3] = rot_matrix.permute(2,0,1)
-                view_matrix[:,3, :3] = tvec
-
-                #fix proj matrix
-                focal_x=camera_focal_params
-                focal_y=camera_focal_params*gt_image.shape[3]/gt_image.shape[2]
-                proj_matrix[:,0,0]=focal_x
-                proj_matrix[:,1,1]=focal_y
+                    #fix proj matrix
+                    focal_x=camera_focal_params
+                    focal_y=camera_focal_params*gt_image.shape[3]/gt_image.shape[2]
+                    proj_matrix[:,0,0]=focal_x
+                    proj_matrix[:,1,1]=focal_y
 
                 #cluster culling
                 visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
@@ -165,7 +166,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                         frustumplane=frustumplane.cuda()
                         gt_image=gt_image.cuda()/255.0
 
-                        if name=="Trainingset":
+                        if name=="Trainingset" and op.learnable_viewproj:
                             view_param_vec=view_params(idx.cuda())
                             qvec=torch.nn.functional.normalize(view_param_vec[:,:4],dim=1)
                             tvec=view_param_vec[:,4:]
@@ -192,9 +193,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             if epoch==total_epoch-1:
                 progress_bar.close()
                 print("{} takes: {} s".format(lp.model_path,progress_bar.format_dict['elapsed']))
-                ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
+                save_path=os.path.join(lp.model_path,"point_cloud","finish")
             else:
-                ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")    
+                save_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch))    
 
             if pp.cluster_size:
                 tensors=scene.cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -203,7 +204,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             param_nyp=[]
             for tensor in tensors:
                 param_nyp.append(tensor.detach().cpu().numpy())
-            io_manager.save_ply(ply_path,*param_nyp)
+            io_manager.save_ply(os.path.join(save_path,"point_cloud.ply"),*param_nyp)
+            if op.learnable_viewproj:
+                torch.save(list(view_params.parameters())+[camera_focal_params],os.path.join(save_path,"viewproj.pth"))
             pass
 
         if epoch in save_checkpoint:
