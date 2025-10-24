@@ -9,7 +9,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "./example_train.py",
-            "args":["--sh_degree","3","--source_type","slam","-s","dataset/workshop/1747834320424","-m","output/1747834320424","--target_primitives","1000000","--iterations","5000","--position_lr_max_steps","5000","--position_lr_final","0.000016","--densification_interval","2"],
+            "args":["--sh_degree","3","--source_type","slam","-s","dataset/workshop/1747834320424","-m","output/1747834320424","--target_primitives","1000000","--iterations","5000","--position_lr_max_steps","5000","--position_lr_final","0.000016","--densification_interval","2","--learnable_viewproj"],
             //"args":["--sh_degree","3","-s","dataset/mipnerf360/garden","-i","images","-m","output/garden","--budget","40","--eval"],
             "cwd":"${workspaceFolder}",
             "console": "integratedTerminal",
