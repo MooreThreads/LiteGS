@@ -27,11 +27,11 @@ metrics_config="--sh_degree 3 --source_type slam -s {0} -m {1} --learnable_viewp
 
 scenes = os.listdir(args.source_path)
 
-# for scene in scenes:
-#     os.system("python example_train.py "+training_config.format(os.path.join(args.source_path,scene),os.path.join(args.output_path,scene)))
+for scene in scenes:
+    os.system("python example_train.py "+training_config.format(os.path.join(args.source_path,scene),os.path.join(args.output_path,scene)))
 
 results=[]
-for scene in scenes[:2]:
+for scene in scenes:
     process = subprocess.Popen("python example_metrics.py "+metrics_config.format(os.path.join(args.source_path,scene),os.path.join(args.output_path,scene)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout, stderr = process.communicate()
     print(stderr)
