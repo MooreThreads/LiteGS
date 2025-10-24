@@ -32,7 +32,7 @@ for scene in scenes:
 
 results=[]
 for scene in scenes:
-    process = subprocess.Popen("python example_metrics.py "+metrics_config.format(os.path.join(args.source_path,scene),os.path.join(args.output_path,scene)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(["python","example_metrics.py"]+metrics_config.format(os.path.join(args.source_path,scene),os.path.join(args.output_path,scene)).split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout, stderr = process.communicate()
     print(stderr)
     print(stdout)
