@@ -1,4 +1,8 @@
+torchmetrics
 fused-ssim
 plyfile
 tqdm
 pillow
+opencv-python
+pandas
+matplotlib
