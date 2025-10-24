@@ -142,10 +142,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 else:
                     opt.step()
                 opt.zero_grad(set_to_none = True)
-                view_opt.step()
-                view_opt.zero_grad()
-                # proj_opt.step()
-                # proj_opt.zero_grad()
+                if op.learnable_viewproj:
+                    view_opt.step()
+                    view_opt.zero_grad()
+                    # proj_opt.step()
+                    # proj_opt.zero_grad()
                 schedular.step()
 
         if epoch in test_epochs:

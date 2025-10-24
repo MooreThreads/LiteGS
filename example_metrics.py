@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import litegs
 import litegs.config
 import litegs.utils
+import shutil
 
 OUTPUT_FILE=True
 
@@ -39,6 +40,11 @@ if __name__ == "__main__":
         cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_slam_result(lp.source_path)#lp.sh_degree,lp.resolution
 
     if OUTPUT_FILE:
+        try:
+            shutil.rmtree(os.path.join(lp.model_path,"Trainingset"))
+            shutil.rmtree(os.path.join(lp.model_path,"Testset"))
+        except:
+            pass
         os.makedirs(os.path.join(lp.model_path,"Trainingset"),exist_ok=True)
         os.makedirs(os.path.join(lp.model_path,"Testset"),exist_ok=True)
 
