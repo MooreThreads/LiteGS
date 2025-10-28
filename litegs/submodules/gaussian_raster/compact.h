@@ -14,3 +14,4 @@ void adamUpdate(torch::Tensor &param,torch::Tensor &param_grad,torch::Tensor &ex
 std::vector<at::Tensor> create_viewproj_forward(at::Tensor view_params, at::Tensor recp_tan_half_fov_x, int img_h, int img_w, float z_near, float z_far);
 std::vector<at::Tensor> create_viewproj_backward(at::Tensor view_matrix_grad, at::Tensor proj_matrix_grad, at::Tensor viewproj_matrix_grad, 
 	at::Tensor view_params, at::Tensor recp_tan_half_fov_x,int img_h, int img_w, float z_near, float z_far);
+std::vector<at::Tensor> frustum_culling_aabb_cuda(at::Tensor aabb_origin, at::Tensor aabb_ext, at::Tensor frustumplane);

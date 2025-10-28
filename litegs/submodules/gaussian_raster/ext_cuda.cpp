@@ -29,4 +29,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("compact_visible_params_forward", &compact_visible_params_forward);
 	m.def("compact_visible_params_backward", &compact_visible_params_backward);
 	m.def("adamUpdate", &adamUpdate);
+	m.def("frustum_culling_aabb_cuda", &frustum_culling_aabb_cuda);
 }

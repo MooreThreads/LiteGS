@@ -15,7 +15,10 @@ def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,fr
     if pp.cluster_size:
         if cluster_origin is None or cluster_extend is None:
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
-        visible_chunkid=scene.cluster.get_visible_cluster(cluster_origin,cluster_extend,frustumplane)
+        nvtx.range_push("fused culling")
+        visibility,visible_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb_cuda(cluster_origin,cluster_extend,frustumplane)
+        visible_chunkid=visible_chunkid[:visible_num]
+        nvtx.range_pop()
         nvtx.range_push("compact")
         if pp.cluster_size and pp.sparse_grad:#enable sparse gradient
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=utils.wrapper.CompactVisibleWithSparseGrad.apply(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)

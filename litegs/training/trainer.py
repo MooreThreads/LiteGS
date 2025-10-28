@@ -110,9 +110,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 proj_matrix=proj_matrix.cuda()
                 frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()/255.0
+                idx=idx.cuda()
                 if op.learnable_viewproj:
                     #fix view matrix
-                    view_param_vec=view_params(idx.cuda())
+                    view_param_vec=view_params(idx)
                     view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
                 nvtx.range_pop()
 

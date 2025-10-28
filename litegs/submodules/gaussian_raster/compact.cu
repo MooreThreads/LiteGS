@@ -596,3 +596,116 @@ std::vector<at::Tensor> create_viewproj_backward(
     // Return both gradients as a vector
     return {grad_view_params, grad_recp_tan_half_fov_x};
 }
+
+__global__ void frustum_culling_aabb_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> frustumplane,  // [N, 6, 4]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> aabb_origin,   // [3, M]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> aabb_ext,      // [3, M]
+    torch::PackedTensorAccessor32<bool, 1, torch::RestrictPtrTraits> visibility,           // [M]
+    torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_num,           // [M]
+    torch::PackedTensorAccessor32<signed long long, 1, torch::RestrictPtrTraits> visible_chunkid           // [M]
+) 
+{
+    __shared__ int visible_num_in_block;
+    if (threadIdx.x == 0)
+    {
+        visible_num_in_block = 0;
+    }
+    int m = blockIdx.x * blockDim.x + threadIdx.x;
+    bool global_visible = false;
+    
+
+    if (m < aabb_origin.size(1))
+    {
+        // Check all 6 frustum planes
+        for (int n = 0; n < frustumplane.size(0); n++)
+        {
+            bool is_visible = true;
+            for (int plane_idx = 0; plane_idx < 6; plane_idx++) {
+                // Get plane normal and distance
+                float plane_normal_x = frustumplane[n][plane_idx][0];
+                float plane_normal_y = frustumplane[n][plane_idx][1];
+                float plane_normal_z = frustumplane[n][plane_idx][2];
+                float plane_distance = frustumplane[n][plane_idx][3];
+
+                // Get AABB origin and extent
+                float origin_x = aabb_origin[0][m];
+                float origin_y = aabb_origin[1][m];
+                float origin_z = aabb_origin[2][m];
+
+                float ext_x = aabb_ext[0][m];
+                float ext_y = aabb_ext[1][m];
+                float ext_z = aabb_ext[2][m];
+
+                // Project origin to plane normal
+                float dist_origin = plane_normal_x * origin_x + plane_normal_y * origin_y + plane_normal_z * origin_z + plane_distance;
+
+                // Project extent to plane normal (using absolute values)
+                float dist_ext = fabsf(plane_normal_x) * ext_x + fabsf(plane_normal_y) * ext_y + fabsf(plane_normal_z) * ext_z;
+
+                // Push out the origin
+                float pushed_origin_dist = dist_origin + dist_ext;
+
+                // If completely outside any plane, it's not visible
+                is_visible &= (pushed_origin_dist >= 0);
+            }
+            global_visible |= is_visible;
+        }
+    }
+    visibility[m] = global_visible;
+    __syncthreads();
+
+    // reduce lane
+    unsigned warp_mask = __ballot_sync(0xffffffff, global_visible);
+    int lane_id = threadIdx.x & 0x1f;
+    int lane_offset = __popc(warp_mask & ((1u << lane_id) - 1u));
+    //reduce warp
+    int warp_offset = 0;
+    if (lane_id == 0)
+    {
+        warp_offset=atomicAdd(&visible_num_in_block, __popc(warp_mask));
+    }
+    warp_offset = __shfl_sync(0xffffffff, warp_offset, 0);
+    __syncthreads();
+    //reduce block
+    int block_offset = 0;
+    if (threadIdx.x == 0)
+    {
+        block_offset = atomicAdd(&visible_num[0], visible_num_in_block);
+    }
+    block_offset = __shfl_sync(0xffffffff, block_offset, 0);
+    if (global_visible)
+    {
+        visible_chunkid[lane_offset + warp_offset + block_offset] = m;
+    }
+}
+
+std::vector<at::Tensor> frustum_culling_aabb_cuda(at::Tensor aabb_origin,at::Tensor aabb_ext,at::Tensor frustumplane) 
+{
+    // Get dimensions
+    int N = frustumplane.size(0);
+    int M = aabb_origin.size(1);
+    
+    // Create output tensor
+    torch::Tensor visibility = torch::empty({M}, torch::dtype(torch::kBool).device(frustumplane.device()));
+    torch::Tensor visible_chunks_num = torch::zeros({ 1 }, torch::dtype(torch::kInt32).device(frustumplane.device()));
+    torch::Tensor visible_chunkid = torch::empty({ M }, torch::dtype(torch::kInt64).device(frustumplane.device()));
+    
+    // Launch kernel
+    frustum_culling_aabb_kernel<<<(M + 255) / 256, 256 >>>(
+        frustumplane.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        aabb_origin.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        aabb_ext.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
+        visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+        visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>()
+    );
+    
+    // Check for errors
+    CUDA_CHECK_ERRORS;
+
+
+    
+    // Return visibility tensor
+    return {visibility,visible_chunks_num,visible_chunkid };
+}

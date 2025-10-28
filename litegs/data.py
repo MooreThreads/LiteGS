@@ -179,6 +179,7 @@ class CameraFrameDataset(Dataset):
         self.cameras=cameras
         self.frames=frames
         self.downsample=downsample
+        self.idx_array=None
         
         if bDevice:
             for camera in cameras.values():
@@ -187,6 +188,7 @@ class CameraFrameDataset(Dataset):
                 frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
                 for key in frame.image.keys():
                     frame.image[key]=torch.tensor(frame.image[key]).cuda()
+            self.idx_array=torch.arange(0,len(frames)).cuda()
         
         #init frustumplanes
         self.frustumplanes=[]
@@ -226,6 +228,8 @@ class CameraFrameDataset(Dataset):
         ray_o=self.frames[idx].get_camera_center()
         ray_d=self.ray_d[idx]
         StatisticsHelperInst.cur_sample=self.frames[idx].name
+        if self.idx_array is not None:
+            idx=self.idx_array[idx]
         return view_matrix,proj_matrix,frustumplane,image,idx
     
     def get_norm(self)->tuple[float,float]:
