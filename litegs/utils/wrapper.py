@@ -594,6 +594,48 @@ class EighAndInverse2x2Matrix(BaseWrapper):
     _relative_error_threshold=1e-2
 
 
+class CreateViewProjFunc(torch.autograd.Function):
+    """
+    Create view-projection matrix from camera parameters.
+    
+    Args:
+        position (torch.Tensor): Camera position [N, 3]
+        orientation (torch.Tensor): Camera orientation quaternion [N, 4] 
+        fovy (float): Field of view in y direction
+        aspect (float): Aspect ratio
+        near (float): Near plane distance 
+        far (float): Far plane distance
+    
+    Returns:
+        torch.Tensor: View-projection matrix [N, 4, 4]
+    """
+    
+    @staticmethod
+    def forward(ctx, position: torch.Tensor, orientation: torch.Tensor,
+                fovy: float, aspect: float, near: float, far: float):
+        
+        # Save inputs for backward
+        ctx.save_for_backward(position, orientation)
+        ctx.params = (fovy, aspect, near, far)
+        
+        # Forward pass
+        view_proj = litegs_fused.create_viewproj_forward(
+            position, orientation, fovy, aspect, near, far)
+            
+        return view_proj
+        
+    @staticmethod 
+    def backward(ctx, grad_view_proj: torch.Tensor):
+        position, orientation = ctx.saved_tensors
+        fovy, aspect, near, far = ctx.params
+        
+        # Backward pass
+        grad_position, grad_orientation = litegs_fused.create_viewproj_backward(
+            grad_view_proj, position, orientation, fovy, aspect, near, far)
+            
+        # Return grads for all inputs (None for scalar params)
+        return grad_position, grad_orientation, None, None, None, None
+
 class Binning(BaseWrapper):
     @torch.no_grad()
     def __binning_script(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
@@ -700,8 +742,29 @@ class Binning(BaseWrapper):
     _fused=__binning_fused
     _script=__binning_script
 ###
-### compact params
+### PreProcess
 ###
+
+class CreateViewProj(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,view_params:torch.Tensor,proj_params:torch.Tensor,img_h:int,img_w:int,z_near:float,z_far:float)->list[torch.Tensor]:
+        view_matrix, proj_matrix, viewproj_matrix, frustumplane=litegs_fused.create_viewproj_forward(view_params,proj_params,img_h,img_w,z_near,z_far)
+        ctx.save_for_backward(view_params,proj_params)
+        ctx.img_h=img_h
+        ctx.img_w=img_w
+        ctx.z_near=z_near
+        ctx.z_far=z_far
+        return view_matrix, proj_matrix, viewproj_matrix, frustumplane
+    
+    @staticmethod
+    def backward(ctx,view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,frustumplane_grad):
+        img_h=ctx.img_h
+        img_w=ctx.img_w
+        z_near=ctx.z_near
+        z_far=ctx.z_far
+        view_params,proj_params=ctx.saved_tensors
+        view_params_grad,proj_params_grad=litegs_fused.create_viewproj_backward(view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,view_params,proj_params,img_h,img_w,z_near,z_far)
+        return view_params_grad,proj_params_grad,None,None,None,None
 
 class CompactVisibleWithSparseGrad(torch.autograd.Function):
     @staticmethod

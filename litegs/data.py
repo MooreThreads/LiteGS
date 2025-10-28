@@ -35,16 +35,16 @@ class PinHoleCameraInfo(CameraInfo):
         super(PinHoleCameraInfo,self).__init__(id,"PINHOLE",width,height)
         focal_length_x=parameters[0]
         focal_length_y=parameters[1]
-        focal_x=focal_length_x/(width*0.5)
-        focal_y=focal_length_y/(height*0.5)
-        self.focal_x=focal_x
-        self.focal_y=focal_y
-        self.proj_matrix=np.array([[focal_x,0,0,0],
-                  [0,focal_y,0,0],
+        recp_tan_half_fov_x=focal_length_x/(width*0.5)
+        recp_tan_half_fov_y=focal_length_y/(height*0.5)
+        self.recp_tan_half_fov_x=recp_tan_half_fov_x
+        self.recp_tan_half_fov_y=recp_tan_half_fov_y
+        self.proj_matrix=np.array([[recp_tan_half_fov_x,0,0,0],
+                  [0,recp_tan_half_fov_y,0,0],
                   [0,0,z_far/(z_far-z_near),-z_far*z_near/(z_far-z_near)],
                   [0,0,1,0]],dtype=np.float32).transpose()
-        self.inv_z_proj_matrix=np.array([[focal_x,0,0,0],
-                  [0,focal_y,0,0],
+        self.inv_z_proj_matrix=np.array([[recp_tan_half_fov_x,0,0,0],
+                  [0,recp_tan_half_fov_y,0,0],
                   [0,0,-z_near/(z_far-z_near),z_far*z_near/(z_far-z_near)],
                   [0,0,1,0]],dtype=np.float32).transpose()
         return

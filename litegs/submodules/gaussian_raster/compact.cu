@@ -14,6 +14,134 @@ namespace cg = cooperative_groups;
 #include"compact.h"
 
 
+__global__ void create_viewproj_forward_kernel(
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> view_params,    //[views_num,7] 
+    const torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> recp_tan_half_fov_x,    //[1]
+    int img_h, int img_w, float z_near, float z_far,
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[viewsnum,4,4] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> proj_matrix,    //[viewsnum,4,4] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> viewproj_matrix,    //[viewsnum,4,4] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> frustumplane    //[viewsnum,6,4] 
+)
+{
+    int view_id = blockIdx.x*blockDim.x+threadIdx.x;
+    if (view_id < view_params.size(0))
+    {
+        //init view_mat
+        float r = view_params[view_id][0];
+        float x = view_params[view_id][1];
+        float y = view_params[view_id][2];
+        float z = view_params[view_id][3];
+        float recp = rsqrtf(r * r + x * x + y * y + z * z);
+        r *= recp;
+        x *= recp;
+        y *= recp;
+        z *= recp;
+        float view[4][4] = {
+            {1 - 2 * (y * y + z * z),2 * (x * y + r * z),2 * (x * z - r * y),0},
+            {2 * (x * y - r * z),1 - 2 * (x * x + z * z),2 * (y * z + r * x),0},
+            {2 * (x * z + r * y),2 * (y * z - r * x),1 - 2 * (x * x + y * y),0},
+            {view_params[view_id][4],view_params[view_id][5],view_params[view_id][6],1.0f}
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            for (int j = 0; j < 4; j++)
+            {
+                view_matrix[view_id][i][j] = view[i][j];
+            }
+        }
+        //init proj_mat (transposed for row-vector convention)
+        float proj_00 = recp_tan_half_fov_x[0];
+        float proj_11 = proj_00 * img_w / img_h;
+        float proj[4][4] = {
+            {proj_00,0,0,0},
+            {0,proj_11,0,0},
+            {0,0,z_far / (z_far - z_near),1},  // Transposed: last row instead of last column
+            {0,0,-z_far * z_near / (z_far - z_near),0}  // Transposed: last column instead of last row
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            for (int j = 0; j < 4; j++)
+            {
+                proj_matrix[view_id][i][j] = proj[i][j];
+            }
+        }
+        //init viewproj
+        float viewproj[4][4] = {
+            {0,0,0,0},
+            {0,0,0,0},
+            {0,0,0,0},
+            {0,0,0,0}
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            for (int j = 0; j < 4; j++)
+            {
+                float temp = 0.0f;
+                for (int k = 0; k < 4; k++)
+                {
+                    temp += view[i][k] * proj[k][j];
+                }
+                viewproj[i][j] = temp;
+                viewproj_matrix[view_id][i][j] = viewproj[i][j];
+            }
+        }
+        //init planes
+        frustumplane[view_id][0][0] = viewproj[0][3] + viewproj[0][0];
+        frustumplane[view_id][0][1] = viewproj[1][3] + viewproj[1][0];
+        frustumplane[view_id][0][2] = viewproj[2][3] + viewproj[2][0];
+        frustumplane[view_id][0][3] = viewproj[3][3] + viewproj[3][0];
+
+        frustumplane[view_id][1][0] = viewproj[0][3] - viewproj[0][0];
+        frustumplane[view_id][1][1] = viewproj[1][3] - viewproj[1][0];
+        frustumplane[view_id][1][2] = viewproj[2][3] - viewproj[2][0];
+        frustumplane[view_id][1][3] = viewproj[3][3] - viewproj[3][0];
+
+        frustumplane[view_id][2][0] = viewproj[0][3] + viewproj[0][1];
+        frustumplane[view_id][2][1] = viewproj[1][3] + viewproj[1][1];
+        frustumplane[view_id][2][2] = viewproj[2][3] + viewproj[2][1];
+        frustumplane[view_id][2][3] = viewproj[3][3] + viewproj[3][1];
+
+        frustumplane[view_id][3][0] = viewproj[0][3] - viewproj[0][1];
+        frustumplane[view_id][3][1] = viewproj[1][3] - viewproj[1][1];
+        frustumplane[view_id][3][2] = viewproj[2][3] - viewproj[2][1];
+        frustumplane[view_id][3][3] = viewproj[3][3] - viewproj[3][1];
+
+        frustumplane[view_id][4][0] = viewproj[0][2];
+        frustumplane[view_id][4][1] = viewproj[1][2];
+        frustumplane[view_id][4][2] = viewproj[2][2];
+        frustumplane[view_id][4][3] = viewproj[3][2];
+
+        frustumplane[view_id][5][0] = viewproj[0][3] - viewproj[0][2];
+        frustumplane[view_id][5][1] = viewproj[1][3] - viewproj[1][2];
+        frustumplane[view_id][5][2] = viewproj[2][3] - viewproj[2][2];
+        frustumplane[view_id][5][3] = viewproj[3][3] - viewproj[3][2];
+        
+    }
+}
+
+std::vector<at::Tensor> create_viewproj_forward(at::Tensor view_params, at::Tensor recp_tan_half_fov_x,int img_h,int img_w,float z_near,float z_far)
+{
+    int views_num = view_params.size(0);
+    torch::Tensor view_matrix = torch::empty({ views_num,4,4 }, view_params.options());
+    torch::Tensor proj_matrix = torch::empty({ views_num,4,4 }, view_params.options());
+    torch::Tensor viewproj_matrix = torch::empty({ views_num,4,4 }, view_params.options());
+    torch::Tensor frustumplane = torch::empty({ views_num,6,4 }, view_params.options().requires_grad(false));
+    int blocks_num = std::ceil(views_num / 128.0f);
+    create_viewproj_forward_kernel<<<views_num,128>>>(
+        view_params.packed_accessor32< float, 2, torch::RestrictPtrTraits>(),
+        recp_tan_half_fov_x.packed_accessor32< float, 1, torch::RestrictPtrTraits>(),
+        img_h, img_w, z_near, z_far,
+        view_matrix.packed_accessor32< float, 3, torch::RestrictPtrTraits>(),
+        proj_matrix.packed_accessor32< float, 3, torch::RestrictPtrTraits>(),
+        viewproj_matrix.packed_accessor32< float, 3, torch::RestrictPtrTraits>(),
+        frustumplane.packed_accessor32< float, 3, torch::RestrictPtrTraits>()
+    );
+    return { view_matrix, proj_matrix, viewproj_matrix, frustumplane };
+}
+
+
+
 __global__ void compact_visible_params_kernel_forward(
     const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunkid,    //[chunk_num] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[4,chunk_num,chunk_size] 
@@ -292,4 +420,179 @@ void adamUpdate(torch::Tensor &param,torch::Tensor &param_grad,torch::Tensor &ex
             lr, b1, b2, eps);
     }
     return;
+}
+
+__global__ void create_viewproj_backward_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix_grad,    //[viewsnum,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> proj_matrix_grad,    //[viewsnum,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> viewproj_matrix_grad,    //[viewsnum,4,4]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> view_params,    //[views_num,7]
+    const torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> recp_tan_half_fov_x,    //[1]
+    int img_h, int img_w, float z_near, float z_far,
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_view_params,    //[views_num,7]
+    torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> grad_recp_tan_half_fov_x    //[1]
+)
+{
+    int view_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (view_id < view_params.size(0))
+    {
+        float r = view_params[view_id][0];
+        float x = view_params[view_id][1];
+        float y = view_params[view_id][2];
+        float z = view_params[view_id][3];
+        float recp = rsqrtf(r * r + x * x + y * y + z * z);
+        r *= recp;
+        x *= recp;
+        y *= recp;
+        z *= recp;
+        
+        // Compute view matrix elements (needed for viewproj gradient computation)
+        float view[4][4] = {
+            {1 - 2 * (y * y + z * z),2 * (x * y + r * z),2 * (x * z - r * y),0},
+            {2 * (x * y - r * z),1 - 2 * (x * x + z * z),2 * (y * z + r * x),0},
+            {2 * (x * z + r * y),2 * (y * z - r * x),1 - 2 * (x * x + y * y),0},
+            {view_params[view_id][4],view_params[view_id][5],view_params[view_id][6],1.0f}
+        };
+
+        // Compute proj matrix elements
+        float proj_00 = recp_tan_half_fov_x[0];
+        float proj_11 = proj_00 * img_w / img_h;
+        float proj[4][4] = {
+            {proj_00,0,0,0},
+            {0,proj_11,0,0},
+            {0,0,z_far / (z_far - z_near),1},
+            {0,0,-z_far * z_near / (z_far - z_near),0}
+        };
+
+        // Initialize local gradients for view_matrix and proj_matrix
+        float local_view_grad[4][4] = {{0}};
+        float local_proj_grad[4][4] = {{0}};
+        
+        // Chain rule: dL/d(view) = dL/d(viewproj) * d(viewproj)/d(view) = dL/d(viewproj) * proj^T
+        // Chain rule: dL/d(proj) = dL/d(viewproj) * d(viewproj)/d(proj) = view^T * dL/d(viewproj)
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                float viewproj_grad = viewproj_matrix_grad[view_id][i][j];
+                for (int k = 0; k < 4; k++) {
+                    // d(viewproj[i][j])/d(view[i][k]) = proj[k][j]
+                    local_view_grad[i][k] += viewproj_grad * proj[k][j];
+                    
+                    // d(viewproj[i][j])/d(proj[k][j]) = view[i][k]
+                    local_proj_grad[k][j] += viewproj_grad * view[i][k];
+                }
+            }
+        }
+        
+        // Accumulate local gradients with the passed-in gradients
+        float accumulated_view_grad[4][4];
+        float accumulated_proj_grad[4][4];
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                accumulated_view_grad[i][j] = view_matrix_grad[view_id][i][j] + local_view_grad[i][j];
+                accumulated_proj_grad[i][j] = proj_matrix_grad[view_id][i][j] + local_proj_grad[i][j];
+            }
+        }
+
+        // Initialize gradients for quaternion parameters
+        float grad_r = 0, grad_x = 0, grad_y = 0, grad_z = 0;
+        
+        // Direct gradient computation from view matrix elements (including chain rule contributions)
+        // Row 0
+        float grad = accumulated_view_grad[0][0]; // (1 - 2y² - 2z²)
+        grad_y += grad * (-4*y);
+        grad_z += grad * (-4*z);
+
+        grad = accumulated_view_grad[0][1]; // 2(xy + rz)
+        grad_x += grad * (2*y);
+        grad_y += grad * (2*x);
+        grad_r += grad * (2*z);
+        grad_z += grad * (2*r);
+
+        grad = accumulated_view_grad[0][2]; // 2(xz - ry)
+        grad_x += grad * (2*z);
+        grad_z += grad * (2*x);
+        grad_r += grad * (-2*y);
+        grad_y += grad * (-2*r);
+
+        // Row 1
+        grad = accumulated_view_grad[1][0]; // 2(xy - rz)
+        grad_x += grad * (2*y);
+        grad_y += grad * (2*x);
+        grad_r += grad * (-2*z);
+        grad_z += grad * (-2*r);
+
+        grad = accumulated_view_grad[1][1]; // (1 - 2x² - 2z²)
+        grad_x += grad * (-4*x);
+        grad_z += grad * (-4*z);
+
+        grad = accumulated_view_grad[1][2]; // 2(yz + rx)
+        grad_y += grad * (2*z);
+        grad_z += grad * (2*y);
+        grad_r += grad * (2*x);
+        grad_x += grad * (2*r);
+
+        // Row 2
+        grad = accumulated_view_grad[2][0]; // 2(xz + ry)
+        grad_x += grad * (2*z);
+        grad_z += grad * (2*x);
+        grad_r += grad * (2*y);
+        grad_y += grad * (2*r);
+
+        grad = accumulated_view_grad[2][1]; // 2(yz - rx)
+        grad_y += grad * (2*z);
+        grad_z += grad * (2*y);
+        grad_r += grad * (-2*x);
+        grad_x += grad * (-2*r);
+
+        grad = accumulated_view_grad[2][2]; // (1 - 2x² - 2y²)
+        grad_x += grad * (-4*x);
+        grad_y += grad * (-4*y);
+
+        // Translation gradients (grad_view_params[:, 4:])
+        grad_view_params[view_id][4] = accumulated_view_grad[3][0];
+        grad_view_params[view_id][5] = accumulated_view_grad[3][1];
+        grad_view_params[view_id][6] = accumulated_view_grad[3][2];
+
+        // Compute recp_tan_half_fov_x gradient
+        grad_recp_tan_half_fov_x[0] += accumulated_proj_grad[0][0]; // grad w.r.t. proj_00
+        grad_recp_tan_half_fov_x[0] += accumulated_proj_grad[1][1] * (img_w / img_h); // grad w.r.t. proj_11
+
+        // Apply quaternion normalization and unit constraint
+        float norm = sqrtf(r*r + x*x + y*y + z*z);
+        float dot = (r * grad_r + x * grad_x + y * grad_y + z * grad_z) / (norm * norm);
+        
+        grad_view_params[view_id][0] = grad_r / norm - r * dot;
+        grad_view_params[view_id][1] = grad_x / norm - x * dot;
+        grad_view_params[view_id][2] = grad_y / norm - y * dot;
+        grad_view_params[view_id][3] = grad_z / norm - z * dot;
+    }
+}
+
+std::vector<at::Tensor> create_viewproj_backward(
+    at::Tensor view_matrix_grad,
+    at::Tensor proj_matrix_grad, 
+    at::Tensor viewproj_matrix_grad,
+    at::Tensor view_params,
+    at::Tensor recp_tan_half_fov_x,
+    int img_h, int img_w,
+    float z_near, float z_far)
+{
+    int views_num = view_params.size(0);
+    torch::Tensor grad_view_params = torch::zeros_like(view_params);
+    torch::Tensor grad_recp_tan_half_fov_x = torch::zeros_like(recp_tan_half_fov_x);
+
+    int blocks_num = std::ceil(views_num / 128.0f);
+    create_viewproj_backward_kernel<<<blocks_num, 128>>>(
+        view_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        proj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        viewproj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        view_params.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        recp_tan_half_fov_x.packed_accessor32<float, 1, torch::RestrictPtrTraits>(),
+        img_h, img_w, z_near, z_far,
+        grad_view_params.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        grad_recp_tan_half_fov_x.packed_accessor32<float, 1, torch::RestrictPtrTraits>()
+    );
+    CUDA_CHECK_ERRORS;
+    // Return both gradients as a vector
+    return {grad_view_params, grad_recp_tan_half_fov_x};
 }

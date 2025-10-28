@@ -81,9 +81,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         view_params=[np.concatenate([frame.qvec,frame.tvec])[None,:] for frame in trainingset.frames]
         view_params=torch.tensor(np.concatenate(view_params),dtype=torch.float32,device='cuda')
         view_params=torch.nn.Embedding(view_params.shape[0],view_params.shape[1],_weight=view_params,sparse=True)
-        camera_focal_params=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].focal_x,dtype=torch.float32,device='cuda'))#todo fix multi cameras
+        proj_params=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].recp_tan_half_fov_x,dtype=torch.float32,device='cuda').unsqueeze(0))#todo fix multi cameras
         view_opt=torch.optim.SparseAdam(view_params.parameters(),lr=1e-4)
-        proj_opt=torch.optim.Adam([camera_focal_params,],lr=1e-5)
+        proj_opt=torch.optim.Adam([proj_params,],lr=1e-5)
 
     #init
     total_epoch=int(op.iterations/len(trainingset))
@@ -105,6 +105,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         with StatisticsHelperInst.try_start(epoch):
             for view_matrix,proj_matrix,frustumplane,gt_image,idx in train_loader:
+                nvtx.range_push("Iter Init")
                 view_matrix=view_matrix.cuda()
                 proj_matrix=proj_matrix.cuda()
                 frustumplane=frustumplane.cuda()
@@ -112,21 +113,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 if op.learnable_viewproj:
                     #fix view matrix
                     view_param_vec=view_params(idx.cuda())
-                    qvec=torch.nn.functional.normalize(view_param_vec[:,:4],dim=1)
-                    tvec=view_param_vec[:,4:]
-                    rot_matrix=utils.wrapper.CreateTransformMatrix.call_fused(torch.ones((3,qvec.shape[0]),device='cuda'),qvec.transpose(0,1).contiguous())
-                    view_matrix[:,:3, :3] = rot_matrix.permute(2,0,1)
-                    view_matrix[:,3, :3] = tvec
-
-                    #fix proj matrix
-                    focal_x=camera_focal_params
-                    focal_y=camera_focal_params*gt_image.shape[3]/gt_image.shape[2]
-                    proj_matrix[:,0,0]=focal_x
-                    proj_matrix[:,1,1]=focal_y
+                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                nvtx.range_pop()
 
                 #cluster culling
-                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
-                                                                                                               xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
+                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                 img,transmitance,depth,normal,primitive_visible=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
                                                             actived_sh_degree,gt_image.shape[2:],pp)
                 
@@ -169,16 +160,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
                         if name=="Trainingset" and op.learnable_viewproj:
                             view_param_vec=view_params(idx.cuda())
-                            qvec=torch.nn.functional.normalize(view_param_vec[:,:4],dim=1)
-                            tvec=view_param_vec[:,4:]
-                            rot_matrix=utils.wrapper.CreateTransformMatrix.call_fused(torch.ones((3,qvec.shape[0]),device='cuda'),qvec.transpose(0,1).contiguous())
-                            view_matrix[:,:3, :3] = rot_matrix.permute(2,0,1)
-                            view_matrix[:,3, :3] = tvec
+                            view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
-                            focal_x=camera_focal_params
-                            focal_y=camera_focal_params*gt_image.shape[3]/gt_image.shape[2]
-                            proj_matrix[:,0,0]=focal_x
-                            proj_matrix[:,1,1]=focal_y
 
                         _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(_cluster_origin,_cluster_extend,frustumplane,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
