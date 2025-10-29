@@ -72,8 +72,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         start_epoch=0
     else:
         xyz,scale,rot,sh_0,sh_rest,opacity,start_epoch,opt,schedular=io_manager.load_checkpoint(start_checkpoint)
-        if pp.cluster_size:
-            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
+    if pp.cluster_size:
+        cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     actived_sh_degree=0
 
     #learnable view matrix

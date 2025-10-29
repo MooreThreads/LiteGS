@@ -671,9 +671,10 @@ __global__ void frustum_culling_aabb_kernel(
     int block_offset = 0;
     if (threadIdx.x == 0)
     {
-        block_offset = atomicAdd(&visible_num[0], visible_num_in_block);
+        visible_num_in_block = atomicAdd(&visible_num[0], visible_num_in_block);
     }
-    block_offset = __shfl_sync(0xffffffff, block_offset, 0);
+    __syncthreads();
+    block_offset = visible_num_in_block;
     if (global_visible)
     {
         visible_chunkid[lane_offset + warp_offset + block_offset] = m;
