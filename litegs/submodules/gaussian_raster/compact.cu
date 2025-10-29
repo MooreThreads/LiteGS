@@ -140,195 +140,182 @@ std::vector<at::Tensor> create_viewproj_forward(at::Tensor view_params, at::Tens
     return { view_matrix, proj_matrix, viewproj_matrix, frustumplane };
 }
 
-
-
-__global__ void compact_visible_params_kernel_forward(
-    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunkid,    //[chunk_num] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[4,chunk_num,chunk_size] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunk_num,chunk_size] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[4,chunk_num,chunk_size] 
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunk_num,chunk_size] 
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunk_num,chunk_size] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[1,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_position,    //[4,p] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_scale,    //[3,p] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_rotation,    //[4,p] 
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> compacted_sh_base,    //[1,3,p] 
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> compacted_sh_rest,    //[?,3,p] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_opacity    //[1,p] 
+__global__ void create_viewproj_backward_kernel(
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix_grad,    //[viewsnum,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> proj_matrix_grad,    //[viewsnum,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> viewproj_matrix_grad,    //[viewsnum,4,4]
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> view_params,    //[views_num,7]
+    const torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> recp_tan_half_fov_x,    //[1]
+    int img_h, int img_w, float z_near, float z_far,
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_view_params,    //[views_num,7]
+    torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> grad_recp_tan_half_fov_x    //[1]
 )
 {
-    if (blockIdx.x < visible_chunkid.size(0))
+    int view_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (view_id < view_params.size(0))
     {
-        int chunksize = position.size(2);
-        int chunkid = visible_chunkid[blockIdx.x];
-        for (int index = threadIdx.x; index < chunksize; index += blockDim.x)
-        {
-            //copy
-            compacted_position[0][blockIdx.x][index] = position[0][chunkid][index];
-            compacted_position[1][blockIdx.x][index] = position[1][chunkid][index];
-            compacted_position[2][blockIdx.x][index] = position[2][chunkid][index];
-            compacted_scale[0][blockIdx.x][index] = scale[0][chunkid][index];
-            compacted_scale[1][blockIdx.x][index] = scale[1][chunkid][index];
-            compacted_scale[2][blockIdx.x][index] = scale[2][chunkid][index];
-            compacted_rotation[0][blockIdx.x][index] = rotation[0][chunkid][index];
-            compacted_rotation[1][blockIdx.x][index] = rotation[1][chunkid][index];
-            compacted_rotation[2][blockIdx.x][index] = rotation[2][chunkid][index];
-            compacted_rotation[3][blockIdx.x][index] = rotation[3][chunkid][index];
-            compacted_sh_base[0][0][blockIdx.x][index] = sh_base[0][0][chunkid][index];
-            compacted_sh_base[0][1][blockIdx.x][index] = sh_base[0][1][chunkid][index];
-            compacted_sh_base[0][2][blockIdx.x][index] = sh_base[0][2][chunkid][index];
-            for (int i = 0; i < sh_rest.size(0); i++)
-            {
-                compacted_sh_rest[i][0][blockIdx.x][index] = sh_rest[i][0][chunkid][index];
-                compacted_sh_rest[i][1][blockIdx.x][index] = sh_rest[i][1][chunkid][index];
-                compacted_sh_rest[i][2][blockIdx.x][index] = sh_rest[i][2][chunkid][index];
+        float r = view_params[view_id][0];
+        float x = view_params[view_id][1];
+        float y = view_params[view_id][2];
+        float z = view_params[view_id][3];
+        float recp = rsqrtf(r * r + x * x + y * y + z * z);
+        r *= recp;
+        x *= recp;
+        y *= recp;
+        z *= recp;
+
+        // Compute view matrix elements (needed for viewproj gradient computation)
+        float view[4][4] = {
+            {1 - 2 * (y * y + z * z),2 * (x * y + r * z),2 * (x * z - r * y),0},
+            {2 * (x * y - r * z),1 - 2 * (x * x + z * z),2 * (y * z + r * x),0},
+            {2 * (x * z + r * y),2 * (y * z - r * x),1 - 2 * (x * x + y * y),0},
+            {view_params[view_id][4],view_params[view_id][5],view_params[view_id][6],1.0f}
+        };
+
+        // Compute proj matrix elements
+        float proj_00 = recp_tan_half_fov_x[0];
+        float proj_11 = proj_00 * img_w / img_h;
+        float proj[4][4] = {
+            {proj_00,0,0,0},
+            {0,proj_11,0,0},
+            {0,0,z_far / (z_far - z_near),1},
+            {0,0,-z_far * z_near / (z_far - z_near),0}
+        };
+
+        // Initialize local gradients for view_matrix and proj_matrix
+        float local_view_grad[4][4] = { {0} };
+        float local_proj_grad[4][4] = { {0} };
+
+        // Chain rule: dL/d(view) = dL/d(viewproj) * d(viewproj)/d(view) = dL/d(viewproj) * proj^T
+        // Chain rule: dL/d(proj) = dL/d(viewproj) * d(viewproj)/d(proj) = view^T * dL/d(viewproj)
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                float viewproj_grad = viewproj_matrix_grad[view_id][i][j];
+                for (int k = 0; k < 4; k++) {
+                    // d(viewproj[i][j])/d(view[i][k]) = proj[k][j]
+                    local_view_grad[i][k] += viewproj_grad * proj[k][j];
+
+                    // d(viewproj[i][j])/d(proj[k][j]) = view[i][k]
+                    local_proj_grad[k][j] += viewproj_grad * view[i][k];
+                }
             }
-            compacted_opacity[0][blockIdx.x][index] = opacity[0][chunkid][index];
         }
+
+        // Accumulate local gradients with the passed-in gradients
+        float accumulated_view_grad[4][4];
+        float accumulated_proj_grad[4][4];
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                accumulated_view_grad[i][j] = view_matrix_grad[view_id][i][j] + local_view_grad[i][j];
+                accumulated_proj_grad[i][j] = proj_matrix_grad[view_id][i][j] + local_proj_grad[i][j];
+            }
+        }
+
+        // Initialize gradients for quaternion parameters
+        float grad_r = 0, grad_x = 0, grad_y = 0, grad_z = 0;
+
+        // Direct gradient computation from view matrix elements (including chain rule contributions)
+        // Row 0
+        float grad = accumulated_view_grad[0][0]; // (1 - 2y² - 2z²)
+        grad_y += grad * (-4 * y);
+        grad_z += grad * (-4 * z);
+
+        grad = accumulated_view_grad[0][1]; // 2(xy + rz)
+        grad_x += grad * (2 * y);
+        grad_y += grad * (2 * x);
+        grad_r += grad * (2 * z);
+        grad_z += grad * (2 * r);
+
+        grad = accumulated_view_grad[0][2]; // 2(xz - ry)
+        grad_x += grad * (2 * z);
+        grad_z += grad * (2 * x);
+        grad_r += grad * (-2 * y);
+        grad_y += grad * (-2 * r);
+
+        // Row 1
+        grad = accumulated_view_grad[1][0]; // 2(xy - rz)
+        grad_x += grad * (2 * y);
+        grad_y += grad * (2 * x);
+        grad_r += grad * (-2 * z);
+        grad_z += grad * (-2 * r);
+
+        grad = accumulated_view_grad[1][1]; // (1 - 2x² - 2z²)
+        grad_x += grad * (-4 * x);
+        grad_z += grad * (-4 * z);
+
+        grad = accumulated_view_grad[1][2]; // 2(yz + rx)
+        grad_y += grad * (2 * z);
+        grad_z += grad * (2 * y);
+        grad_r += grad * (2 * x);
+        grad_x += grad * (2 * r);
+
+        // Row 2
+        grad = accumulated_view_grad[2][0]; // 2(xz + ry)
+        grad_x += grad * (2 * z);
+        grad_z += grad * (2 * x);
+        grad_r += grad * (2 * y);
+        grad_y += grad * (2 * r);
+
+        grad = accumulated_view_grad[2][1]; // 2(yz - rx)
+        grad_y += grad * (2 * z);
+        grad_z += grad * (2 * y);
+        grad_r += grad * (-2 * x);
+        grad_x += grad * (-2 * r);
+
+        grad = accumulated_view_grad[2][2]; // (1 - 2x² - 2y²)
+        grad_x += grad * (-4 * x);
+        grad_y += grad * (-4 * y);
+
+        // Translation gradients (grad_view_params[:, 4:])
+        grad_view_params[view_id][4] = accumulated_view_grad[3][0];
+        grad_view_params[view_id][5] = accumulated_view_grad[3][1];
+        grad_view_params[view_id][6] = accumulated_view_grad[3][2];
+
+        // Compute recp_tan_half_fov_x gradient
+        grad_recp_tan_half_fov_x[0] += accumulated_proj_grad[0][0]; // grad w.r.t. proj_00
+        grad_recp_tan_half_fov_x[0] += accumulated_proj_grad[1][1] * (img_w / img_h); // grad w.r.t. proj_11
+
+        // Apply quaternion normalization and unit constraint
+        float norm = sqrtf(r * r + x * x + y * y + z * z);
+        float dot = (r * grad_r + x * grad_x + y * grad_y + z * grad_z) / (norm * norm);
+
+        grad_view_params[view_id][0] = grad_r / norm - r * dot;
+        grad_view_params[view_id][1] = grad_x / norm - x * dot;
+        grad_view_params[view_id][2] = grad_y / norm - y * dot;
+        grad_view_params[view_id][3] = grad_z / norm - z * dot;
     }
 }
 
-
-std::vector<at::Tensor> compact_visible_params_forward(at::Tensor visible_chunkid, at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity)
+std::vector<at::Tensor> create_viewproj_backward(
+    at::Tensor view_matrix_grad,
+    at::Tensor proj_matrix_grad,
+    at::Tensor viewproj_matrix_grad,
+    at::Tensor view_params,
+    at::Tensor recp_tan_half_fov_x,
+    int img_h, int img_w,
+    float z_near, float z_far)
 {
-    int64_t visible_chunknum = visible_chunkid.size(0);
-    int64_t chunksize = position.size(2);
+    int views_num = view_params.size(0);
+    torch::Tensor grad_view_params = torch::zeros_like(view_params);
+    torch::Tensor grad_recp_tan_half_fov_x = torch::zeros_like(recp_tan_half_fov_x);
 
-    auto tensor_shape = position.sizes();
-    at::Tensor compacted_position = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, position.options());
-    tensor_shape = scale.sizes();
-    at::Tensor compacted_scale = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, scale.options());
-    tensor_shape = rotation.sizes();
-    at::Tensor compacted_rotation = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, rotation.options());
-
-    tensor_shape = sh_base.sizes();
-    at::Tensor compacted_sh_base = torch::empty({ tensor_shape[0],tensor_shape[1], visible_chunknum, chunksize }, sh_base.options());
-    tensor_shape = sh_rest.sizes();
-    at::Tensor compacted_sh_rest = torch::empty({ tensor_shape[0],tensor_shape[1], visible_chunknum, chunksize }, sh_rest.options());
-
-    tensor_shape = opacity.sizes();
-    at::Tensor compacted_opacity = torch::empty({ tensor_shape[0], visible_chunknum, chunksize }, opacity.options());
-
-    //dim3 Block3d(32, 1, 1);
-    compact_visible_params_kernel_forward<<<visible_chunknum, 128 >>>(
-        visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
-        position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        compacted_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        compacted_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
-    );
-    CUDA_CHECK_ERRORS;
-    return { compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity };
-}
-
-
-__global__ void compact_visible_params_kernel_backward(
-    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> reverse_map,     //[visible_chunk_num]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_position_grad,    //[4,P] 
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_scale_grad,    //[3,P] 
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_rotation_grad,    //[4,P] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_base_grad,    //[1,3,P] 
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_sh_rest_grad,    //[?,3,P] 
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> compacted_opacity_grad,    //[1,P] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position_grad,    //[4,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale_grad,    //[3,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation_grad,    //[4,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base_grad,    //[1,3,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest_grad,    //[?,3,chunk_num,chunk_size] 
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity_grad    //[1,chunk_num,chunk_size] 
-)
-{
-    //assert blockDim.x==chunksize
-
-    if (blockIdx.x<reverse_map.size(0))
-    {
-        int chunk_index = reverse_map[blockIdx.x];
-        int chunk_size = position_grad.size(2);
-        int offset = blockIdx.x * chunk_size;
-
-        //copy
-        for (int index = threadIdx.x; index < chunk_size; index += blockDim.x)
-        {
-            position_grad[0][chunk_index][index] = compacted_position_grad[0][offset+index];
-            position_grad[1][chunk_index][index] = compacted_position_grad[1][offset+index];
-            position_grad[2][chunk_index][index] = compacted_position_grad[2][offset+index];
-
-            scale_grad[0][chunk_index][index] = compacted_scale_grad[0][offset+index];
-            scale_grad[1][chunk_index][index] = compacted_scale_grad[1][offset+index];
-            scale_grad[2][chunk_index][index] = compacted_scale_grad[2][offset+index];
-
-            rotation_grad[0][chunk_index][index] = compacted_rotation_grad[0][offset+index];
-            rotation_grad[1][chunk_index][index] = compacted_rotation_grad[1][offset+index];
-            rotation_grad[2][chunk_index][index] = compacted_rotation_grad[2][offset+index];
-            rotation_grad[3][chunk_index][index] = compacted_rotation_grad[3][offset+index];
-
-            sh_base_grad[0][0][chunk_index][index] = compacted_sh_base_grad[0][0][offset+index];
-            sh_base_grad[0][1][chunk_index][index] = compacted_sh_base_grad[0][1][offset+index];
-            sh_base_grad[0][2][chunk_index][index] = compacted_sh_base_grad[0][2][offset+index];
-
-            for (int i = 0; i < compacted_sh_rest_grad.size(0); i++)
-            {
-                sh_rest_grad[i][0][chunk_index][index] = compacted_sh_rest_grad[i][0][offset+index];
-                sh_rest_grad[i][1][chunk_index][index] = compacted_sh_rest_grad[i][1][offset+index];
-                sh_rest_grad[i][2][chunk_index][index] = compacted_sh_rest_grad[i][2][offset+index];
-            }
-
-            opacity_grad[0][chunk_index][index] = compacted_opacity_grad[0][offset+index];
-        }
-    }
-}
-
-std::vector<at::Tensor> compact_visible_params_backward(int64_t chunk_num, int64_t chunk_size, at::Tensor reverse_map, 
-    at::Tensor compacted_position_grad, at::Tensor compacted_scale_grad, at::Tensor compacted_rotation_grad, 
-    at::Tensor compacted_sh_base_grad, at::Tensor compacted_sh_rest_grad, at::Tensor compacted_opacity_grad)
-{
-
-    auto tensor_shape = compacted_position_grad.sizes();
-    at::Tensor position_grad = torch::zeros({ tensor_shape[0], chunk_num,chunk_size }, compacted_position_grad.options());
-    
-    tensor_shape = compacted_scale_grad.sizes();
-    at::Tensor scale_grad = torch::zeros({  tensor_shape[0],chunk_num,chunk_size }, compacted_scale_grad.options());
-
-    tensor_shape = compacted_rotation_grad.sizes();
-    at::Tensor rotation_grad = torch::zeros({  tensor_shape[0],chunk_num,chunk_size }, compacted_rotation_grad.options());
-
-    tensor_shape = compacted_sh_base_grad.sizes();
-    at::Tensor sh_base_grad = torch::zeros({  tensor_shape[0],tensor_shape[1],chunk_num,chunk_size }, compacted_sh_base_grad.options());
-
-    tensor_shape = compacted_sh_rest_grad.sizes();
-    at::Tensor sh_rest_grad = torch::zeros({  tensor_shape[0],tensor_shape[1],chunk_num,chunk_size }, compacted_sh_rest_grad.options());
-
-    tensor_shape = compacted_opacity_grad.sizes();
-    at::Tensor opacity_grad = torch::zeros({  tensor_shape[0],chunk_num,chunk_size }, compacted_opacity_grad.options());
-
-    int visible_chunknum = compacted_position_grad.size(1) / chunk_size;
-    compact_visible_params_kernel_backward<<<visible_chunknum,256>>>(
-        reverse_map.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
-        compacted_position_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        compacted_scale_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        compacted_rotation_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        compacted_sh_base_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_sh_rest_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        compacted_opacity_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        position_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        scale_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        rotation_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        sh_base_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        sh_rest_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
+    int blocks_num = std::ceil(views_num / 128.0f);
+    create_viewproj_backward_kernel << <blocks_num, 128 >> > (
+        view_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        proj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        viewproj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        view_params.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        recp_tan_half_fov_x.packed_accessor32<float, 1, torch::RestrictPtrTraits>(),
+        img_h, img_w, z_near, z_far,
+        grad_view_params.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        grad_recp_tan_half_fov_x.packed_accessor32<float, 1, torch::RestrictPtrTraits>()
         );
     CUDA_CHECK_ERRORS;
-    return { position_grad,scale_grad,rotation_grad,sh_base_grad,sh_rest_grad,opacity_grad };
+    // Return both gradients as a vector
+    return { grad_view_params, grad_recp_tan_half_fov_x };
 }
+
+
 
 __global__ void sparse_chunk_adam_kernel(
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> param,     //
@@ -420,181 +407,6 @@ void adamUpdate(torch::Tensor &param,torch::Tensor &param_grad,torch::Tensor &ex
             lr, b1, b2, eps);
     }
     return;
-}
-
-__global__ void create_viewproj_backward_kernel(
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix_grad,    //[viewsnum,4,4]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> proj_matrix_grad,    //[viewsnum,4,4]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> viewproj_matrix_grad,    //[viewsnum,4,4]
-    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> view_params,    //[views_num,7]
-    const torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> recp_tan_half_fov_x,    //[1]
-    int img_h, int img_w, float z_near, float z_far,
-    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_view_params,    //[views_num,7]
-    torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> grad_recp_tan_half_fov_x    //[1]
-)
-{
-    int view_id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (view_id < view_params.size(0))
-    {
-        float r = view_params[view_id][0];
-        float x = view_params[view_id][1];
-        float y = view_params[view_id][2];
-        float z = view_params[view_id][3];
-        float recp = rsqrtf(r * r + x * x + y * y + z * z);
-        r *= recp;
-        x *= recp;
-        y *= recp;
-        z *= recp;
-        
-        // Compute view matrix elements (needed for viewproj gradient computation)
-        float view[4][4] = {
-            {1 - 2 * (y * y + z * z),2 * (x * y + r * z),2 * (x * z - r * y),0},
-            {2 * (x * y - r * z),1 - 2 * (x * x + z * z),2 * (y * z + r * x),0},
-            {2 * (x * z + r * y),2 * (y * z - r * x),1 - 2 * (x * x + y * y),0},
-            {view_params[view_id][4],view_params[view_id][5],view_params[view_id][6],1.0f}
-        };
-
-        // Compute proj matrix elements
-        float proj_00 = recp_tan_half_fov_x[0];
-        float proj_11 = proj_00 * img_w / img_h;
-        float proj[4][4] = {
-            {proj_00,0,0,0},
-            {0,proj_11,0,0},
-            {0,0,z_far / (z_far - z_near),1},
-            {0,0,-z_far * z_near / (z_far - z_near),0}
-        };
-
-        // Initialize local gradients for view_matrix and proj_matrix
-        float local_view_grad[4][4] = {{0}};
-        float local_proj_grad[4][4] = {{0}};
-        
-        // Chain rule: dL/d(view) = dL/d(viewproj) * d(viewproj)/d(view) = dL/d(viewproj) * proj^T
-        // Chain rule: dL/d(proj) = dL/d(viewproj) * d(viewproj)/d(proj) = view^T * dL/d(viewproj)
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                float viewproj_grad = viewproj_matrix_grad[view_id][i][j];
-                for (int k = 0; k < 4; k++) {
-                    // d(viewproj[i][j])/d(view[i][k]) = proj[k][j]
-                    local_view_grad[i][k] += viewproj_grad * proj[k][j];
-                    
-                    // d(viewproj[i][j])/d(proj[k][j]) = view[i][k]
-                    local_proj_grad[k][j] += viewproj_grad * view[i][k];
-                }
-            }
-        }
-        
-        // Accumulate local gradients with the passed-in gradients
-        float accumulated_view_grad[4][4];
-        float accumulated_proj_grad[4][4];
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                accumulated_view_grad[i][j] = view_matrix_grad[view_id][i][j] + local_view_grad[i][j];
-                accumulated_proj_grad[i][j] = proj_matrix_grad[view_id][i][j] + local_proj_grad[i][j];
-            }
-        }
-
-        // Initialize gradients for quaternion parameters
-        float grad_r = 0, grad_x = 0, grad_y = 0, grad_z = 0;
-        
-        // Direct gradient computation from view matrix elements (including chain rule contributions)
-        // Row 0
-        float grad = accumulated_view_grad[0][0]; // (1 - 2y² - 2z²)
-        grad_y += grad * (-4*y);
-        grad_z += grad * (-4*z);
-
-        grad = accumulated_view_grad[0][1]; // 2(xy + rz)
-        grad_x += grad * (2*y);
-        grad_y += grad * (2*x);
-        grad_r += grad * (2*z);
-        grad_z += grad * (2*r);
-
-        grad = accumulated_view_grad[0][2]; // 2(xz - ry)
-        grad_x += grad * (2*z);
-        grad_z += grad * (2*x);
-        grad_r += grad * (-2*y);
-        grad_y += grad * (-2*r);
-
-        // Row 1
-        grad = accumulated_view_grad[1][0]; // 2(xy - rz)
-        grad_x += grad * (2*y);
-        grad_y += grad * (2*x);
-        grad_r += grad * (-2*z);
-        grad_z += grad * (-2*r);
-
-        grad = accumulated_view_grad[1][1]; // (1 - 2x² - 2z²)
-        grad_x += grad * (-4*x);
-        grad_z += grad * (-4*z);
-
-        grad = accumulated_view_grad[1][2]; // 2(yz + rx)
-        grad_y += grad * (2*z);
-        grad_z += grad * (2*y);
-        grad_r += grad * (2*x);
-        grad_x += grad * (2*r);
-
-        // Row 2
-        grad = accumulated_view_grad[2][0]; // 2(xz + ry)
-        grad_x += grad * (2*z);
-        grad_z += grad * (2*x);
-        grad_r += grad * (2*y);
-        grad_y += grad * (2*r);
-
-        grad = accumulated_view_grad[2][1]; // 2(yz - rx)
-        grad_y += grad * (2*z);
-        grad_z += grad * (2*y);
-        grad_r += grad * (-2*x);
-        grad_x += grad * (-2*r);
-
-        grad = accumulated_view_grad[2][2]; // (1 - 2x² - 2y²)
-        grad_x += grad * (-4*x);
-        grad_y += grad * (-4*y);
-
-        // Translation gradients (grad_view_params[:, 4:])
-        grad_view_params[view_id][4] = accumulated_view_grad[3][0];
-        grad_view_params[view_id][5] = accumulated_view_grad[3][1];
-        grad_view_params[view_id][6] = accumulated_view_grad[3][2];
-
-        // Compute recp_tan_half_fov_x gradient
-        grad_recp_tan_half_fov_x[0] += accumulated_proj_grad[0][0]; // grad w.r.t. proj_00
-        grad_recp_tan_half_fov_x[0] += accumulated_proj_grad[1][1] * (img_w / img_h); // grad w.r.t. proj_11
-
-        // Apply quaternion normalization and unit constraint
-        float norm = sqrtf(r*r + x*x + y*y + z*z);
-        float dot = (r * grad_r + x * grad_x + y * grad_y + z * grad_z) / (norm * norm);
-        
-        grad_view_params[view_id][0] = grad_r / norm - r * dot;
-        grad_view_params[view_id][1] = grad_x / norm - x * dot;
-        grad_view_params[view_id][2] = grad_y / norm - y * dot;
-        grad_view_params[view_id][3] = grad_z / norm - z * dot;
-    }
-}
-
-std::vector<at::Tensor> create_viewproj_backward(
-    at::Tensor view_matrix_grad,
-    at::Tensor proj_matrix_grad, 
-    at::Tensor viewproj_matrix_grad,
-    at::Tensor view_params,
-    at::Tensor recp_tan_half_fov_x,
-    int img_h, int img_w,
-    float z_near, float z_far)
-{
-    int views_num = view_params.size(0);
-    torch::Tensor grad_view_params = torch::zeros_like(view_params);
-    torch::Tensor grad_recp_tan_half_fov_x = torch::zeros_like(recp_tan_half_fov_x);
-
-    int blocks_num = std::ceil(views_num / 128.0f);
-    create_viewproj_backward_kernel<<<blocks_num, 128>>>(
-        view_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        proj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        viewproj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        view_params.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        recp_tan_half_fov_x.packed_accessor32<float, 1, torch::RestrictPtrTraits>(),
-        img_h, img_w, z_near, z_far,
-        grad_view_params.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
-        grad_recp_tan_half_fov_x.packed_accessor32<float, 1, torch::RestrictPtrTraits>()
-    );
-    CUDA_CHECK_ERRORS;
-    // Return both gradients as a vector
-    return {grad_view_params, grad_recp_tan_half_fov_x};
 }
 
 __global__ void frustum_culling_aabb_kernel(
@@ -709,4 +521,394 @@ std::vector<at::Tensor> frustum_culling_aabb_cuda(at::Tensor aabb_origin,at::Ten
     
     // Return visibility tensor
     return {visibility,visible_chunks_num,visible_chunkid };
+}
+
+// Spherical harmonics coefficients
+__device__ const float SH_C0 = 0.28209479177387814f;
+__device__ const float SH_C1 = 0.4886025119029199f;
+__device__ const float SH_C2[] = {
+    1.0925484305920792f,
+    -1.0925484305920792f,
+    0.31539156525252005f,
+    -1.0925484305920792f,
+    0.5462742152960396f
+};
+__device__ const float SH_C3[] = {
+    -0.5900435899266435f,
+    2.890611442640554f,
+    -0.4570457994644658f,
+    0.3731763325901154f,
+    -0.4570457994644658f,
+    1.445305721320277f,
+    -0.5900435899266435f
+};
+
+template <int degree>
+__device__ void sh2rgb_forward_kernel(
+    int view_id,int chunkid,int index,float3 dir,
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> SH_base,    //[1,3,chunks_num,point_num] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> SH_rest,    //[(deg + 1) ** 2-1,3,chunks_num,point_num] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> rgb         //[batch,3,chunks_num,point_num]
+)
+{
+    float3 result;
+    result.x = SH_C0 * SH_base[0][0][chunkid][index];
+    result.y = SH_C0 * SH_base[0][1][chunkid][index];
+    result.z = SH_C0 * SH_base[0][2][chunkid][index];
+    if (degree > 0)
+    {
+        float x = dir.x;
+        float y = dir.y;
+        float z = dir.z;
+        result.x = result.x - SH_C1 * y * SH_rest[0][0][chunkid][index] + SH_C1 * z * SH_rest[1][0][chunkid][index] - SH_C1 * x * SH_rest[2][0][chunkid][index];
+        result.y = result.y - SH_C1 * y * SH_rest[0][1][chunkid][index] + SH_C1 * z * SH_rest[1][1][chunkid][index] - SH_C1 * x * SH_rest[2][1][chunkid][index];
+        result.z = result.z - SH_C1 * y * SH_rest[0][2][chunkid][index] + SH_C1 * z * SH_rest[1][2][chunkid][index] - SH_C1 * x * SH_rest[2][2][chunkid][index];
+
+        if (degree > 1)
+        {
+            float xx = x * x, yy = y * y, zz = z * z;
+            float xy = x * y, yz = y * z, xz = x * z;
+            result.x = result.x +
+                SH_C2[0] * xy * SH_rest[3][0][chunkid][index] +
+                SH_C2[1] * yz * SH_rest[4][0][chunkid][index] +
+                SH_C2[2] * (2.0f * zz - xx - yy) * SH_rest[5][0][chunkid][index] +
+                SH_C2[3] * xz * SH_rest[6][0][chunkid][index] +
+                SH_C2[4] * (xx - yy) * SH_rest[7][0][chunkid][index];
+            result.y = result.y +
+                SH_C2[0] * xy * SH_rest[3][1][chunkid][index] +
+                SH_C2[1] * yz * SH_rest[4][1][chunkid][index] +
+                SH_C2[2] * (2.0f * zz - xx - yy) * SH_rest[5][1][chunkid][index] +
+                SH_C2[3] * xz * SH_rest[6][1][chunkid][index] +
+                SH_C2[4] * (xx - yy) * SH_rest[7][1][chunkid][index];
+            result.z = result.z +
+                SH_C2[0] * xy * SH_rest[3][2][chunkid][index] +
+                SH_C2[1] * yz * SH_rest[4][2][chunkid][index] +
+                SH_C2[2] * (2.0f * zz - xx - yy) * SH_rest[5][2][chunkid][index] +
+                SH_C2[3] * xz * SH_rest[6][2][chunkid][index] +
+                SH_C2[4] * (xx - yy) * SH_rest[7][2][chunkid][index];
+
+            if (degree > 2)
+            {
+                result.x = result.x +
+                    SH_C3[0] * y * (3.0f * xx - yy) * SH_rest[8][0][chunkid][index] +
+                    SH_C3[1] * xy * z * SH_rest[9][0][chunkid][index] +
+                    SH_C3[2] * y * (4.0f * zz - xx - yy) * SH_rest[10][0][chunkid][index] +
+                    SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH_rest[11][0][chunkid][index] +
+                    SH_C3[4] * x * (4.0f * zz - xx - yy) * SH_rest[12][0][chunkid][index] +
+                    SH_C3[5] * z * (xx - yy) * SH_rest[13][0][chunkid][index] +
+                    SH_C3[6] * x * (xx - 3.0f * yy) * SH_rest[14][0][chunkid][index];
+                result.y = result.y +
+                    SH_C3[0] * y * (3.0f * xx - yy) * SH_rest[8][1][chunkid][index] +
+                    SH_C3[1] * xy * z * SH_rest[9][1][chunkid][index] +
+                    SH_C3[2] * y * (4.0f * zz - xx - yy) * SH_rest[10][1][chunkid][index] +
+                    SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH_rest[11][1][chunkid][index] +
+                    SH_C3[4] * x * (4.0f * zz - xx - yy) * SH_rest[12][1][chunkid][index] +
+                    SH_C3[5] * z * (xx - yy) * SH_rest[13][1][chunkid][index] +
+                    SH_C3[6] * x * (xx - 3.0f * yy) * SH_rest[14][1][chunkid][index];
+                result.z = result.z +
+                    SH_C3[0] * y * (3.0f * xx - yy) * SH_rest[8][2][chunkid][index] +
+                    SH_C3[1] * xy * z * SH_rest[9][2][chunkid][index] +
+                    SH_C3[2] * y * (4.0f * zz - xx - yy) * SH_rest[10][2][chunkid][index] +
+                    SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH_rest[11][2][chunkid][index] +
+                    SH_C3[4] * x * (4.0f * zz - xx - yy) * SH_rest[12][2][chunkid][index] +
+                    SH_C3[5] * z * (xx - yy) * SH_rest[13][2][chunkid][index] +
+                    SH_C3[6] * x * (xx - 3.0f * yy) * SH_rest[14][2][chunkid][index];
+            }
+        }
+
+    }
+    result.x += 0.5f;
+    result.y += 0.5f;
+    result.z += 0.5f;
+    rgb[view_id][0][chunkid][index] = result.x;
+    rgb[view_id][1][chunkid][index] = result.y;
+    rgb[view_id][2][chunkid][index] = result.z;
+}
+
+template <typename scalar_t, int degree>
+__global__ void sh2rgb_backward_kernel(
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dirs,    //[batch,3,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base,    //[1,3,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest,    //[(deg + 1) ** 2-1,3,point_num] 
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> rgb_grad,         //[batch,3,point_num]
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_base_grad,   //[1,3,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> SH_rest_grad,   //[(deg + 1) ** 2-1,3,point_num] 
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> dir_grad//[batch,3,point_num] 
+)
+{
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (int batch_id = 0; batch_id < rgb_grad.size(0); batch_id++)
+    {
+        if (index < rgb_grad.size(2))
+        {
+            float3 dL_dRGB{ rgb_grad[batch_id][0][index], rgb_grad[batch_id][1][index], rgb_grad[batch_id][2][index] };
+
+            float dRGBdsh0 = SH_C0;
+            SH_base_grad[0][0][index] = dRGBdsh0 * dL_dRGB.x;
+            SH_base_grad[0][1][index] = dRGBdsh0 * dL_dRGB.y;
+            SH_base_grad[0][2][index] = dRGBdsh0 * dL_dRGB.z;
+
+            if (degree > 0)
+            {
+                float x = dirs[batch_id][0][index];
+                float y = dirs[batch_id][1][index];
+                float z = dirs[batch_id][2][index];
+
+                float dRGBdsh1 = -SH_C1 * y;
+                float dRGBdsh2 = SH_C1 * z;
+                float dRGBdsh3 = -SH_C1 * x;
+                SH_rest_grad[0][0][index] = dRGBdsh1 * dL_dRGB.x;
+                SH_rest_grad[1][0][index] = dRGBdsh2 * dL_dRGB.x;
+                SH_rest_grad[2][0][index] = dRGBdsh3 * dL_dRGB.x;
+                SH_rest_grad[0][1][index] = dRGBdsh1 * dL_dRGB.y;
+                SH_rest_grad[1][1][index] = dRGBdsh2 * dL_dRGB.y;
+                SH_rest_grad[2][1][index] = dRGBdsh3 * dL_dRGB.y;
+                SH_rest_grad[0][2][index] = dRGBdsh1 * dL_dRGB.z;
+                SH_rest_grad[1][2][index] = dRGBdsh2 * dL_dRGB.z;
+                SH_rest_grad[2][2][index] = dRGBdsh3 * dL_dRGB.z;
+
+                if (degree > 1)
+                {
+                    float xx = x * x, yy = y * y, zz = z * z;
+                    float xy = x * y, yz = y * z, xz = x * z;
+
+                    float dRGBdsh4 = SH_C2[0] * xy;
+                    float dRGBdsh5 = SH_C2[1] * yz;
+                    float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
+                    float dRGBdsh7 = SH_C2[3] * xz;
+                    float dRGBdsh8 = SH_C2[4] * (xx - yy);
+
+                    SH_rest_grad[3][0][index] = dRGBdsh4 * dL_dRGB.x;
+                    SH_rest_grad[4][0][index] = dRGBdsh5 * dL_dRGB.x;
+                    SH_rest_grad[5][0][index] = dRGBdsh6 * dL_dRGB.x;
+                    SH_rest_grad[6][0][index] = dRGBdsh7 * dL_dRGB.x;
+                    SH_rest_grad[7][0][index] = dRGBdsh8 * dL_dRGB.x;
+                    SH_rest_grad[3][1][index] = dRGBdsh4 * dL_dRGB.y;
+                    SH_rest_grad[4][1][index] = dRGBdsh5 * dL_dRGB.y;
+                    SH_rest_grad[5][1][index] = dRGBdsh6 * dL_dRGB.y;
+                    SH_rest_grad[6][1][index] = dRGBdsh7 * dL_dRGB.y;
+                    SH_rest_grad[7][1][index] = dRGBdsh8 * dL_dRGB.y;
+                    SH_rest_grad[3][2][index] = dRGBdsh4 * dL_dRGB.z;
+                    SH_rest_grad[4][2][index] = dRGBdsh5 * dL_dRGB.z;
+                    SH_rest_grad[5][2][index] = dRGBdsh6 * dL_dRGB.z;
+                    SH_rest_grad[6][2][index] = dRGBdsh7 * dL_dRGB.z;
+                    SH_rest_grad[7][2][index] = dRGBdsh8 * dL_dRGB.z;
+
+                    if (degree > 2)
+                    {
+                        float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
+                        float dRGBdsh10 = SH_C3[1] * xy * z;
+                        float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
+                        float dRGBdsh12 = SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy);
+                        float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
+                        float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
+                        float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
+                        SH_rest_grad[8][0][index] = dRGBdsh9 * dL_dRGB.x;
+                        SH_rest_grad[9][0][index] = dRGBdsh10 * dL_dRGB.x;
+                        SH_rest_grad[10][0][index] = dRGBdsh11 * dL_dRGB.x;
+                        SH_rest_grad[11][0][index] = dRGBdsh12 * dL_dRGB.x;
+                        SH_rest_grad[12][0][index] = dRGBdsh13 * dL_dRGB.x;
+                        SH_rest_grad[13][0][index] = dRGBdsh14 * dL_dRGB.x;
+                        SH_rest_grad[14][0][index] = dRGBdsh15 * dL_dRGB.x;
+                        SH_rest_grad[8][1][index] = dRGBdsh9 * dL_dRGB.y;
+                        SH_rest_grad[9][1][index] = dRGBdsh10 * dL_dRGB.y;
+                        SH_rest_grad[10][1][index] = dRGBdsh11 * dL_dRGB.y;
+                        SH_rest_grad[11][1][index] = dRGBdsh12 * dL_dRGB.y;
+                        SH_rest_grad[12][1][index] = dRGBdsh13 * dL_dRGB.y;
+                        SH_rest_grad[13][1][index] = dRGBdsh14 * dL_dRGB.y;
+                        SH_rest_grad[14][1][index] = dRGBdsh15 * dL_dRGB.y;
+                        SH_rest_grad[8][2][index] = dRGBdsh9 * dL_dRGB.z;
+                        SH_rest_grad[9][2][index] = dRGBdsh10 * dL_dRGB.z;
+                        SH_rest_grad[10][2][index] = dRGBdsh11 * dL_dRGB.z;
+                        SH_rest_grad[11][2][index] = dRGBdsh12 * dL_dRGB.z;
+                        SH_rest_grad[12][2][index] = dRGBdsh13 * dL_dRGB.z;
+                        SH_rest_grad[13][2][index] = dRGBdsh14 * dL_dRGB.z;
+                        SH_rest_grad[14][2][index] = dRGBdsh15 * dL_dRGB.z;
+                    }
+                }
+
+            }
+        }
+
+
+    }
+
+}
+
+template <int degree>
+__global__ void activate_kernel_forward(
+    const torch::PackedTensorAccessor32<bool, 1, torch::RestrictPtrTraits> visible_mask,    //[chunks_num] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[views_num,4,4] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[4,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[1,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_position,    //[4,chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_scale,    //[3,chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_rotation,    //[4,chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color,    //[views_num,3,chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_opacity    //[1,chunks_num,chunk_size]
+)
+{
+    int index = threadIdx.x;
+    int chunkid = blockIdx.x;
+    bool visible = visible_mask[chunkid];
+    if (visible)
+    {
+        float3 pos{ position[0][chunkid][index],position[1][chunkid][index],position[2][chunkid][index] };
+        activated_position[0][chunkid][index] = pos.x;
+        activated_position[1][chunkid][index] = pos.y;
+        activated_position[2][chunkid][index] = pos.z;
+        activated_position[3][chunkid][index] = 1.0f;
+
+        activated_scale[0][chunkid][index] = __expf(scale[0][chunkid][index]);
+        activated_scale[1][chunkid][index] = __expf(scale[1][chunkid][index]);
+        activated_scale[2][chunkid][index] = __expf(scale[2][chunkid][index]);
+
+        float w = rotation[0][chunkid][index];
+        float x = rotation[1][chunkid][index];
+        float y = rotation[2][chunkid][index];
+        float z = rotation[3][chunkid][index];
+
+        float recp_norm = rsqrtf(w * w + x * x + y * y + z * z);
+        activated_rotation[0][chunkid][index] = w * recp_norm;
+        activated_rotation[1][chunkid][index] = x * recp_norm;
+        activated_rotation[2][chunkid][index] = y * recp_norm;
+        activated_rotation[3][chunkid][index] = z * recp_norm;
+
+        activated_opacity[0][chunkid][index]= 1.0f / (1.0f + __expf(-opacity[0][chunkid][index]));
+
+        //sh
+        for (int view_id = 0; view_id < view_matrix.size(0); view_id++)
+        {
+            //-t @ rot.trans()
+            float3 inv_trans{ view_matrix[view_id][3][0],view_matrix[view_id][3][1],view_matrix[view_id][3][2] };
+            float3 camera_center;
+            camera_center.x = inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][1];
+            camera_center.y = inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][1];
+            camera_center.z = inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][1];
+            float3 dir{ pos.x - camera_center.x,pos.y - camera_center.y,pos.z - camera_center.z };
+            sh2rgb_forward_kernel<degree>(view_id,chunkid, index, dir, sh_base, sh_rest, color);
+        }
+    }
+
+}
+
+__global__ void compact_visible_params_kernel_forward(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunkid,    //[chunks_num] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[4,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunks_num,chunk_size] 
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[1,chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_position,    //[3,visible_chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_scale,    //[3,visible_chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_rotation,    //[4,visible_chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> compacted_sh_base,    //[1,3,visible_chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> compacted_sh_rest,    //[?,3,visible_chunks_num,chunk_size] 
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> compacted_opacity    //[1,visible_chunks_num,chunk_size] 
+)
+{
+    int index = threadIdx.x;
+    int chunkid = visible_chunkid[blockIdx.x];
+    //copy
+    compacted_position[0][blockIdx.x][index] = position[0][chunkid][index];
+    compacted_position[1][blockIdx.x][index] = position[1][chunkid][index];
+    compacted_position[2][blockIdx.x][index] = position[2][chunkid][index];
+    compacted_scale[0][blockIdx.x][index] = scale[0][chunkid][index];
+    compacted_scale[1][blockIdx.x][index] = scale[1][chunkid][index];
+    compacted_scale[2][blockIdx.x][index] = scale[2][chunkid][index];
+    compacted_rotation[0][blockIdx.x][index] = rotation[0][chunkid][index];
+    compacted_rotation[1][blockIdx.x][index] = rotation[1][chunkid][index];
+    compacted_rotation[2][blockIdx.x][index] = rotation[2][chunkid][index];
+    compacted_rotation[3][blockIdx.x][index] = rotation[3][chunkid][index];
+    compacted_sh_base[0][0][blockIdx.x][index] = sh_base[0][0][chunkid][index];
+    compacted_sh_base[0][1][blockIdx.x][index] = sh_base[0][1][chunkid][index];
+    compacted_sh_base[0][2][blockIdx.x][index] = sh_base[0][2][chunkid][index];
+    for (int i = 0; i < sh_rest.size(0); i++)
+    {
+        compacted_sh_rest[i][0][blockIdx.x][index] = sh_rest[i][0][chunkid][index];
+        compacted_sh_rest[i][1][blockIdx.x][index] = sh_rest[i][1][chunkid][index];
+        compacted_sh_rest[i][2][blockIdx.x][index] = sh_rest[i][2][chunkid][index];
+    }
+    compacted_opacity[0][blockIdx.x][index] = opacity[0][chunkid][index];
+}
+
+std::vector<at::Tensor> cull_compact(at::Tensor aabb_origin, at::Tensor aabb_ext, at::Tensor frustumplane,
+    at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity)
+{
+    // Get dimensions
+    int views_num = frustumplane.size(0);
+    int chunks_num = aabb_origin.size(1);
+
+    // Create output tensor
+    torch::Tensor visibility = torch::empty({ chunks_num }, torch::dtype(torch::kBool).device(frustumplane.device()));
+    torch::Tensor visible_chunks_num = torch::zeros({ 1 }, torch::dtype(torch::kInt32).device(frustumplane.device()));
+    torch::Tensor visible_chunkid = torch::empty({ chunks_num }, torch::dtype(torch::kInt64).device(frustumplane.device()));
+
+    // Launch kernel
+    frustum_culling_aabb_kernel << <(chunks_num + 255) / 256, 256 >> > (
+        frustumplane.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        aabb_origin.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        aabb_ext.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
+        visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+        visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>()
+        );
+    CUDA_CHECK_ERRORS;
+
+    //visible_chunks_num to host
+    int* device_data=visible_chunks_num.data_ptr<int>();
+    int visible_chunks_num_host = 0;
+    cudaMemcpyAsync(&visible_chunks_num_host, device_data, sizeof(int), cudaMemcpyDeviceToHost);
+
+    //activate
+    int chunksize = position.size(2);
+    /*activate_kernel_forward << <chunks_num, chunksize >> > (
+        visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
+        position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>());*/
+
+    //compact
+    cudaStreamSynchronize(0);
+    visible_chunkid=visible_chunkid.slice(0, 0, visible_chunks_num_host);
+    auto tensor_shape = position.sizes();
+    at::Tensor compacted_position = torch::empty({ tensor_shape[0], visible_chunks_num_host, chunksize }, position.options());
+    tensor_shape = scale.sizes();
+    at::Tensor compacted_scale = torch::empty({ tensor_shape[0], visible_chunks_num_host, chunksize }, scale.options());
+    tensor_shape = rotation.sizes();
+    at::Tensor compacted_rotation = torch::empty({ tensor_shape[0], visible_chunks_num_host, chunksize }, rotation.options());
+    tensor_shape = sh_base.sizes();
+    at::Tensor compacted_sh_base = torch::empty({ tensor_shape[0],tensor_shape[1], visible_chunks_num_host, chunksize }, sh_base.options());
+    tensor_shape = sh_rest.sizes();
+    at::Tensor compacted_sh_rest = torch::empty({ tensor_shape[0],tensor_shape[1], visible_chunks_num_host, chunksize }, sh_rest.options());
+    tensor_shape = opacity.sizes();
+    at::Tensor compacted_opacity = torch::empty({ tensor_shape[0], visible_chunks_num_host, chunksize }, opacity.options());
+
+    //dim3 Block3d(32, 1, 1);
+    compact_visible_params_kernel_forward << <visible_chunks_num_host, chunksize >> > (
+        visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        compacted_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        compacted_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        compacted_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
+        );
+    CUDA_CHECK_ERRORS;
+    return { visible_chunkid, compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity };
 }

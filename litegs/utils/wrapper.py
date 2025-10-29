@@ -747,7 +747,7 @@ class Binning(BaseWrapper):
 
 class CreateViewProj(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,view_params:torch.Tensor,proj_params:torch.Tensor,img_h:int,img_w:int,z_near:float,z_far:float)->list[torch.Tensor]:
+    def forward(ctx,view_params:torch.Tensor,proj_params:torch.Tensor,img_h:int,img_w:int,z_near:float,z_far:float)->tuple[torch.Tensor,...]:
         view_matrix, proj_matrix, viewproj_matrix, frustumplane=litegs_fused.create_viewproj_forward(view_params,proj_params,img_h,img_w,z_near,z_far)
         ctx.save_for_backward(view_params,proj_params)
         ctx.img_h=img_h
@@ -766,18 +766,16 @@ class CreateViewProj(torch.autograd.Function):
         view_params_grad,proj_params_grad=litegs_fused.create_viewproj_backward(view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,view_params,proj_params,img_h,img_w,z_near,z_far)
         return view_params_grad,proj_params_grad,None,None,None,None
 
-class CompactVisibleWithSparseGrad(torch.autograd.Function):
+class FrustumCullCompact(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,visible_id:torch.Tensor,*args:list[torch.Tensor])->list[torch.Tensor]:
-        compacted_tensors=[]
-        for tensor in args:
-            compacted_tensors.append(tensor[...,visible_id,:].contiguous())
-        ctx.chunk_num=args[0].shape[-2]
-        ctx.chunk_size=args[0].shape[-1]
-        return *compacted_tensors,
+    def forward(ctx,cluster_origin,cluster_extend,frustumplane,xyz,scale,rot,sh_0,sh_rest,opacity)->tuple[torch.Tensor,...]:
+        ctx.chunk_num=xyz.shape[-2]
+        ctx.chunk_size=xyz.shape[-1]
+        visible_chunkid, compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity=litegs_fused.cull_compact(cluster_origin,cluster_extend,frustumplane,xyz,scale,rot,sh_0,sh_rest,opacity)
+        return visible_chunkid, compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity
     
     @staticmethod
-    def backward(ctx,*args):
+    def backward(ctx,_,*args):
         chunk_num=ctx.chunk_num
         chunk_size=ctx.chunk_size
         grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
@@ -786,7 +784,7 @@ class CompactVisibleWithSparseGrad(torch.autograd.Function):
             placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
             # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='cuda')), dim=-2)
             grads.append(placeholder_grad)
-        return None,*grads
+        return None,None,None,*grads
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
                        lr:float, b1:float, b2:float, eps:float):
