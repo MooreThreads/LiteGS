@@ -8,55 +8,50 @@ from ..utils.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from .. import arguments
 from .. import scene
 
-def render_preprocess(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,frustumplane:torch.Tensor,
+def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tensor|None,frustumplane:torch.Tensor,view_matrix:torch.Tensor,
                       xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
-                      op:arguments.OptimizationParams,pp:arguments.PipelineParams):
+                      op:arguments.OptimizationParams,pp:arguments.PipelineParams,actived_sh_degree:int):
     nvtx.range_push("Culling")
     if pp.cluster_size:
         if cluster_origin is None or cluster_extend is None:
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
         nvtx.range_push("compact")
         if pp.sparse_grad:#enable sparse gradient
-            visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=utils.wrapper.FrustumCullCompact.apply(cluster_origin,cluster_extend,frustumplane,xyz,scale,rot,sh_0,sh_rest,opacity)
-            culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity)
-            nvtx.range_push("Activate")
-            pad_one=torch.ones((1,culled_xyz.shape[-1]),dtype=culled_xyz.dtype,device=culled_xyz.device)
-            culled_xyz=torch.concat((culled_xyz,pad_one),dim=0)
-            culled_scale=culled_scale.exp()
-            culled_rot=torch.nn.functional.normalize(culled_rot,dim=0)
-            culled_opacity=culled_opacity.sigmoid()
-            nvtx.range_pop()
+            visible_chunkid,culled_xyz,culled_scale,culled_rot,color,culled_opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
+                cluster_origin,cluster_extend,frustumplane,view_matrix,actived_sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)
+            culled_xyz,culled_scale,culled_rot,color,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,color,culled_opacity)  
+            return visible_chunkid,culled_xyz,culled_scale,culled_rot,color,culled_opacity
         else:
             visibility,visible_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb_cuda(cluster_origin,cluster_extend,frustumplane)
             visible_chunkid=visible_chunkid[:visible_num]
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.culling(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity)
-            nvtx.range_push("Activate")
-            pad_one=torch.ones((1,culled_xyz.shape[-1]),dtype=culled_xyz.dtype,device=culled_xyz.device)
-            culled_xyz=torch.concat((culled_xyz,pad_one),dim=0)
-            culled_scale=culled_scale.exp()
-            culled_rot=torch.nn.functional.normalize(culled_rot,dim=0)
-            culled_opacity=culled_opacity.sigmoid()
-            nvtx.range_pop()
         nvtx.range_pop()
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_compact_mask(visible_chunkid)
     else:
         culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=xyz,scale,rot,sh_0,sh_rest,opacity
         visible_chunkid=None
-        nvtx.range_push("Activate")
-        pad_one=torch.ones((1,culled_xyz.shape[-1]),dtype=culled_xyz.dtype,device=culled_xyz.device)
-        culled_xyz=torch.concat((culled_xyz,pad_one),dim=0)
-        culled_scale=culled_scale.exp()
-        culled_rot=torch.nn.functional.normalize(culled_rot,dim=0)
-        culled_opacity=culled_opacity.sigmoid()
-        nvtx.range_pop()
     nvtx.range_pop()
-    return visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity
+
+    nvtx.range_push("Activate")
+    pad_one=torch.ones((1,culled_xyz.shape[-1]),dtype=culled_xyz.dtype,device=culled_xyz.device)
+    culled_xyz=torch.concat((culled_xyz,pad_one),dim=0)
+    culled_scale=culled_scale.exp()
+    culled_rot=torch.nn.functional.normalize(culled_rot,dim=0)
+    culled_opacity=culled_opacity.sigmoid()
+    with torch.no_grad():
+        camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
+        dirs=culled_xyz[:3]-camera_center.unsqueeze(-1)
+        dirs=torch.nn.functional.normalize(dirs,dim=-2)
+    color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,culled_sh_0,culled_sh_rest,dirs)
+    nvtx.range_pop()
+
+    return visible_chunkid,culled_xyz,culled_scale,culled_rot,color,culled_opacity
 
 def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
-           xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
-           actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
+           xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,color:torch.Tensor,opacity:torch.Tensor,
+           actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
     #gs projection
     nvtx.range_push("Proj")
@@ -69,20 +64,6 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     ndc_pos=hom_pos/(hom_pos[:,3:4,:]+1e-7)
 
     view_depth=(view_matrix.transpose(1,2)@xyz)[:,2]
-    nvtx.range_pop()
-
-    #color
-    nvtx.range_push("sh")
-    if pp.input_color_type=='sh':
-        with torch.no_grad():
-            camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
-            dirs=xyz[:3]-camera_center.unsqueeze(-1)
-            dirs=torch.nn.functional.normalize(dirs,dim=-2)
-        color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,sh_0,sh_rest,dirs)
-    elif pp.input_color_type=='rgb':
-        color=sh_0
-    else:
-        assert(False)
     nvtx.range_pop()
     
     #visibility table

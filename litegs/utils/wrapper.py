@@ -766,25 +766,35 @@ class CreateViewProj(torch.autograd.Function):
         view_params_grad,proj_params_grad=litegs_fused.create_viewproj_backward(view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,view_params,proj_params,img_h,img_w,z_near,z_far)
         return view_params_grad,proj_params_grad,None,None,None,None
 
-class FrustumCullCompact(torch.autograd.Function):
+class CullCompactActivateWithSparseGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,cluster_origin,cluster_extend,frustumplane,xyz,scale,rot,sh_0,sh_rest,opacity)->tuple[torch.Tensor,...]:
+    def forward(ctx,cluster_origin,cluster_extend,frustumplane,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)->tuple[torch.Tensor,...]:
         ctx.chunk_num=xyz.shape[-2]
         ctx.chunk_size=xyz.shape[-1]
-        visible_chunkid, compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity=litegs_fused.cull_compact(cluster_origin,cluster_extend,frustumplane,xyz,scale,rot,sh_0,sh_rest,opacity)
-        return visible_chunkid, compacted_position,compacted_scale,compacted_rotation,compacted_sh_base,compacted_sh_rest,compacted_opacity
+        ctx.sh_degree=sh_degree
+        
+        visible_chunkid, activated_position,activated_scale,activated_rotation,color,activated_opacity=litegs_fused.cull_compact_activate(cluster_origin,cluster_extend,frustumplane,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)
+
+        ctx.save_for_backward(visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity)
+
+        return visible_chunkid, activated_position,activated_scale,activated_rotation,color,activated_opacity
     
     @staticmethod
-    def backward(ctx,_,*args):
+    def backward(ctx,_,activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad):
         chunk_num=ctx.chunk_num
         chunk_size=ctx.chunk_size
+        sh_degree=ctx.sh_degree
+        visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity=ctx.saved_tensors
+        compactd_grads=litegs_fused.activate_backward(
+            visible_chunkid,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity,
+            activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad)
         grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
-        for grad in args:
+        for grad in compactd_grads:
             sparse_value=grad.reshape(-1,chunk_size)
             placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
             # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='cuda')), dim=-2)
             grads.append(placeholder_grad)
-        return None,None,None,*grads
+        return None,None,None,None,None,*grads
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
                        lr:float, b1:float, b2:float, eps:float):
