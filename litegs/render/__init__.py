@@ -11,28 +11,29 @@ from .. import scene
 def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tensor|None,frustumplane:torch.Tensor,view_matrix:torch.Tensor,
                       xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,sh_0:torch.Tensor,sh_rest:torch.Tensor,opacity:torch.Tensor,
                       op:arguments.OptimizationParams,pp:arguments.PipelineParams,actived_sh_degree:int):
-    nvtx.range_push("Culling")
+
     if pp.cluster_size:
         if cluster_origin is None or cluster_extend is None:
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
-        nvtx.range_push("compact")
+
         if pp.sparse_grad:#enable sparse gradient
             visible_chunkid,culled_xyz,culled_scale,culled_rot,color,culled_opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
                 cluster_origin,cluster_extend,frustumplane,view_matrix,actived_sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)
             culled_xyz,culled_scale,culled_rot,color,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,color,culled_opacity)  
+            if StatisticsHelperInst.bStart:
+                StatisticsHelperInst.set_compact_mask(visible_chunkid)
             return visible_chunkid,culled_xyz,culled_scale,culled_rot,color,culled_opacity
         else:
             visibility,visible_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb_cuda(cluster_origin,cluster_extend,frustumplane)
             visible_chunkid=visible_chunkid[:visible_num]
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.culling(visible_chunkid,xyz,scale,rot,sh_0,sh_rest,opacity)
             culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity)
-        nvtx.range_pop()
+
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_compact_mask(visible_chunkid)
     else:
         culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=xyz,scale,rot,sh_0,sh_rest,opacity
         visible_chunkid=None
-    nvtx.range_pop()
 
     nvtx.range_push("Activate")
     pad_one=torch.ones((1,culled_xyz.shape[-1]),dtype=culled_xyz.dtype,device=culled_xyz.device)

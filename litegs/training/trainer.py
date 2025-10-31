@@ -126,11 +126,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
                 loss+=(culled_scale).square().mean()*op.reg_weight
-                torch.cuda.synchronize()
-                pass
                 loss.backward()
-                torch.cuda.synchronize()
-                pass
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
                 if pp.sparse_grad:
@@ -195,7 +191,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 param_nyp.append(tensor.detach().cpu().numpy())
             io_manager.save_ply(os.path.join(save_path,"point_cloud.ply"),*param_nyp)
             if op.learnable_viewproj:
-                torch.save(list(view_params.parameters())+[camera_focal_params],os.path.join(save_path,"viewproj.pth"))
+                torch.save(list(view_params.parameters())+[proj_params],os.path.join(save_path,"viewproj.pth"))
             pass
 
         if epoch in save_checkpoint:
