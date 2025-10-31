@@ -80,7 +80,7 @@ if __name__ == "__main__":
         xyz,scale,rot,sh_0,sh_rest,opacity=litegs.scene.cluster.cluster_points(pp.cluster_size,xyz,scale,rot,sh_0,sh_rest,opacity)
         cluster_origin,cluster_extend=litegs.scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     if op.learnable_viewproj:
-        view_params,proj_parmas=torch.load(os.path.join(lp.model_path,"point_cloud","finish","viewproj.pth"))
+        view_params,proj_params=torch.load(os.path.join(lp.model_path,"point_cloud","finish","viewproj.pth"))
         qvec=torch.nn.functional.normalize(view_params[:,:4],dim=1)
         rot_matrix=litegs.utils.wrapper.CreateTransformMatrix.call_fused(torch.ones((3,qvec.shape[0]),device='cuda'),qvec.transpose(0,1).contiguous()).permute(2,0,1)
         tvec=view_params[:,4:]
@@ -106,21 +106,14 @@ if __name__ == "__main__":
                 proj_matrix=proj_matrix.cuda()
                 frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()/255.0
-                if loader_name=="Trainingset" and op.learnable_viewproj:
+                if op.learnable_viewproj:
                     #fix view matrix
-                    view_matrix[:,:3, :3] = rot_matrix[idx:idx+1]
-                    view_matrix[:,3, :3] = tvec[idx:idx+1]
+                    view_param_vec=view_params(idx)
+                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=litegs.utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
-                    #fix proj matrix
-                    focal_x=proj_parmas
-                    focal_y=proj_parmas*gt_image.shape[3]/gt_image.shape[2]
-                    proj_matrix[:,0,0]=focal_x
-                    proj_matrix[:,1,1]=focal_y
-
-
-                _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=litegs.render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
-                                                                                                        xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
-                img,transmitance,depth,normal,_=litegs.render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+                #cluster culling
+                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=litegs.render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,lp.sh_degree)
+                img,transmitance,depth,normal,primitive_visible=litegs.render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
                                                             lp.sh_degree,gt_image.shape[2:],pp)
                 psnr_value=psnr_metrics(img,gt_image)
                 ssim_list.append(ssim_metrics(img,gt_image).unsqueeze(0))
