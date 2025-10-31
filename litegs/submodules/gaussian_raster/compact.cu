@@ -415,7 +415,7 @@ __global__ void frustum_culling_aabb_kernel(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> aabb_ext,      // [3, M]
     torch::PackedTensorAccessor32<bool, 1, torch::RestrictPtrTraits> visibility,           // [M]
     torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_num,           // [M]
-    torch::PackedTensorAccessor32<signed long long, 1, torch::RestrictPtrTraits> visible_chunkid           // [M]
+    torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunkid           // [M]
 ) 
 {
     __shared__ int visible_num_in_block;
@@ -511,7 +511,7 @@ std::vector<at::Tensor> frustum_culling_aabb_cuda(at::Tensor aabb_origin,at::Ten
         aabb_ext.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
         visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
-        visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>()
+        visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>()
     );
     
     // Check for errors
@@ -862,7 +862,7 @@ __global__ void activate_forward_kernel(
 
 template <int degree>
 __global__ void activate_backward_kernel(
-    const torch::PackedTensorAccessor32<signed long long, 1, torch::RestrictPtrTraits> visible_chunkid,    //[visible_chunks_num] 
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunkid,    //[visible_chunks_num] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[views_num,4,4] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunks_num,chunk_size] 
@@ -993,7 +993,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
         aabb_ext.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
         visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
-        visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>()
+        visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>()
         );
     CUDA_CHECK_ERRORS;
 
@@ -1145,7 +1145,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
     {
     case 0:
         activate_backward_kernel<0> << <visible_chunks_num, chunksize >> > (
-            visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>(),
+            visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1167,7 +1167,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
         break;
     case 1:
         activate_backward_kernel<1> << <visible_chunks_num, chunksize >> > (
-            visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>(),
+            visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1189,7 +1189,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
         break;
     case 2:
         activate_backward_kernel<2> << <visible_chunks_num, chunksize >> > (
-            visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>(),
+            visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1211,7 +1211,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
         break;
     case 3:
         activate_backward_kernel<3> << <visible_chunks_num, chunksize >> > (
-            visible_chunkid.packed_accessor32<signed long long, 1, torch::RestrictPtrTraits>(),
+            visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
