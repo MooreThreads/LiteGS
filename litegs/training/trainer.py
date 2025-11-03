@@ -78,12 +78,12 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
     #learnable view matrix
     if op.learnable_viewproj:
-        view_params=[np.concatenate([frame.qvec,frame.tvec])[None,:] for frame in trainingset.frames]
-        view_params=torch.tensor(np.concatenate(view_params),dtype=torch.float32,device='cuda')
-        view_params=torch.nn.Embedding(view_params.shape[0],view_params.shape[1],_weight=view_params,sparse=True)
-        proj_params=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].recp_tan_half_fov_x,dtype=torch.float32,device='cuda').unsqueeze(0))#todo fix multi cameras
-        view_opt=torch.optim.SparseAdam(view_params.parameters(),lr=1e-4)
-        proj_opt=torch.optim.Adam([proj_params,],lr=1e-5)
+        noise_extr=torch.cat([frame.extr_params[None,:] for frame in trainingset.frames])
+        denoised_training_extr=torch.nn.Embedding(noise_extr.shape[0],noise_extr.shape[1],_weight=noise_extr.clone(),sparse=True)
+        noise_intr=torch.tensor(trainingset.cameras[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
+        denoised_training_intr=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0))#todo fix multi cameras
+        view_opt=torch.optim.SparseAdam(denoised_training_extr.parameters(),lr=1e-4)
+        proj_opt=torch.optim.Adam([denoised_training_intr,],lr=1e-5)
 
     #init
     total_epoch=int(op.iterations/len(trainingset))
@@ -104,17 +104,17 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
 
         with StatisticsHelperInst.try_start(epoch):
-            for view_matrix,proj_matrix,frustumplane,gt_image,idx in train_loader:
+            for extr,intr,gt_image,idx in train_loader:
                 nvtx.range_push("Iter Init")
-                view_matrix=view_matrix.cuda()
-                proj_matrix=proj_matrix.cuda()
-                frustumplane=frustumplane.cuda()
+                extr=extr.cuda()
+                intr=intr.cuda()
                 gt_image=gt_image.cuda()/255.0
                 idx=idx.cuda()
                 if op.learnable_viewproj:
                     #fix view matrix
-                    view_param_vec=view_params(idx)
-                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                    extr=denoised_training_extr(idx)
+                    intr=denoised_training_intr
+                view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
                 nvtx.range_pop()
 
                 #cluster culling
@@ -126,6 +126,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
                 loss+=(culled_scale).square().mean()*op.reg_weight
+                if pp.enable_transmitance:
+                    loss+=(1-transmitance).abs().mean()
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
@@ -153,16 +155,22 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     loaders["Testset"]=test_loader
                 for name,loader in loaders.items():
                     psnr_list=[]
-                    for view_matrix,proj_matrix,frustumplane,gt_image,idx in loader:
-                        view_matrix=view_matrix.cuda()
-                        proj_matrix=proj_matrix.cuda()
-                        frustumplane=frustumplane.cuda()
+                    for extr,intr,gt_image,idx in loader:
+                        extr=extr.cuda()
+                        intr=intr.cuda()
                         gt_image=gt_image.cuda()/255.0
+                        idx=idx.cuda()
+                        if op.learnable_viewproj:
+                            if name=="Trainingset":
+                                #fix view matrix
+                                extr=denoised_training_extr(idx)
+                                intr=denoised_training_intr
+                            else:
+                                nearest_idx=(extr-denoised_training_extr._parameters['weight']).abs().sum(dim=1).argmin()
+                                delta=denoised_training_extr(nearest_idx)-noise_extr[nearest_idx]
+                                extr=extr+delta
 
-                        if name=="Trainingset" and op.learnable_viewproj:
-                            #fix view matrix
-                            view_param_vec=view_params(idx)
-                            view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                        view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
                         #cluster culling
                         visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,actived_sh_degree)
@@ -191,7 +199,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 param_nyp.append(tensor.detach().cpu().numpy())
             io_manager.save_ply(os.path.join(save_path,"point_cloud.ply"),*param_nyp)
             if op.learnable_viewproj:
-                torch.save(list(view_params.parameters())+[proj_params],os.path.join(save_path,"viewproj.pth"))
+                torch.save(list(denoised_training_extr.parameters())+[denoised_training_intr],os.path.join(save_path,"viewproj.pth"))
             pass
 
         if epoch in save_checkpoint:

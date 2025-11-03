@@ -79,10 +79,9 @@ if __name__ == "__main__":
         xyz,scale,rot,sh_0,sh_rest,opacity=litegs.scene.cluster.cluster_points(pp.cluster_size,xyz,scale,rot,sh_0,sh_rest,opacity)
         cluster_origin,cluster_extend=litegs.scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     if op.learnable_viewproj:
-        view_params,proj_params=torch.load(os.path.join(lp.model_path,"point_cloud","finish","viewproj.pth"))
-        qvec=torch.nn.functional.normalize(view_params[:,:4],dim=1)
-        rot_matrix=litegs.utils.wrapper.CreateTransformMatrix.call_fused(torch.ones((3,qvec.shape[0]),device='cuda'),qvec.transpose(0,1).contiguous()).permute(2,0,1)
-        tvec=view_params[:,4:]
+        noise_extr=torch.cat([frame.extr_params[None,:] for frame in trainingset.frames])
+        noise_intr=torch.tensor(trainingset.cameras[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
+        denoised_training_extr,denoised_training_intr=torch.load(os.path.join(lp.model_path,"point_cloud","finish","viewproj.pth"))
 
     #metrics
     ssim_metrics=ssim.StructuralSimilarityIndexMeasure(data_range=(0.0,1.0)).cuda()
@@ -100,15 +99,21 @@ if __name__ == "__main__":
             ssim_list=[]
             psnr_list=[]
             lpips_list=[]
-            for index,(view_matrix,proj_matrix,frustumplane,gt_image,idx) in enumerate(loader):
-                view_matrix=view_matrix.cuda()
-                proj_matrix=proj_matrix.cuda()
-                frustumplane=frustumplane.cuda()
+            for index,(extr,intr,gt_image,idx) in enumerate(loader):
+                extr=extr.cuda()
+                intr=intr.cuda()
                 gt_image=gt_image.cuda()/255.0
+                idx=idx.cuda()
                 if op.learnable_viewproj:
-                    #fix view matrix
-                    view_param_vec=view_params[idx]
-                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=litegs.utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                    if loader_name=="Trainingset":
+                        #fix view matrix
+                        extr=denoised_training_extr[idx]
+                        intr=denoised_training_intr
+                    else:
+                        nearest_idx=(extr-denoised_training_extr).abs().sum(dim=1).argmin()
+                        delta=denoised_training_extr[nearest_idx]-noise_extr[nearest_idx]
+                        extr=extr+delta
+                view_matrix,proj_matrix,viewproj_matrix,frustumplane=litegs.utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
                 #cluster culling
                 visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=litegs.render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,lp.sh_degree)
