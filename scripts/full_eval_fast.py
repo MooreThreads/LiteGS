@@ -91,4 +91,4 @@ for dataset,scenes in datasets.items():
         scene_input_path=os.path.join(args.__getattribute__(dataset.split('_')[0]),scene_name)
         target_primitives=scene_primitive[scene_name]
         scene_output_path=os.path.join(args.output_path,scene_name+'-{}k-fast'.format(int(target_primitives/1000)))
-        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2}".format(scene_input_path,scene_output_path,img_config[dataset]))
+        os.system("python example_metrics.py -s {0} -m {1} --sh_degree 3 {2} --eval".format(scene_input_path,scene_output_path,img_config[dataset]))

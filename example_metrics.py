@@ -11,8 +11,6 @@ import litegs.config
 import litegs.utils
 import shutil
 
-OUTPUT_FILE=True
-
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     lp_cdo,op_cdo,pp_cdo,dp_cdo=litegs.config.get_default_arg()
@@ -25,6 +23,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--checkpoint_epochs", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--save_image", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     
     lp=litegs.arguments.ModelParams.extract(args)
@@ -39,7 +38,7 @@ if __name__ == "__main__":
     elif lp.source_type=="slam":
         cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_slam_result(lp.source_path)#lp.sh_degree,lp.resolution
 
-    if OUTPUT_FILE:
+    if args.save_image:
         try:
             shutil.rmtree(os.path.join(lp.model_path,"Trainingset"))
             shutil.rmtree(os.path.join(lp.model_path,"Testset"))
@@ -108,7 +107,7 @@ if __name__ == "__main__":
                 gt_image=gt_image.cuda()/255.0
                 if op.learnable_viewproj:
                     #fix view matrix
-                    view_param_vec=view_params(idx)
+                    view_param_vec=view_params[idx]
                     view_matrix,proj_matrix,viewproj_matrix,frustumplane=litegs.utils.wrapper.CreateViewProj.apply(view_param_vec,proj_params,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
                 #cluster culling
@@ -119,7 +118,7 @@ if __name__ == "__main__":
                 ssim_list.append(ssim_metrics(img,gt_image).unsqueeze(0))
                 psnr_list.append(psnr_value.unsqueeze(0))
                 lpips_list.append(lpip_metrics(img,gt_image).unsqueeze(0))
-                if OUTPUT_FILE:
+                if args.save_image:
                     plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-rd.png".format(index,float(psnr_value))),img.detach().cpu()[0].permute(1,2,0).numpy())
                     plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-gt.png".format(index,float(psnr_value))),gt_image.detach().cpu()[0].permute(1,2,0).numpy())
             ssim_mean=torch.concat(ssim_list,dim=0).mean()

@@ -23,7 +23,7 @@ args, _ = parser.parse_known_args()
 
 training_config="--sh_degree 3 --source_type slam -s {0} -m {1} --target_primitives 1000000 --iterations 4500 --position_lr_max_steps 4500 --position_lr_final 0.000016 --densification_interval 2 --learnable_viewproj"
 
-metrics_config="--sh_degree 3 --source_type slam -s {0} -m {1} --learnable_viewproj"
+metrics_config="--sh_degree 3 --source_type slam -s {0} -m {1} --learnable_viewproj --save_image"
 
 scenes = os.listdir(args.source_path)
 
