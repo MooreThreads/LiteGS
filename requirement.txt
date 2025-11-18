@@ -4,5 +4,5 @@ plyfile
 tqdm
 pillow
 opencv-python
-pandas
 matplotlib
+json

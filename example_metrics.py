@@ -5,11 +5,13 @@ from torchmetrics.image import psnr,ssim,lpip
 import sys
 import os
 import matplotlib.pyplot as plt
+import json
 
 import litegs
 import litegs.config
 import litegs.utils
 import shutil
+
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
@@ -33,10 +35,8 @@ if __name__ == "__main__":
 
     cameras_info:dict[int,litegs.data.CameraInfo]=None
     camera_frames:list[litegs.data.ImageFrame]=None
-    if lp.source_type=="colmap":
-        cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
-    elif lp.source_type=="slam":
-        cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_slam_result(lp.source_path)#lp.sh_degree,lp.resolution
+    cameras_info,camera_frames,init_xyz,init_color=litegs.io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
+
 
     if args.save_image:
         try:
@@ -53,8 +53,14 @@ if __name__ == "__main__":
 
     #Dataset
     if lp.eval:
-        training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
-        test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
+        if os.path.exists(os.path.join(lp.source_path,"train_test_split.json")):
+            with open(os.path.join(lp.source_path,"train_test_split.json"), "r") as file:
+                train_test_split = json.load(file)
+                training_frames=[c for c in camera_frames if c.name in train_test_split["train"]]
+                test_frames=[c for c in camera_frames if c.name in train_test_split["test"]]
+        else:
+            training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
+            test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
         trainingset=litegs.data.CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
         train_loader = DataLoader(trainingset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
         testset=litegs.data.CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
@@ -80,7 +86,7 @@ if __name__ == "__main__":
         cluster_origin,cluster_extend=litegs.scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     if op.learnable_viewproj:
         noise_extr=torch.cat([frame.extr_params[None,:] for frame in trainingset.frames])
-        noise_intr=torch.tensor(trainingset.cameras[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
+        noise_intr=torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
         denoised_training_extr,denoised_training_intr=torch.load(os.path.join(lp.model_path,"point_cloud","finish","viewproj.pth"))
 
     #metrics

@@ -8,6 +8,7 @@ import math
 import os
 import torch.cuda.nvtx as nvtx
 import matplotlib.pyplot as plt
+import json
 
 from .. import arguments
 from .. import data
@@ -28,10 +29,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     
     cameras_info:dict[int,data.CameraInfo]=None
     camera_frames:list[data.ImageFrame]=None
-    if lp.source_type=="colmap":
-        cameras_info,camera_frames,init_xyz,init_color=io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
-    elif lp.source_type=="slam":
-        cameras_info,camera_frames,init_xyz,init_color=io_manager.load_slam_result(lp.source_path)#lp.sh_degree,lp.resolution
+    cameras_info,camera_frames,init_xyz,init_color=io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
 
     #preload
     for camera_frame in camera_frames:
@@ -39,8 +37,14 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
     #Dataset
     if lp.eval:
-        training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
-        test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
+        if os.path.exists(os.path.join(lp.source_path,"train_test_split.json")):
+            with open(os.path.join(lp.source_path,"train_test_split.json"), "r") as file:
+                train_test_split = json.load(file)
+                training_frames=[c for c in camera_frames if c.name in train_test_split["train"]]
+                test_frames=[c for c in camera_frames if c.name in train_test_split["test"]]
+        else:
+            training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
+            test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
     else:
         training_frames=camera_frames
         test_frames=None
@@ -80,8 +84,8 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     if op.learnable_viewproj:
         noise_extr=torch.cat([frame.extr_params[None,:] for frame in trainingset.frames])
         denoised_training_extr=torch.nn.Embedding(noise_extr.shape[0],noise_extr.shape[1],_weight=noise_extr.clone(),sparse=True)
-        noise_intr=torch.tensor(trainingset.cameras[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
-        denoised_training_intr=torch.nn.Parameter(torch.tensor(trainingset.cameras[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0))#todo fix multi cameras
+        noise_intr=torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
+        denoised_training_intr=torch.nn.Parameter(torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0))#todo fix multi cameras
         view_opt=torch.optim.SparseAdam(denoised_training_extr.parameters(),lr=1e-4)
         proj_opt=torch.optim.Adam([denoised_training_intr,],lr=1e-5)
 
@@ -98,7 +102,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         with torch.no_grad():
             if pp.cluster_size>0 and (epoch-1)%dp.densification_interval==0:
-                scene.spatial_refine(pp.cluster_size>0,opt,xyz)
+                xyz,scale,rot,sh_0,sh_rest,opacity=scene.spatial_refine(pp.cluster_size>0,opt,xyz)
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
@@ -185,7 +189,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         if epoch in save_ply or epoch==total_epoch-1:
             if epoch==total_epoch-1:
                 progress_bar.close()
-                print("{} takes: {} s".format(lp.model_path,progress_bar.format_dict['elapsed']))
+                print("{} takes: {}".format(lp.model_path,progress_bar.format_dict['elapsed']))
                 save_path=os.path.join(lp.model_path,"point_cloud","finish")
             else:
                 save_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch))    
