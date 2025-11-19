@@ -9,7 +9,7 @@ parser.add_argument("--output_path", default="./output")
 parser.add_argument('--data_path', required=True, type=str)
 args, _ = parser.parse_known_args()
 
-metrics_config="--sh_degree 3 -s {0} -m {1} --images images_gt_downsampled --eval"
+metrics_config="--sh_degree 3 -s {0} -m {1} --images images_gt_downsampled --eval --save_image"
 
 scenes = os.listdir(args.data_path)
 metrics = json.load(open(os.path.join(args.output_path,"takes_time.json"),"r"))
