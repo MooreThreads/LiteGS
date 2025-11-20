@@ -1,8 +1,6 @@
 torchmetrics
-fused-ssim
 plyfile
 tqdm
 pillow
 opencv-python
 matplotlib
-json
