@@ -108,17 +108,18 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
 
         with StatisticsHelperInst.try_start(epoch):
-            for extr,intr,gt_image,idx in train_loader:
+            for view_matrix,proj_matrix,frustumplane,gt_image,idx in train_loader:
                 nvtx.range_push("Iter Init")
-                extr=extr.cuda()
-                intr=intr.cuda()
+                view_matrix=view_matrix.cuda()
+                proj_matrix=proj_matrix.cuda()
+                frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()/255.0
                 idx=idx.cuda()
                 if op.learnable_viewproj:
                     #fix view matrix
                     extr=denoised_training_extr(idx)
                     intr=denoised_training_intr
-                view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
                 nvtx.range_pop()
 
                 #cluster culling
@@ -159,9 +160,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     loaders["Testset"]=test_loader
                 for name,loader in loaders.items():
                     psnr_list=[]
-                    for extr,intr,gt_image,idx in loader:
-                        extr=extr.cuda()
-                        intr=intr.cuda()
+                    for view_matrix,proj_matrix,frustumplane,gt_image,idx in loader:
+                        view_matrix=view_matrix.cuda()
+                        proj_matrix=proj_matrix.cuda()
+                        frustumplane=frustumplane.cuda()
                         gt_image=gt_image.cuda()/255.0
                         idx=idx.cuda()
                         if op.learnable_viewproj:
@@ -173,8 +175,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                                 nearest_idx=(extr-denoised_training_extr._parameters['weight']).abs().sum(dim=1).argmin()
                                 delta=denoised_training_extr(nearest_idx)-noise_extr[nearest_idx]
                                 extr=extr+delta
-
-                        view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                            view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
                         #cluster culling
                         visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,actived_sh_degree)

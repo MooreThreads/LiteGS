@@ -181,13 +181,21 @@ class CameraFrameDataset(Dataset):
         
         if bDevice:
             for camera in cameras.values():
-                camera.intr_params=torch.tensor(camera.intr_params).cuda()
+                camera.proj_matrix=torch.tensor(camera.proj_matrix).cuda()
             for frame in frames:
-                frame.extr_params=torch.tensor(frame.extr_params).cuda()
+                frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
                 for key in frame.image.keys():
                     frame.image[key]=torch.tensor(frame.image[key]).cuda()
             self.idx_array=torch.arange(0,len(frames)).cuda()
         
+        #init frustumplanes
+        self.frustumplanes=[]
+        for frame in self.frames:
+            frustumplane=self.__get_frustumplane(frame.get_viewmatrix(),self.cameras[frame.camera_id].get_project_matrix())
+            if bDevice:
+                self.frustumplanes.append(torch.Tensor(frustumplane).cuda())
+            else:
+                self.frustumplanes.append(frustumplane)
 
         #init ray_d
         # self.ray_d=[]
@@ -212,12 +220,13 @@ class CameraFrameDataset(Dataset):
     
     def __getitem__(self,idx:int)->tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
         image=self.frames[idx].load_image(self.downsample)
-        extr_params=self.frames[idx].extr_params
-        intr_params=self.cameras[self.frames[idx].camera_id].intr_params
+        view_matrix=self.frames[idx].get_viewmatrix()
+        proj_matrix=self.cameras[self.frames[idx].camera_id].get_project_matrix()
+        frustumplane=self.frustumplanes[idx]
         StatisticsHelperInst.cur_sample=self.frames[idx].name
         if self.idx_array is not None:
             idx=self.idx_array[idx]
-        return extr_params,intr_params,image,idx
+        return view_matrix,proj_matrix,frustumplane,image,idx
     
     def get_norm(self)->tuple[float,float]:
         def get_center_and_diag(cam_centers):
