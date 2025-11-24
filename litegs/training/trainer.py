@@ -205,7 +205,6 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             io_manager.save_ply(os.path.join(save_path,"point_cloud.ply"),*param_nyp)
             if op.learnable_viewproj:
                 torch.save(list(denoised_training_extr.parameters())+[denoised_training_intr],os.path.join(save_path,"viewproj.pth"))
-            pass
 
         if epoch in save_checkpoint:
             io_manager.save_checkpoint(lp.model_path,epoch,opt,schedular)

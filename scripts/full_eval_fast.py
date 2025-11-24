@@ -67,7 +67,7 @@ img_config={
     "deepblending":" -i images",
 }
 
-fast_config="--iterations 18000 --position_lr_max_steps 18000 --position_lr_final 0.000016 --densification_interval 2"
+fast_config="--iterations 10000 --position_lr_max_steps 10000 --position_lr_final 0.000016 --densification_interval 2"
 
 
 

@@ -105,9 +105,10 @@ if __name__ == "__main__":
             ssim_list=[]
             psnr_list=[]
             lpips_list=[]
-            for index,(extr,intr,gt_image,idx) in enumerate(loader):
-                extr=extr.cuda()
-                intr=intr.cuda()
+            for index,(view_matrix,proj_matrix,frustumplane,gt_image,idx) in enumerate(loader):
+                view_matrix=view_matrix.cuda()
+                proj_matrix=proj_matrix.cuda()
+                frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()/255.0
                 idx=idx.cuda()
                 if op.learnable_viewproj:
@@ -119,7 +120,7 @@ if __name__ == "__main__":
                         nearest_idx=(extr-denoised_training_extr).abs().sum(dim=1).argmin()
                         delta=denoised_training_extr[nearest_idx]-noise_extr[nearest_idx]
                         extr=extr+delta
-                view_matrix,proj_matrix,viewproj_matrix,frustumplane=litegs.utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=litegs.utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
                 #cluster culling
                 visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=litegs.render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,lp.sh_degree)
@@ -129,7 +130,7 @@ if __name__ == "__main__":
                 ssim_list.append(ssim_metrics(img,gt_image).unsqueeze(0))
                 psnr_list.append(psnr_value.unsqueeze(0))
                 lpips_list.append(lpip_metrics(img,gt_image).unsqueeze(0))
-                if args.save_image:
+                if loader_name=="Testset" and args.save_image:
                     plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-rd.png".format(index,float(psnr_value))),img.detach().cpu()[0].permute(1,2,0).numpy())
                     plt.imsave(os.path.join(lp.model_path,loader_name,"{}-{:.2f}-gt.png".format(index,float(psnr_value))),gt_image.detach().cpu()[0].permute(1,2,0).numpy())
             ssim_mean=torch.concat(ssim_list,dim=0).mean()
