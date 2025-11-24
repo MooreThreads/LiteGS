@@ -30,7 +30,7 @@ for scene in scenes:
         index+=len(label)
         end=stdout[index:].find('\n')
         psnr=float(stdout[index:index+end])
-        metrics[scene]=psnr
+        metrics[scene]["psnr"]=psnr
         psnr_list.append(psnr)
 json.dump(metrics, open(os.path.join(args.output_path, 'metrics.json'), 'w'))
 print('PSNR avg:',np.array(psnr_list).mean())
