@@ -1,22 +1,28 @@
 # LiteGS
 
-**The Fastest Operators! 4.7x Acceleration, Modular, and Available in Pure Python or CUDA**
+**Fastest(about 50 seconds), Modular, and Available in Pure Python or CUDA**
 
 This repository provides a refactored codebase aimed at improving the flexibility and performance of Gaussian splatting. 
 
-## What's New
+## Training 3DGS in about 50 seconds
 
-* Warp-based raster algorithm minimizes reduce operations
-* Optimal patchsize derived from algorithm and hardware resources to minimize atomic additions on global memory
-* fp16 accelerated raster
-* Ampere architecture-accelerated reduction instructions (requires sm_8.x or higher)
-* Depth support temporarily removed (half-precision raster impact on depth not yet tested; use stable branch if needed)
+`python ./scripts/full_eval_fast.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
 
-We're excited to release a preview of LiteGS's latest advancements, achieving 30%-35% speedup over the previous version. Compared to the original 3DGS implementation, LiteGS delivers 4.7x acceleration, making it the fastest 3DGS operator to our knowledge. ​​Note:​​ The preview version has not yet completed adaptation for older GPU architectures - ensure your device is sm_8.x or higher, otherwise use the stable branch. Technical details will be presented in an upcoming paper/report. Thank you for your interest.
-
-## Roadmap
-* [Done] Incorporate latest point cloud density control techniques (tentatively TamingGS's Score-based Densification)
-* Restore depth support
+|scene|primitives|takes(RTX 3090)|takes(RTX 4090)|SSIM_train|PSNR_train|LPIPS_train|SSIM_test|PSNR_test|LPIPS_test|
+|---|---|---|---|---|---|---|---|---|---|
+|bicycle|1360000|68.90290451049805|**41.72691751**|0.7696665|23.9320354|0.2501733|0.7585854|25.1978111|0.2335179|
+|flowers|1220000|78.57123351097107|**47.9060986**|0.7225419|23.1023922|0.2838508|0.6053527|21.7142277|0.3396027|
+|garden|1460000|78.55829739570618|**46.76381636**|0.8845506|28.7087154|0.1193212|0.8556744|27.3950653|0.1323125|
+|stump|1340000|71.96337366104126|**44.23456001**|0.8554742|28.5616417|0.2056226|0.7926696|27.2177505|0.2127895|
+|treehill|1160000|74.03676867485046|**46.34997225**|0.7261154|22.7449684|0.3029707|0.6390569|22.8510647|0.3379321|
+|room|800000|70.27747488|**41.05782461**|0.9351271|33.6474419|0.2011591|0.9221826|31.5905571|0.2149457|
+|counter|800000|89.81700301170349|**51.63395095**|0.9220967|29.9026985|0.1850652|0.9086227|28.8188915|0.2000091|
+|kitchen|1200000|105.24096488952637|**63.1258564**|0.9389035|32.4555969|0.1205899|0.9264742|31.4408417|0.1294753|
+|bonsai|1200000|91.47094392776489|**56.54596996**|0.9501833|32.8006744|0.1922134|0.9444824|31.9543724|0.1964863|
+|truck|680000|61.99935531616211|**40.03852582**|0.8910525|26.4909763|0.1484901|0.8747544|25.3993835|0.1531686|
+|train|720000|69.77397298812866|**46.26339579**|0.8102806|23.553236|0.2373699|0.7795711|21.1193752|0.2538348|
+|drjohnson|1600000|66.38695478439331|**39.18569803**|0.9353783|34.0604973|0.2259799|0.9080961|29.6174507|0.2518271|
+|playroom|980000|56.96188426017761|**32.52357793**|0.9448828|35.7014847|0.2159965|0.9150408|30.9205952|0.2443539|
 
 ## Background
 Gaussian splatting is a powerful technique used in various computer graphics and vision applications. It involves representing 3D data as Gaussian distributions in space, allowing for efficient and accurate representation of spatial data. However, the original implementation (https://github.com/graphdeco-inria/gaussian-splatting) of Gaussian splatting in PyTorch faced several limitations: 
@@ -37,33 +43,23 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 
 ## Getting Started
 
-1. Clone
+1. Install simple-knn
 
     ```bash
-    git clone --recursive https://github.com/MooreThreads/LiteGS.git
-    cd LiteGS
+    pip install litegs/submodules/simple-knn
     ```
 
-2. Install simple-knn
+2. Install fused-ssim
 
     ```bash
-    cd litegs/submodules/simple-knn
-    pip install .
-    ```
-
-3. Install fused-ssim
-
-    ```bash
-    cd litegs/submodules/fussed_ssim
-    pip install .
+    pip install litegs/submodules/fussed_ssim
     ```
     
 
-4. Install litegs_fused
+3. Install litegs_fused
     
     ```bash
-    cd litegs/submodules/gaussian_raster
-    pip install .
+    pip install litegs/submodules/gaussian_raster
     ```
 
     If you need the cmake project(e.g. CUDA Debug in Visual Studio)：
@@ -78,6 +74,11 @@ Gaussian splatting is a powerful technique used in various computer graphics and
     cmake --build . --config Release
     ```
 
+4. Install requirments
+
+    ```bash
+    pip install -r requirement.txt
+    ```
     
 ### Train
 Begin training with the following command:
@@ -153,22 +154,6 @@ modified:
 ```python
 coefficient=2*((255*opacity).log())
 axis_length=(coefficient*eigen_val.abs()).sqrt().ceil()
-```
-
-## Citation
-
-If you find this project useful in your research, please consider cite:
-
-```
-@misc{liao2025litegshighperformanceframeworktrain,
-      title={LiteGS: A High-performance Framework to Train 3DGS in Subminutes via System and Algorithm Codesign}, 
-      author={Kaimin Liao and Hua Wang and Zhi Chen and Luchao Wang and Yaohua Tang},
-      year={2025},
-      eprint={2503.01199},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2503.01199}, 
-}
 ```
 
 ## Performance Optimization Detail
