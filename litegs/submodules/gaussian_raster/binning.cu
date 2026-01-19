@@ -147,6 +147,10 @@ template<int TileSizeY, int TileSizeX>
     {
         LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(8,16);
     }
+    else if (tile_size_h == 12 && tile_size_w == 16)
+    {
+        LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(12, 16);
+    }
     else if (tile_size_h == 16 && tile_size_w == 16)
     {
         LAUNCH_DUPLICATE_WITH_KEYS_KERNEL(16,16);
@@ -367,6 +371,10 @@ std::vector<at::Tensor> get_allocate_size(at::Tensor ndc, at::Tensor view_space_
     if (tile_size_h == 8 && tile_size_w == 16)
     {
         LAUNCH_GET_ALLOCATE_SIZE_KERNEL(8,16);
+    }
+    else if (tile_size_h == 12 && tile_size_w == 16)
+    {
+        LAUNCH_GET_ALLOCATE_SIZE_KERNEL(12, 16);
     }
     else if (tile_size_h == 16 && tile_size_w == 16)
     {
