@@ -162,7 +162,7 @@ template <int tile_size_y, int tile_size_x, bool enable_statistic, bool enable_t
 __global__ void raster_forward_kernel(
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> sorted_points,    //[batch,tile]  p.s. tile_id 0 is invalid!
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> start_index,    //[batch,tile]  p.s. tile_id 0 is invalid!
-    const torch::PackedTensorAccessor32<float/*torch::Half*/, 3, torch::RestrictPtrTraits> packed_params,         //[batch,point_num,sizeof(PackedParams)/4]
+    const PackedParams* __restrict__ packed_params,         //[batch,point_num]
     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> specific_tiles,          //[batch,tiles_num]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_img,    //[batch,3,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<float, 5, torch::RestrictPtrTraits> output_transmitance,    //[batch,1,tile,tilesize,tilesize]
@@ -170,7 +170,7 @@ __global__ void raster_forward_kernel(
     torch::PackedTensorAccessor32<short, 4, torch::RestrictPtrTraits> output_last_contributor,    //[batch,tile,tilesize,tilesize]
     torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> out_fragment_count,  //[batch,1,point_num]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> out_fragment_weight_sum,  //[batch,1,point_num]
-    int tiles_num_x)
+    int tiles_num_x, int pointsnum)
 {
     //assert blockDim.x==32
 
@@ -180,6 +180,7 @@ __global__ void raster_forward_kernel(
     constexpr float INV_SCALER = 1.0f / 128;
 
     const int batch_id = blockIdx.y;
+    packed_params += batch_id * pointsnum;
     int tile_id = blockIdx.x * blockDim.y + threadIdx.y + 1;// +1, tile_id 0 is invalid
     if (specific_tiles.size(1) != 0)
     {
@@ -222,7 +223,7 @@ __global__ void raster_forward_kernel(
             for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
             {
                 int point_id = points_id_in_tile[index_in_tile];
-                PackedParams params = *((PackedParams*)&packed_params[batch_id][point_id][0]);
+                PackedParams params = packed_params[point_id];
                 RGBA16x2 point_color_x2;
                 point_color_x2.r = half2(params.rg.x, params.rg.x);
                 point_color_x2.g = half2(params.rg.y, params.rg.y);
@@ -233,9 +234,11 @@ __global__ void raster_forward_kernel(
                 const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x ;
                 const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
                 float2 d { xy.x - pixel_x,xy.y - pixel_y };
-                float basic = -0.5f * (params.inv_cov00 * d.x * d.x + params.inv_cov11 * d.y * d.y + 2 * params.inv_cov01 * d.x * d.y);
                 float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
-                float neg_half_c = -0.5f * params.inv_cov11;
+                float axby = params.inv_cov00 * d.x + params.inv_cov01 * d.y;
+                float cur_val = -0.5f * (d.x * axby + d.y * bxcy);
+                float cur_diff = bxcy - 0.5f * params.inv_cov11;
+                float second_diff = -params.inv_cov11;
                 //basic+=(cy+bx)*delta - 0.5*c*delta*delta
 
                 any_active = 0;
@@ -244,10 +247,14 @@ __global__ void raster_forward_kernel(
 #pragma unroll
                 for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
-                    half2 power{
-                        basic + 2 * i * bxcy + 2 * i * 2 * i * neg_half_c,
-                        basic + (2 * i + 1) * bxcy + (2 * i + 1) * (2 * i + 1) * neg_half_c
-                    };
+                    half2 power;
+                    power.x = cur_val;
+                    cur_val += cur_diff;
+                    cur_diff += second_diff;
+                    power.y = cur_val;
+                    cur_val += cur_diff;
+                    cur_diff += second_diff;
+
                     unsigned int active_mask = 0xffffffffu;
                     active_mask = __hgt2_mask(reg_buffer[i].t, half2(SCALER / 8192, SCALER / 8192));
                     any_active |= active_mask;
@@ -350,7 +357,7 @@ __global__ void pack_forward_params(
 
 #define RASTER_FORWARD_PARAMS sorted_points.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 start_index.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
-packed_params.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
+reinterpret_cast<PackedParams*>(packed_params.data_ptr<float>()),\
 specific_tiles.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),\
 output_img.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
 output_transmitance.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
@@ -358,7 +365,7 @@ output_depth.packed_accessor32<float, 5, torch::RestrictPtrTraits>(),\
 output_last_contributor.packed_accessor32<short, 4, torch::RestrictPtrTraits>(),\
 fragment_count.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),\
 fragment_weight_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),\
-tilesnum_x
+tilesnum_x,packed_params.size(1)
 
 #define ENCODE(STATISTIC, TRANS, DEPTH) (((STATISTIC)*1)<<2)|(((TRANS)*1)<<1)|((DEPTH)*1)
 
@@ -686,21 +693,24 @@ __global__ void raster_backward_kernel(
 
             for (; (index_in_tile >= 0); index_in_tile--)
             {
-                float basic;
-                float bxcy;
-                float neg_half_c;
+                float cur_val;
+                float cur_diff;
+                float second_diff;
                 float2 d{ 0,0 };
                 int point_id = points_in_tile[index_in_tile];
                 PackedParams params = packed_params[point_id];
+                //Forward Difference
                 {
                     float2 xy{ params.pixel_x,params.pixel_y};
                     d.x = xy.x - pixel_x;
                     d.y = xy.y - pixel_y;
-                    bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
+                    float bxcy = params.inv_cov11 * d.y + params.inv_cov01 * d.x;
                     float axby = params.inv_cov00 * d.x + params.inv_cov01 * d.y;
-                    basic = -0.5f * (d.x * axby + d.y * bxcy);
-                    neg_half_c = -0.5f * params.inv_cov11;
-                }//basic+=(cy+bx)*delta - 0.5*c*delta*delta
+                    cur_val = -0.5f * (d.x * axby + d.y * bxcy);
+                    cur_diff = bxcy - 0.5f * params.inv_cov11;
+                    second_diff = - params.inv_cov11;
+                    
+                }
 
                 RGBA16x2 point_color_x2;
                 point_color_x2.r = half2(params.rg.x, params.rg.x);
@@ -720,8 +730,15 @@ __global__ void raster_backward_kernel(
                 #pragma unroll
                 for (int i = 0; i < PIXELS_PER_THREAD; i++)
                 {
-                    half2 power{ basic + 2 * i * bxcy + 2 * i * 2 * i * neg_half_c,
-                        basic + (2 * i + 1) * bxcy + (2 * i + 1) * (2 * i + 1) * neg_half_c };
+
+                    half2 power;
+                    power.x = cur_val;
+                    cur_val += cur_diff;
+                    cur_diff += second_diff;
+                    power.y = cur_val;
+                    cur_val += cur_diff;
+                    cur_diff += second_diff;
+
                     half2 G = fast_exp_approx(power);
                     half2 alpha = point_color_x2.a * G;
                     alpha = __hmin2(half2(255.0f / 256, 255.0f / 256), alpha);
