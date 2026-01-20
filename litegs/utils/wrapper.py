@@ -7,6 +7,7 @@ from torch.cuda import nvtx
 from .platform import add_cmake_output_path
 from . import spherical_harmonics
 from ..utils.statistic_helper import StatisticsHelperInst
+from ..utils.CompactedTensor import CompactedTensor
 
 
 try:
@@ -785,15 +786,14 @@ class CullCompactActivateWithSparseGrad(torch.autograd.Function):
         chunk_size=ctx.chunk_size
         sh_degree=ctx.sh_degree
         visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity=ctx.saved_tensors
+        visible_chunk_num=visible_chunkid.shape[0]
         compactd_grads=litegs_fused.activate_backward(
             visible_chunkid,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity,
             activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad)
-        grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
+        grads=[]
         for grad in compactd_grads:
-            sparse_value=grad.reshape(-1,chunk_size)
-            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='cuda'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
-            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='cuda')), dim=-2)
-            grads.append(placeholder_grad)
+            size=(*grad.shape[:-2],chunk_num,chunk_size)
+            grads.append(CompactedTensor(size,visible_chunkid,grad.reshape(-1,visible_chunk_num,chunk_size)))
         return None,None,None,None,None,*grads
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
