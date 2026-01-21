@@ -13,7 +13,7 @@ class MeanStdData:
 class StatisticsHelper:
     def __init__(self,chunk_num:int,chunk_size:int):
         self.cached_tiles_blend_count:dict[str,torch.Tensor]={}
-        self.cached_complex_tile:dict[str,torch.Tensor]={}
+        self.cached_heavy_tile:dict[str,torch.Tensor]={}
         self.cached_sorted_tile_list:dict[str,torch.Tensor]={}
         self.cur_sample:Optional[str]=None
     
@@ -68,7 +68,7 @@ class StatisticsHelper:
         if self.cur_sample is not None:
             self.cached_tiles_blend_count[self.cur_sample]=tiles_blend_count
             self.cached_sorted_tile_list[self.cur_sample]=tiles_blend_count.sort(descending=True)[1].int()+1
-            self.cached_complex_tile[self.cur_sample]=(self.cached_tiles_blend_count[self.cur_sample]>1024).nonzero()[:,0]+1
+            self.cached_heavy_tile[self.cur_sample]=self.cached_sorted_tile_list[self.cur_sample][:128]
         return
     
     @torch.no_grad()

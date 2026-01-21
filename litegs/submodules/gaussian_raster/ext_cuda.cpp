@@ -10,6 +10,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("create_viewproj_forward", &create_viewproj_forward);
 	m.def("create_viewproj_backward", &create_viewproj_backward);
 	m.def("create_table", &create_table);
+	m.def("create_subtile", &create_subtile);
 	m.def("tileRange", &tileRange);
 	m.def("get_allocate_size", &get_allocate_size);
 	m.def("rasterize_forward", &rasterize_forward);

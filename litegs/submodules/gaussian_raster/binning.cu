@@ -68,16 +68,16 @@ template<int TileSizeY, int TileSizeX>
              float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
              y_term = (con_o.y < 0) ? y_term : -y_term;
 
-             float2 bbox_argmin = { p.y - y_term, p.x - x_term };
-             float2 bbox_argmax = { p.y + y_term, p.x + x_term };
+             float2 bboy_at_min_x = { p.y - y_term, p.x - x_term };
+             float2 bboy_at_max_x = { p.y + y_term, p.x + x_term };
 
              float2 bbox_min = {
-                 computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmin.x).x,
-                 computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmin.y).x
+                 computeEllipseIntersection(con_o, disc, t, p, true, bboy_at_min_x.x).x,
+                 computeEllipseIntersection(con_o, disc, t, p, false, bboy_at_min_x.y).x
              };
              float2 bbox_max = {
-                 computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmax.x).y,
-                 computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmax.y).y
+                 computeEllipseIntersection(con_o, disc, t, p, true, bboy_at_max_x.x).y,
+                 computeEllipseIntersection(con_o, disc, t, p, false, bboy_at_max_x.y).y
              };
 
              // Rectangular tile extent of ellipse
@@ -98,7 +98,7 @@ template<int TileSizeY, int TileSizeX>
                  processTiles<TileSizeY, TileSizeX>(
                      con_o, disc, t, p,
                      bbox_min, bbox_max,
-                     bbox_argmin, bbox_argmax,
+                     bboy_at_min_x, bboy_at_max_x,
                      rect_min, rect_max,
                      grid, isY,
                      index, buffer_offset,
@@ -189,62 +189,56 @@ template<int TileSizeY, int TileSizeX>
     
 }
 
-__global__ void tile_range_kernel(
-    const torch::PackedTensorAccessor32<int32_t, 2,torch::RestrictPtrTraits> table_tileId,//viewnum,pointnum
-    int table_length,
-    int max_tileId,
-    torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tile_range
-)
-{
-    int view_id = blockIdx.y;
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+ __global__ void tile_range_kernel(
+     const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> table_tileId,//viewnum,pointnum
+     int table_length,
+     int max_tileId,
+     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tile_start,
+     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tile_end
+ )
+ {
+     int view_id = blockIdx.y;
+     int index = blockIdx.x * blockDim.x + threadIdx.x;
 
+     //tail
+     if (index == table_length - 1)
+     {
+         int cur_tile = table_tileId[view_id][index];
+         tile_end[view_id][cur_tile] = table_length;
+     }
 
-    // head
-    if (index == 0)
-    {
-        int tile_id=table_tileId[view_id][index];
-        tile_range[view_id][tile_id] = index;
-    }
-    
-    //tail
-    if (index == table_length - 1)
-    {
-        tile_range[view_id][max_tileId + 1] = table_length;
-    }
-    
-    if (index < table_length-1)
-    {
-        int cur_tile = table_tileId[view_id][index];
-        int next_tile= table_tileId[view_id][index+1];
-        if (cur_tile!=next_tile)
-        {
-            if (cur_tile + 1 < next_tile)
-            {
-                tile_range[view_id][cur_tile + 1] = index + 1;
-            }
-            tile_range[view_id][next_tile] = index + 1;
-        }
-    }
-}
+     if (index < table_length - 1)
+     {
+         int cur_tile = table_tileId[view_id][index];
+         int next_tile = table_tileId[view_id][index + 1];
+         if (cur_tile != next_tile)
+         {
+             tile_start[view_id][next_tile] = index + 1;
+             tile_end[view_id][cur_tile] = index + 1;
+         }
+     }
+ }
 
-at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_tileId)
+std::vector<at::Tensor> tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_tileId)
 {
     at::DeviceGuard guard(table_tileId.device());
 
     int64_t view_num = table_tileId.sizes()[0];
-    std::vector<int64_t> output_shape{ view_num,max_tileId + 1 + 1 };//+1 for tail
-    //printf("\ntensor shape in tileRange:%ld,%ld\n", view_num, max_tileId+1-1);
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(table_tileId.device()).requires_grad(false);
-    auto out = torch::ones(output_shape, opt)*-1;
+    auto tile_start = torch::zeros({ view_num,max_tileId + 1 }, opt) * -1;
+    auto tile_end = torch::zeros({ view_num,max_tileId + 1 }, opt) * -1;
 
     dim3 Block3d(std::ceil(table_length / 512.0f), view_num, 1);
 
-    tile_range_kernel<<<Block3d, 512 >>>
-        (table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(), table_length, max_tileId, out.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
+    tile_range_kernel << <Block3d, 512 >> > (
+        table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        table_length,
+        max_tileId,
+        tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
 
-    return out;
+    return { tile_start, tile_end };
 }
 
 template<int TileSizeY, int TileSizeX>
@@ -285,16 +279,16 @@ __global__ void get_allocate_size_kernel(
             float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
             y_term = (con_o.y < 0) ? y_term : -y_term;
 
-            float2 bbox_argmin = { p.y - y_term, p.x - x_term };
-            float2 bbox_argmax = { p.y + y_term, p.x + x_term };
+            float2 bboy_at_min_x = { p.y - y_term, p.x - x_term };
+            float2 bboy_at_max_x = { p.y + y_term, p.x + x_term };
             
             float2 bbox_min = {
-                computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmin.x).x,
-                computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmin.y).x
+                computeEllipseIntersection(con_o, disc, t, p, true, bboy_at_min_x.x).x,
+                computeEllipseIntersection(con_o, disc, t, p, false, bboy_at_min_x.y).x
             };
             float2 bbox_max = {
-                computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmax.x).y,
-                computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmax.y).y
+                computeEllipseIntersection(con_o, disc, t, p, true, bboy_at_max_x.x).y,
+                computeEllipseIntersection(con_o, disc, t, p, false, bboy_at_max_x.y).y
             };
 
             tensor_left_up[view_id][0][index] = std::ceil(bbox_min.x);
@@ -321,7 +315,7 @@ __global__ void get_allocate_size_kernel(
                 allocated_size = processTiles<TileSizeY, TileSizeX>(
                     con_o, disc, t, p,
                     bbox_min, bbox_max,
-                    bbox_argmin, bbox_argmax,
+                    bboy_at_min_x, bboy_at_max_x,
                     rect_min, rect_max,
                     grid, isY,
                     index, 0,
@@ -386,4 +380,239 @@ std::vector<at::Tensor> get_allocate_size(at::Tensor ndc, at::Tensor view_space_
     }
     CUDA_CHECK_ERRORS;
     return { left_up ,right_down,allocated_size };
+}
+
+
+__global__ void create_subtile_kernel(
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> primitive_list,//viewnum,size
+    torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,//viewnum,tilesnum
+    torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,//viewnum,tilesnum
+    const torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> heavy_tileid, //complex_num
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_ndc,        //viewnum,4,pointnum
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> tensor_inv_cov2d,  //viewnum,2,2,pointnum
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_opacity,  //viewnum,pointnum
+    int img_h, int img_w, unsigned int tile_num_h, unsigned int tile_num_w,
+    torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> subtile_item_num,//1
+    torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> subtileid_list,//complex_num*4
+    torch::PackedTensorAccessor32<int32_t, 1, torch::RestrictPtrTraits> subtile_primitives//complex_num*4
+)
+{
+    const int TILE_W = 16;
+    const int TILE_H = 8;
+    const int SUBTILE_W = 4;
+    const int SUBTILE_H = 8;
+
+    int view_id = 0;
+    int warp_id = threadIdx.x / 32;
+    if (blockIdx.x * (blockDim.x / 32) + warp_id >= heavy_tileid.size(0))
+    {
+        return;
+    }
+    int lane_id = threadIdx.x % 32;
+    int tile_id = heavy_tileid[blockIdx.x * (blockDim.x / 32) + warp_id];
+    int start_offset = tile_start[view_id][tile_id];
+    int end_offset = tile_end[view_id][tile_id];
+
+    //allocate pass
+    int subtile_num_in_warp[4]{ 0,0,0,0 };
+    for (int i = lane_id; i < end_offset - start_offset; i += 32)
+    {
+        int primitive_id = primitive_list[view_id][start_offset + i];
+
+        float2 ndc{ tensor_ndc[view_id][0][primitive_id],tensor_ndc[view_id][1][primitive_id] };
+        float opacity = tensor_opacity[view_id][primitive_id];
+        float4 con_o{ tensor_inv_cov2d[view_id][0][0][primitive_id],tensor_inv_cov2d[view_id][0][1][primitive_id],tensor_inv_cov2d[view_id][1][1][primitive_id],opacity };
+        float disc = con_o.y * con_o.y - con_o.x * con_o.z;
+        float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
+        float2 p{ screen_uv.x * img_w - 0.5f,screen_uv.y * img_h - 0.5f };
+        float t = 2.0f * log(max(con_o.w * 255.0f, 1.0f));
+
+        int tile_index = tile_id - 1;
+        bool subtile_valid[4]{ false,false,false,false };
+        int tile_y = tile_index / tile_num_w;
+        int tile_x = tile_index % tile_num_w;
+        float pixel_y_min = tile_y * TILE_H;
+        float pixel_y_max = (tile_y + 1) * TILE_H;
+
+        float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
+        y_term = (con_o.y < 0) ? y_term : -y_term;
+        float y_at_min_x = p.y - y_term;
+        float y_at_max_x = p.y + y_term;
+
+        float2 ellipse_x{ 
+            computeEllipseIntersection(con_o, disc, t, p, true, y_at_min_x).x, 
+            computeEllipseIntersection(con_o, disc, t, p, true, y_at_max_x).y };
+        float x_min = (y_at_min_x >= pixel_y_min && y_at_min_x <= pixel_y_max) ? ellipse_x.x : (tile_x + 1) * TILE_W;
+        float x_max = (y_at_max_x >= pixel_y_min && y_at_max_x <= pixel_y_max) ? ellipse_x.y : tile_x * TILE_W;
+
+        float2 bottom_x = computeEllipseIntersection(con_o, disc, t, p, true, tile_y * TILE_H);
+        float2 top_x = computeEllipseIntersection(con_o, disc, t, p, true, (tile_y + 1) * TILE_H);
+        x_min = fminf(bottom_x.x, x_min);
+        x_min = fminf(top_x.x, x_min);
+        x_max = fmaxf(bottom_x.y, x_max);
+        x_max = fmaxf(top_x.y, x_max);
+
+        if (x_min < x_max)
+        {
+            float tile_origin_x = tile_x * TILE_W;
+            float local_min = max(0.0f, x_min - tile_origin_x);
+            float local_max = min((float)TILE_W, x_max - tile_origin_x);
+            int subtile_index_start = floor(local_min * (1.0f / SUBTILE_W));
+            int subtile_index_end = ceil(local_max * (1.0f / SUBTILE_W));
+            int count = min(TILE_W/SUBTILE_W, subtile_index_end - subtile_index_start);
+            uint32_t mask = ((1u << count) - 1u) << subtile_index_start;
+
+            subtile_num_in_warp[0] += mask & 0x1;
+            subtile_num_in_warp[1] += (mask & 0x2) >> 1;
+            subtile_num_in_warp[2] += (mask & 0x4) >> 2;
+            subtile_num_in_warp[3] += (mask & 0x8) >> 3;
+        }
+    }
+    //warp sum
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 16);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 8);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 4);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 2);
+    subtile_num_in_warp[0] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[0], 1);
+    subtile_num_in_warp[0] = __shfl_sync(0xffffffff, subtile_num_in_warp[0], 0);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 16);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 8);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 4);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 2);
+    subtile_num_in_warp[1] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[1], 1);
+    subtile_num_in_warp[1] = __shfl_sync(0xffffffff, subtile_num_in_warp[1], 0);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 16);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 8);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 4);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 2);
+    subtile_num_in_warp[2] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[2], 1);
+    subtile_num_in_warp[2] = __shfl_sync(0xffffffff, subtile_num_in_warp[2], 0);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 16);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 8);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 4);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 2);
+    subtile_num_in_warp[3] += __shfl_down_sync(0xffffffff, subtile_num_in_warp[3], 1);
+    subtile_num_in_warp[3] = __shfl_sync(0xffffffff, subtile_num_in_warp[3], 0);
+
+    //global offset
+    int new_tile_offset = 0;
+    if (lane_id == 0)
+    {
+        new_tile_offset = atomicAdd(&subtile_item_num[0], subtile_num_in_warp[0] + subtile_num_in_warp[1] + subtile_num_in_warp[2] + subtile_num_in_warp[3]);
+    }
+    new_tile_offset = __shfl_sync(0xffffffff, new_tile_offset, 0);
+
+
+    //fill pass
+    int subtile_offset[4] = { 0,0,0,0 };
+    subtile_offset[0] = new_tile_offset;
+    subtile_offset[1] = subtile_offset[0] + subtile_num_in_warp[0];
+    subtile_offset[2] = subtile_offset[1] + subtile_num_in_warp[1];
+    subtile_offset[3] = subtile_offset[2] + subtile_num_in_warp[2];
+    for (int i = lane_id; i < end_offset - start_offset; i += 32)
+    {
+        int primitive_id = primitive_list[view_id][start_offset + i];
+
+        float2 ndc{ tensor_ndc[view_id][0][primitive_id],tensor_ndc[view_id][1][primitive_id] };
+        float opacity = tensor_opacity[view_id][primitive_id];
+        float4 con_o{ tensor_inv_cov2d[view_id][0][0][primitive_id],tensor_inv_cov2d[view_id][0][1][primitive_id],tensor_inv_cov2d[view_id][1][1][primitive_id],opacity };
+        float disc = con_o.y * con_o.y - con_o.x * con_o.z;
+        float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
+        float2 p{ screen_uv.x * img_w - 0.5f,screen_uv.y * img_h - 0.5f };
+        float t = 2.0f * log(max(con_o.w * 255.0f, 1.0f));
+
+        int tile_index = tile_id - 1;
+        bool subtile_valid[4]{ false,false,false,false };
+        int tile_y = tile_index / tile_num_w;
+        int tile_x = tile_index % tile_num_w;
+        float pixel_y_min = tile_y * TILE_H;
+        float pixel_y_max = (tile_y + 1) * TILE_H;
+
+        float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
+        y_term = (con_o.y < 0) ? y_term : -y_term;
+        float y_at_min_x = p.y - y_term;
+        float y_at_max_x = p.y + y_term;
+
+        float2 ellipse_x{
+            computeEllipseIntersection(con_o, disc, t, p, true, y_at_min_x).x,
+            computeEllipseIntersection(con_o, disc, t, p, true, y_at_max_x).y };
+        float x_min = (y_at_min_x >= pixel_y_min && y_at_min_x <= pixel_y_max) ? ellipse_x.x : (tile_x + 1) * TILE_W;
+        float x_max = (y_at_max_x >= pixel_y_min && y_at_max_x <= pixel_y_max) ? ellipse_x.y : tile_x * TILE_W;
+
+        float2 bottom_x = computeEllipseIntersection(con_o, disc, t, p, true, tile_y * TILE_H);
+        float2 top_x = computeEllipseIntersection(con_o, disc, t, p, true, (tile_y + 1) * TILE_H);
+        x_min = fminf(bottom_x.x, x_min);
+        x_min = fminf(top_x.x, x_min);
+        x_max = fmaxf(bottom_x.y, x_max);
+        x_max = fmaxf(top_x.y, x_max);
+
+        if (x_min < x_max)
+        {
+            float tile_origin_x = tile_x * TILE_W;
+            float local_min = max(0.0f, x_min - tile_origin_x);
+            float local_max = min((float)TILE_W, x_max - tile_origin_x);
+            int subtile_index_start = floor(local_min * (1.0f / SUBTILE_W));
+            int subtile_index_end = ceil(local_max * (1.0f / SUBTILE_W));
+            int count = min(TILE_W / SUBTILE_W, subtile_index_end - subtile_index_start);
+            uint32_t mask = ((1u << count) - 1u) << subtile_index_start;
+
+            subtile_valid[0] = mask & 0x1;
+            subtile_valid[1] = (mask & 0x2)>>1;
+            subtile_valid[2] = (mask & 0x4)>>2;
+            subtile_valid[3] = (mask & 0x8)>>3;
+        }
+
+        unsigned int prev_mask = (1 << lane_id) - 1;
+        for (int j = 0; j < 4; j++)
+        {
+            unsigned int active_mask = __ballot_sync(0xffffffff, subtile_valid[j]);
+            int item_offset = __popc(active_mask & prev_mask);
+            if (subtile_valid[j])
+            {
+                int tmp_index = subtile_offset[j] + item_offset;
+                subtileid_list[tmp_index] = (tile_id << 2) + j;
+                subtile_primitives[tmp_index] = primitive_id;
+            }
+            subtile_offset[j] += __popc(active_mask);
+        }
+    }
+
+    if (lane_id == 0)
+    {
+        tile_start[view_id][tile_id] = 0;
+        tile_end[view_id][tile_id] = 0;
+    }
+}
+
+std::vector<at::Tensor> create_subtile(at::Tensor primitive_list, at::Tensor tile_start, at::Tensor tile_end, at::Tensor heavy_tileid, int64_t allocate_size,
+    at::Tensor ndc, at::Tensor inv_cov2d, at::Tensor opacity, int64_t height, int64_t width, int64_t tile_size_h, int64_t tile_size_w)
+{
+    at::DeviceGuard guard(ndc.device());
+
+    assert(tile_size_h == 8 && tile_size_w == 16);
+    int tiles_num_h = (height + tile_size_h - 1) / tile_size_h;
+    int tiles_num_w = (width + tile_size_w - 1) / tile_size_w;
+    int thread_num = 512;
+    int block_num = std::ceil(heavy_tileid.size(0) / (thread_num / 32.0f));
+
+    at::Tensor subtile_item_num = torch::zeros({ 1 }, primitive_list.options());
+    at::Tensor subtileid_list = torch::zeros({ allocate_size }, primitive_list.options());
+    at::Tensor subtile_primitives = torch::zeros({ allocate_size }, primitive_list.options());
+
+    create_subtile_kernel << <block_num, thread_num >> > (
+        primitive_list.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        heavy_tileid.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>(),
+        ndc.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        inv_cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        height, width, tiles_num_h, tiles_num_w,
+        subtile_item_num.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>(),
+        subtileid_list.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>(),
+        subtile_primitives.packed_accessor32<int32_t, 1, torch::RestrictPtrTraits>()
+        );
+
+    return { subtileid_list ,subtile_primitives ,subtile_item_num };
+
 }

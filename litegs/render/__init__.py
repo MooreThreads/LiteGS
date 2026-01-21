@@ -54,6 +54,15 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
            xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,color:torch.Tensor,opacity:torch.Tensor,
            actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
+    tiles=None
+    heavy_tile=None
+    if StatisticsHelperInst.bStart==False:
+        try:
+            tiles=StatisticsHelperInst.cached_sorted_tile_list[StatisticsHelperInst.cur_sample].unsqueeze(0)
+            heavy_tile=StatisticsHelperInst.cached_heavy_tile[StatisticsHelperInst.cur_sample]
+        except:
+            pass
+
     #gs projection
     nvtx.range_push("Proj")
     transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot)
@@ -66,18 +75,16 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     nvtx.range_pop()
     
     #visibility table
-    tile_start_index,sorted_pointId,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,output_shape,pp.tile_size)
+    primitives_in_tile,tile_start,tile_end,primitives_in_subtile,subtile_start,subtile_end,heavy_tile_id,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,heavy_tile,output_shape,pp.tile_size)
 
     #raster
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))
     tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size[0])))
-    tiles=None
-    try:
-        tiles=StatisticsHelperInst.cached_sorted_tile_list[StatisticsHelperInst.cur_sample].unsqueeze(0)
-    except:
-        pass
-    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,tiles,
-                                            output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
+
+    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(primitives_in_tile,tile_start,tile_end,tiles,
+        primitives_in_subtile,subtile_start,subtile_end,heavy_tile_id,
+        ndc_pos,inv_cov2d,color,opacity,
+        output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
     
     if StatisticsHelperInst.bStart:
         StatisticsHelperInst.update_tile_blend_count(lst_contributor)
