@@ -823,14 +823,17 @@ __global__ void raster_backward_kernel(
                 const int pixel_x = ((tile_id - 1) % tiles_num_x) * tile_size_x + threadIdx.x % tile_size_x;
                 const int pixel_y = ((tile_id - 1) / tiles_num_x) * tile_size_y + threadIdx.x / tile_size_x * PIXELS_PER_THREAD * VECTOR_SIZE;
 
+                int point_id = 0;
+                int prefetch_point_id = points_in_tile[index_in_tile];
+                PackedParams params = packed_params[prefetch_point_id];
+
                 for (; (index_in_tile >= 0); index_in_tile--)
                 {
+                    point_id = prefetch_point_id;
                     float cur_val;
                     float cur_diff;
                     float second_diff;
                     float2 d{ 0,0 };
-                    int point_id = points_in_tile[index_in_tile];
-                    PackedParams params = packed_params[point_id];
                     //Forward Difference
                     {
                         float2 xy{ params.pixel_x,params.pixel_y };
@@ -850,6 +853,8 @@ __global__ void raster_backward_kernel(
                     point_color_x2.b = half2(params.ba.x, params.ba.x);
                     point_color_x2.a = half2(params.ba.y, params.ba.y);
 
+                    prefetch_point_id = points_in_tile[max(index_in_tile - 1,0)];
+                    params = packed_params[prefetch_point_id];
 
                     half2 grad_r = half2(0, 0);
                     half2 grad_g = half2(0, 0);
