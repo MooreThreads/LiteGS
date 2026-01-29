@@ -68,7 +68,7 @@ class StatisticsHelper:
         if self.cur_sample is not None:
             self.cached_tiles_blend_count[self.cur_sample]=tiles_blend_count
             self.cached_sorted_tile_list[self.cur_sample]=tiles_blend_count.sort(descending=True)[1].int()+1
-            self.cached_complex_tile[self.cur_sample]=(self.cached_tiles_blend_count[self.cur_sample]>1024).nonzero()[:,0]+1
+            #self.cached_complex_tile[self.cur_sample]=(self.cached_tiles_blend_count[self.cur_sample]>1024).nonzero()[:,0]+1
         return
     
     @torch.no_grad()
