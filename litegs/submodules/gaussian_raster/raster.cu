@@ -220,7 +220,7 @@ __global__ void raster_forward_kernel(
             unsigned int any_active = 0xffffffffu;
             int index_in_tile = 0;
             auto points_id_in_tile = &sorted_points[batch_id][start_index_in_tile];
-            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && (any_active != 0); index_in_tile++)
+            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && __any_sync(0xffffffff, any_active != 0); index_in_tile++)
             {
                 int point_id = points_id_in_tile[index_in_tile];
                 PackedParams params = packed_params[point_id];
@@ -289,7 +289,7 @@ __global__ void raster_forward_kernel(
                 {
                     unsigned int reduced_fragment_count = (fragment_count >> 16u) + (fragment_count & 0xffffu);
                     warp_reduce_sum<unsigned int, false>(reduced_fragment_count);
-                    float weight_sum_f32 = float(weight_sum.x + weight_sum.y);
+                    float weight_sum_f32 = float(weight_sum.x + weight_sum.y) * INV_SCALER;
                     warp_reduce_sum<float, false>(weight_sum_f32);
                     if (threadIdx.x == 0)
                     {
