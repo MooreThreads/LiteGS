@@ -29,5 +29,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("cull_compact_activate", &cull_compact_activate);
 	m.def("activate_backward", &activate_backward);
 	m.def("adamUpdate", &adamUpdate);
-	m.def("frustum_culling_aabb_cuda", &frustum_culling_aabb_cuda);
+	m.def("frustum_culling_aabb", &frustum_culling_aabb);
 }

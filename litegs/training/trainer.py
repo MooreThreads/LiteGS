@@ -15,7 +15,6 @@ from .. import data
 from .. import io_manager
 from .. import scene
 from . import optimizer
-from ..data import CameraFrameDataset
 from .. import render
 from ..utils.statistic_helper import StatisticsHelperInst
 from . import densify
@@ -48,13 +47,14 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
     else:
         training_frames=camera_frames
         test_frames=None
-    trainingset=CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
+    trainingset=data.CameraFrameDataset(cameras_info,training_frames,lp.resolution,pp.device_preload)
     train_loader = DataLoader(trainingset, batch_size=1,shuffle=True,pin_memory=not pp.device_preload)
     test_loader=None
     if lp.eval:
-        testset=CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
+        testset=data.CameraFrameDataset(cameras_info,test_frames,lp.resolution,pp.device_preload)
         test_loader = DataLoader(testset, batch_size=1,shuffle=False,pin_memory=not pp.device_preload)
     norm_trans,norm_radius=trainingset.get_norm()
+    frames_buffer=data.FramesBuffer(trainingset)
 
     #torch parameter
     cluster_origin=None
@@ -108,24 +108,34 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
 
         with StatisticsHelperInst.try_start(epoch):
-            for view_matrix,proj_matrix,frustumplane,gt_image,idx in train_loader:
-                nvtx.range_push("Iter Init")
+            for view_matrix,proj_matrix,frustumplane,gt_image,idx_tensor in train_loader:
                 view_matrix=view_matrix.cuda()
                 proj_matrix=proj_matrix.cuda()
                 frustumplane=frustumplane.cuda()
                 gt_image=gt_image.cuda()/255.0
-                idx=idx.cuda()
+                
                 if op.learnable_viewproj:
                     #fix view matrix
-                    extr=denoised_training_extr(idx)
+                    idx_tensor=idx_tensor.cuda()
+                    extr=denoised_training_extr(idx_tensor)
                     intr=denoised_training_intr
                     view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
-                nvtx.range_pop()
 
                 #cluster culling
-                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,actived_sh_degree)
-                img,transmitance,depth,normal,primitive_visible=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
-                                                            actived_sh_degree,gt_image.shape[2:],pp)
+                (
+                    visible_chunkid,visible_chunks_num,
+                    culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity
+                )=render.render_preprocess(
+                    cluster_origin,cluster_extend,frustumplane,view_matrix,
+                    xyz,scale,rot,sh_0,sh_rest,opacity,
+                    frames_buffer.feedback_visible_chunks_num,idx_tensor,
+                    pp,actived_sh_degree
+                )
+                img,transmitance,depth,normal,primitive_visible=render.render(
+                    view_matrix,proj_matrix,
+                    culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
+                    actived_sh_degree,gt_image.shape[2:],pp
+                )
                 
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
@@ -137,7 +147,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
                 if pp.sparse_grad:
-                    opt.step(visible_chunkid,primitive_visible)
+                    opt.step(visible_chunkid,visible_chunks_num,primitive_visible)
                 else:
                     opt.step()
                 opt.zero_grad(set_to_none = True)

@@ -186,7 +186,6 @@ class CameraFrameDataset(Dataset):
                 frame.view_matrix=torch.Tensor(frame.view_matrix).cuda()
                 for key in frame.image.keys():
                     frame.image[key]=torch.tensor(frame.image[key]).cuda()
-            self.idx_array=torch.arange(0,len(frames)).cuda()
         
         #init frustumplanes
         self.frustumplanes=[]
@@ -197,21 +196,8 @@ class CameraFrameDataset(Dataset):
             else:
                 self.frustumplanes.append(frustumplane)
 
-        #init ray_d
-        # self.ray_d=[]
-        # for frame in frames:
-        #     output_shape=frame.image[downsample].shape
-        #     half_W=output_shape[2]*0.5
-        #     half_H=output_shape[1]*0.5
-        #     focal_length=(cameras[frame.camera_id].proj_matrix[0,0]*half_W+cameras[frame.camera_id].proj_matrix[1,1]*half_H)*0.5
-        #     X=(torch.arange(0,output_shape[2],1,device='cuda')+0.5).unsqueeze(0).repeat(output_shape[1],1)-half_W
-        #     Y=(torch.arange(0,output_shape[1],1,device='cuda')+0.5).unsqueeze(1).repeat(1,output_shape[2])-half_H
-        #     Z=torch.ones([output_shape[1],output_shape[2]],device='cuda')*focal_length
-        #     camera_ray_d=torch.concat([X.unsqueeze(-1),Y.unsqueeze(-1),Z.unsqueeze(-1)],dim=-1)
-        #     #camera_ray_d=torch.nn.functional.normalize(camera_ray_d,dim=-1)
-        #     world_ray_d=camera_ray_d@(frame.get_viewmatrix()[:3,:3].transpose(0,1))
-        #     world_ray_d=torch.nn.functional.normalize(world_ray_d,dim=-1)
-        #     self.ray_d.append(world_ray_d)
+        #gpu driven pipeline: gpu->cpu
+        self.feedback_buffer = torch.zeros((len(frames),), dtype=torch.int32).pin_memory().share_memory_()
             
         return
     
@@ -224,8 +210,6 @@ class CameraFrameDataset(Dataset):
         proj_matrix=self.cameras[self.frames[idx].camera_id].get_project_matrix()
         frustumplane=self.frustumplanes[idx]
         StatisticsHelperInst.cur_sample=self.frames[idx].name
-        if self.idx_array is not None:
-            idx=self.idx_array[idx]
         return view_matrix,proj_matrix,frustumplane,image,idx
     
     def get_norm(self)->tuple[float,float]:
@@ -246,4 +230,25 @@ class CameraFrameDataset(Dataset):
         radius = diagonal * 1.1
         translate = -center
         return translate,radius
-        
+    
+class FramesBuffer:
+    def __init__(self,dataset:CameraFrameDataset):
+        #Implicit Synchronization: write in N epoch, raed in N+1 epoch
+        self.feedback_visible_chunks_num = torch.zeros((len(dataset.frames),), dtype=torch.int32).pin_memory()
+        self.feedback_binning_allocate_size = torch.zeros((len(dataset.frames),), dtype=torch.int32).pin_memory()
+
+        #scheduling tiles
+        self.cache_tiles_blend_count:dict[int,torch.Tensor]={}
+        self.cache_sorted_tile_list:dict[int,torch.Tensor]={}
+        return
+    
+    @torch.no_grad()
+    def update_tile_blend_count(self,piexel_blend_count:torch.Tensor,idx_tesnor:torch.Tensor):
+        N,T,H,W=piexel_blend_count.shape
+        tiles_blend_count=piexel_blend_count.detach().reshape(N,T,H*W).max(dim=2).values
+        for i in range(N):
+            idx=idx_tesnor[i].item()
+            assert(idx<len(self.frames) and idx>=0)
+            self.cached_tiles_blend_count[idx]=tiles_blend_count[i]
+            self.cached_sorted_tile_list[idx]=tiles_blend_count[i].sort(descending=True)[1].int()+1
+        return

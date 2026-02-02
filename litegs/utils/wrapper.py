@@ -769,37 +769,65 @@ class CreateViewProj(torch.autograd.Function):
 
 class CullCompactActivateWithSparseGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,cluster_origin,cluster_extend,frustumplane,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)->tuple[torch.Tensor,...]:
+    def forward(
+        ctx,
+        b_sparse_grad,sh_degree,
+        visible_chunkid,visible_chunk_num,
+        view_matrix,
+        xyz,scale,rot,sh_0,sh_rest,opacity
+    )->tuple[torch.Tensor,...]:
+        
         ctx.chunk_num=xyz.shape[-2]
         ctx.chunk_size=xyz.shape[-1]
         ctx.sh_degree=sh_degree
+        ctx.b_sparse_grad=b_sparse_grad
         
-        visible_chunkid, activated_position,activated_scale,activated_rotation,color,activated_opacity=litegs_fused.cull_compact_activate(cluster_origin,cluster_extend,frustumplane,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)
+        activated_position,activated_scale,activated_rotation,color,activated_opacity=litegs_fused.cull_compact_activate(
+            sh_degree,
+            visible_chunkid,visible_chunk_num,
+            view_matrix,
+            xyz,scale,rot,sh_0,sh_rest,opacity
+        )
 
-        ctx.save_for_backward(visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity)
+        ctx.save_for_backward(visible_chunkid,visible_chunk_num,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity)
 
-        return visible_chunkid, activated_position,activated_scale,activated_rotation,color,activated_opacity
+        return activated_position,activated_scale,activated_rotation,color,activated_opacity
     
     @staticmethod
-    def backward(ctx,_,activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad):
+    def backward(ctx,activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad):
         chunk_num=ctx.chunk_num
         chunk_size=ctx.chunk_size
         sh_degree=ctx.sh_degree
-        visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity=ctx.saved_tensors
-        visible_chunk_num=visible_chunkid.shape[0]
+        b_sparse_grad=ctx.b_sparse_grad
+
+        visible_chunkid,visible_chunk_num,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity=ctx.saved_tensors
         compactd_grads=litegs_fused.activate_backward(
-            visible_chunkid,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity,
-            activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad)
-        grads=[]
-        for grad in compactd_grads:
-            size=(*grad.shape[:-2],chunk_num,chunk_size)
-            grads.append(CompactedTensor(size,visible_chunkid,grad.reshape(-1,visible_chunk_num,chunk_size)))
+            sh_degree,
+            visible_chunkid,visible_chunk_num,
+            view_matrix,
+            xyz,scale,rot,sh_0,sh_rest,opacity,
+            activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad
+        )
+        if b_sparse_grad:
+            allocate_chunk_num=visible_chunkid.shape[0]
+            grads=[]
+            for grad in compactd_grads:
+                size=(*grad.shape[:-2],chunk_num,chunk_size)
+                grads.append(CompactedTensor(size,visible_chunkid,grad.reshape(-1,allocate_chunk_num,chunk_size)))
+        else:
+            for compacted_grad in compactd_grads:
+                size=(*compacted_grad.shape[:-2],chunk_num,chunk_size)
+                grad=torch.zeros(size,device=compacted_grad.device,dtype=compacted_grad.dtype)
+                grad[...,visible_chunkid,:]=compacted_grad
         return None,None,None,None,None,*grads
 
-def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
-                       lr:float, b1:float, b2:float, eps:float):
+def sparse_adam_update(
+    param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, 
+    visible_index:torch.Tensor, valid_length:torch.Tensor|None,
+    lr:float, b1:float, b2:float, eps:float
+):
     if param.shape[0]!=0:
-        litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+        litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_index,valid_length,lr,b1,b2,eps)
     else:
         pass
     return

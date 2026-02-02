@@ -4,6 +4,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 
 from .. import arguments
 from ..utils.wrapper import sparse_adam_update
+from ..utils.CompactedTensor import CompactedTensor
 
 class SparseGaussianAdam(torch.optim.Adam):
     def __init__(self, params, lr, eps, bCluster):
@@ -11,7 +12,7 @@ class SparseGaussianAdam(torch.optim.Adam):
         super().__init__(params=params, lr=lr, eps=eps)
     
     @torch.no_grad()
-    def step(self, visible_chunk,primitive_visible):
+    def step(self, visible_chunk,visible_chunks_num,primitive_visible):
         for group in self.param_groups:
             lr = group["lr"]
             eps = group["eps"]
@@ -33,13 +34,14 @@ class SparseGaussianAdam(torch.optim.Adam):
                 exp_avg = stored_state["exp_avg"].view(-1,param.shape[-2],param.shape[-1])
                 exp_avg_sq = stored_state["exp_avg_sq"].view(-1,param.shape[-2],param.shape[-1])
                 param_view=param.data.view(-1,param.shape[-2],param.shape[-1])
-                sparse_adam_update(param_view, param.grad.compacted_values, exp_avg, exp_avg_sq, visible_chunk, lr, 0.9, 0.999, eps)
+                assert(isinstance(param.grad,CompactedTensor),"expecting CompactedTensor grad")
+                sparse_adam_update(param_view, param.grad.compacted_values, exp_avg, exp_avg_sq, visible_chunk,visible_chunks_num, lr, 0.9, 0.999, eps)
             else:
                 stored_state = self.state.get(param, None)
                 exp_avg = stored_state["exp_avg"]
                 exp_avg_sq = stored_state["exp_avg_sq"]
                 N=param.shape[-1]
-                sparse_adam_update(param.view(-1,N), param.grad.view(-1,N), exp_avg.view(-1,N), exp_avg_sq.view(-1,N), primitive_visible, lr, 0.9, 0.999, eps)
+                sparse_adam_update(param.view(-1,N), param.grad.view(-1,N), exp_avg.view(-1,N), exp_avg_sq.view(-1,N), primitive_visible,None, lr, 0.9, 0.999, eps)
 
 class Scheduler(_LRScheduler):
     def __init__(self, optimizer:torch.optim.Adam,lr_init, lr_final,max_epochs=10000, last_epoch=-1):
