@@ -528,7 +528,6 @@ std::vector<at::Tensor> frustum_culling_aabb(at::Tensor aabb_origin, at::Tensor 
     if (feedback_buffer_arg.has_value() && data_idx_arg.has_value())
     {
         int* feedback_buffer = (*feedback_buffer_arg).data_ptr<int>();
-        int pred_visible_chunks_num = 0;
         for (int i = 0; i < (*data_idx_arg).size(0); i++)
         {
             int idx=(*data_idx_arg)[i].item().toInt();
@@ -539,15 +538,14 @@ std::vector<at::Tensor> frustum_culling_aabb(at::Tensor aabb_origin, at::Tensor 
             cudaMemcpyAsync(&feedback_buffer[idx], visible_chunks_num.data_ptr<int>(), sizeof(int), cudaMemcpyDeviceToHost);
         }
     }
-    
+    pred_visible_chunks_num = 1.2f * pred_visible_chunks_num;
+
     if (pred_visible_chunks_num <= 0)
     {
         cudaMemcpy(&pred_visible_chunks_num, visible_chunks_num.data_ptr<int>(), sizeof(int), cudaMemcpyDeviceToHost);
     }
 
-    
     // Return visibility tensor
-    pred_visible_chunks_num = 1.2f * pred_visible_chunks_num;
     visible_chunk_id = visible_chunk_id.slice(0, 0, pred_visible_chunks_num);
     return { visibility,visible_chunks_num,visible_chunk_id };
 }
