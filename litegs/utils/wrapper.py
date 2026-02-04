@@ -5,16 +5,17 @@ import math
 from torch.cuda import nvtx
 
 from .platform import add_cmake_output_path
-from . import spherical_harmonics
-from ..utils.statistic_helper import StatisticsHelperInst
-from ..utils.CompactedTensor import CompactedTensor
-
-
 try:
     import litegs_fused
 except:
     add_cmake_output_path()
     import litegs_fused
+    
+from . import spherical_harmonics
+from ..utils.statistic_helper import StatisticsHelperInst
+from ..utils.CompactedTensor import CompactedTensor
+
+
 
 
 class BaseWrapper:

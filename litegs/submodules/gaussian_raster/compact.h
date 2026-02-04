@@ -26,3 +26,11 @@ std::vector<at::Tensor> create_viewproj_backward(at::Tensor view_matrix_grad, at
 	at::Tensor view_params, at::Tensor recp_tan_half_fov_x,int img_h, int img_w, float z_near, float z_far);
 
 std::vector<at::Tensor> frustum_culling_aabb(at::Tensor aabb_origin, at::Tensor aabb_ext, at::Tensor frustumplane,std::optional<at::Tensor> feedback_buffer_arg, std::optional<at::Tensor> data_idx_arg);
+
+void gpu_driven_pipeline_sparse_op(
+    torch::Tensor A,
+    torch::Tensor B,
+    torch::Tensor visible_chunk_ids,
+    torch::Tensor visible_count,
+    std::string op_name // add or min or max
+);

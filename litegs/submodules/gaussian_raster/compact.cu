@@ -1210,3 +1210,127 @@ std::vector<at::Tensor> activate_backward(
 
     return { compacted_position_grad ,compacted_scale_grad ,compacted_rotation_grad ,compacted_sh_base_grad ,compacted_sh_rest_grad ,compacted_opacity_grad };
 }
+
+
+enum OpType {
+    OP_ADD = 0,
+    OP_MIN = 1,
+    OP_MAX = 2
+};
+
+template <typename scalar_t, int OP>
+__global__ void sparse_scatter_kernel(
+    scalar_t* __restrict__ A,                // [ele_num, chunks_num, chunk_size]
+    const scalar_t* __restrict__ B,          // [ele_num, allocated_chunks_num, chunk_size]
+    const int64_t* __restrict__ chunk_ids,       // [allocated_chunks_num]
+    const int* __restrict__ valid_count_ptr, // [1]
+    const int chunks_num,
+    const int allocated_chunks_num
+) 
+{
+    const int source_chunk = blockIdx.x;  // allocated_chunk_idx
+    const int ele_index = blockIdx.y;
+
+    if (source_chunk >= *valid_count_ptr) return;
+
+    // 3. 获取目标 Chunk ID
+    const int target_chunk = chunk_ids[source_chunk];
+
+    const int64_t offset_B = ele_index * allocated_chunks_num * blockDim.x + source_chunk * blockDim.x + threadIdx.x;
+
+    const int64_t offset_A = ele_index * chunks_num * blockDim.x + target_chunk * blockDim.x + threadIdx.x;
+
+    // 5. 执行计算
+    scalar_t val_b = B[offset_B];
+
+    if constexpr (OP == OP_ADD) {
+        A[offset_A] += val_b;
+    }
+    else if constexpr (OP == OP_MIN) {
+        A[offset_A] = min(A[offset_A], val_b);
+    }
+    else if constexpr (OP == OP_MAX) {
+        A[offset_A] = max(A[offset_A], val_b);
+    }
+}
+
+void gpu_driven_pipeline_sparse_op(
+    torch::Tensor A,
+    torch::Tensor B,
+    torch::Tensor visible_chunk_ids,
+    torch::Tensor visible_count,
+    std::string op_name // 0:add, 1:min, 2:max
+) 
+{
+    // check input
+    TORCH_CHECK(A.is_cuda(), "A must be a CUDA tensor");
+    TORCH_CHECK(B.is_cuda(), "B must be a CUDA tensor");
+    TORCH_CHECK(visible_chunk_ids.is_cuda(), "visible_chunk_ids must be a CUDA tensor");
+    TORCH_CHECK(visible_count.is_cuda(), "visible_count must be a CUDA tensor");
+    OpType op_type;
+    if (op_name == "add" || op_name == "sum") 
+    {
+        op_type = OP_ADD;
+    }
+    else if (op_name == "min") 
+    {
+        op_type = OP_MIN;
+    }
+    else if (op_name == "max") 
+    {
+        op_type = OP_MAX;
+    }
+    else 
+    {
+        TORCH_CHECK(false, "Unsupported op: ", op_name, ". Expected: add, min, max");
+    }
+
+    // A: [ele_num, chunks_num, chunk_size]
+    // B: [ele_num, allocated_chunks_num, chunk_size]
+    const int ele_num = A.size(0);
+    const int chunks_num = A.size(1);
+    const int chunk_size = A.size(2);
+    const int allocated_chunks_num = B.size(1);
+    TORCH_CHECK(chunk_size <= 1024, "chunk_size exceeds max threads per block");
+
+    // 配置 Kernel Launch 参数
+    // grid.x -> allocated_chunks (dim 1)
+    // grid.y -> ele_num (dim 0)
+    dim3 grid(allocated_chunks_num, ele_num, 1);
+    dim3 block(chunk_size, 1, 1);
+
+    // 调度 Kernel
+    AT_DISPATCH_ALL_TYPES(A.scalar_type(), "sparse_scatter_kernel",
+        [&] {
+            switch (op_type) {
+            case OP_ADD:
+                sparse_scatter_kernel<scalar_t, OP_ADD> << <grid, block >> > (
+                    A.data_ptr<scalar_t>(),
+                    B.data_ptr<scalar_t>(),
+                    visible_chunk_ids.data_ptr<int64_t>(),
+                    visible_count.data_ptr<int>(),
+                    chunks_num, allocated_chunks_num
+                    );
+                break;
+            case OP_MIN:
+                sparse_scatter_kernel<scalar_t, OP_MIN> << <grid, block >> > (
+                    A.data_ptr<scalar_t>(),
+                    B.data_ptr<scalar_t>(),
+                    visible_chunk_ids.data_ptr<int64_t>(),
+                    visible_count.data_ptr<int>(),
+                    chunks_num, allocated_chunks_num
+                    );
+                break;
+            case OP_MAX:
+                sparse_scatter_kernel<scalar_t, OP_MAX> << <grid, block >> > (
+                    A.data_ptr<scalar_t>(),
+                    B.data_ptr<scalar_t>(),
+                    visible_chunk_ids.data_ptr<int64_t>(),
+                    visible_count.data_ptr<int>(),
+                    chunks_num, allocated_chunks_num
+                    );
+                break;
+            }
+        }
+    );
+}

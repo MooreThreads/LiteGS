@@ -30,4 +30,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("activate_backward", &activate_backward);
 	m.def("adamUpdate", &adamUpdate);
 	m.def("frustum_culling_aabb", &frustum_culling_aabb);
+	m.def("gpu_driven_pipeline_sparse_op", &gpu_driven_pipeline_sparse_op);
 }

@@ -2,12 +2,13 @@ import torch
 import typing
 from typing import Optional, Callable
 from ..scene import cluster
+from ..utils.wrapper import litegs_fused
 
 class MeanStdData:
     def __init__(self,data_shape:list,cluster_shape:list,device):
         self.sum=torch.zeros((*data_shape,*cluster_shape),device=device)
         self.square_sum=torch.zeros((*data_shape,*cluster_shape),device=device)
-        self.count=torch.zeros(cluster_shape,device=device)
+        self.count=torch.zeros(cluster_shape,device=device,dtype=torch.int32)
         return
 
 class StatisticsHelper:
@@ -32,6 +33,7 @@ class StatisticsHelper:
 
         self.visible_count=torch.zeros(chunk_num,chunk_size,dtype=torch.int32,device='cuda')
         self.compact_mask:Optional[torch.Tensor]=None
+        self.valid_length:Optional[torch.Tensor]=None
 
         self.handle_list:list[tuple[torch.Tensor,Callable[[StatisticsHelper, torch.Tensor],None]]]=[]
         return
@@ -57,8 +59,9 @@ class StatisticsHelper:
         return
     
     @torch.no_grad()
-    def set_compact_mask(self,compact_mask:torch.Tensor):
+    def set_compact_mask(self,compact_mask:torch.Tensor,valid_length:Optional[torch.Tensor]=None):
         self.compact_mask=compact_mask
+        self.valid_length=valid_length
         return
     
     @torch.no_grad()
@@ -76,7 +79,13 @@ class StatisticsHelper:
         if self.compact_mask is None:
             self.visible_count+=visible_mask.sum(0)
         else:
-            self.visible_count[self.compact_mask]+=visible_mask.sum(0).reshape(-1,self.chunk_size)
+            if self.valid_length is None:
+                self.visible_count[self.compact_mask]+=visible_mask.sum(0).reshape(-1,self.chunk_size)
+            else:
+                #gpu driven pipeline: the tail of visible_mask is dirty, so we must ignore it!
+                visible_count_ref=self.visible_count.view(1,-1,self.chunk_size)
+                compacted_visible_mask=visible_mask.sum(0,dtype=torch.int32).reshape(1,-1,self.chunk_size)
+                litegs_fused.gpu_driven_pipeline_sparse_op(visible_count_ref,compacted_visible_mask,self.compact_mask,self.valid_length,"add")
         return
     
 
@@ -108,9 +117,33 @@ class StatisticsHelper:
         
         #update dict
         if bCompacted:
-            data.sum[...,self.compact_mask,:]+=tensor_sum
-            data.square_sum[...,self.compact_mask,:]+=square_sum
-            data.count[self.compact_mask,:]+=count
+            if self.valid_length is None:
+                data.sum[...,self.compact_mask,:]+=tensor_sum
+                data.square_sum[...,self.compact_mask,:]+=square_sum
+                data.count[self.compact_mask,:]+=count
+            else:
+                #gpu driven pipeline: the tail of visible_mask is dirty, so we must ignore it!
+                chunks_num=data.sum.shape[-2]
+                allocated_chunks_num=tensor_sum.shape[-2]
+                litegs_fused.gpu_driven_pipeline_sparse_op(
+                    data.sum.view(-1,chunks_num,self.chunk_size),
+                    tensor_sum.view(-1,allocated_chunks_num,self.chunk_size),
+                    self.compact_mask,self.valid_length,
+                    "add"
+                )
+                litegs_fused.gpu_driven_pipeline_sparse_op(
+                    data.square_sum.view(-1,chunks_num,self.chunk_size),
+                    square_sum.view(-1,allocated_chunks_num,self.chunk_size),
+                    self.compact_mask,self.valid_length,
+                    "add"
+                )
+                litegs_fused.gpu_driven_pipeline_sparse_op(
+                    data.count.view(-1,chunks_num,self.chunk_size),
+                    count.view(-1,allocated_chunks_num,self.chunk_size),
+                    self.compact_mask,self.valid_length,
+                    "add"
+                )
+
         else:
             data.sum+=tensor_sum
             data.square_sum+=square_sum

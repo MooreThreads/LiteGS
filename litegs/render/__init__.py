@@ -21,6 +21,8 @@ def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tens
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
 
         visibility,visible_chunks_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb(cluster_origin,cluster_extend,frustumplane,feedback_buffer,idx_tensor)
+        if StatisticsHelperInst.bStart:
+            StatisticsHelperInst.set_compact_mask(visible_chunkid,visible_chunks_num)
         culled_xyz,culled_scale,culled_rot,color,culled_opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
             pp.sparse_grad,actived_sh_degree,
             visible_chunkid,visible_chunks_num,
@@ -28,8 +30,6 @@ def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tens
             xyz,scale,rot,sh_0,sh_rest,opacity
         )
         culled_xyz,culled_scale,culled_rot,color,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,color,culled_opacity)  
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.set_compact_mask(visible_chunkid)
     else:
         nvtx.range_push("Activate")
         pad_one=torch.ones((1,xyz.shape[-1]),dtype=xyz.dtype,device=xyz.device)
@@ -49,6 +49,7 @@ def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tens
 
 def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
            xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,color:torch.Tensor,opacity:torch.Tensor,
+           valid_length:torch.Tensor|None,
            actived_sh_degree:int,output_shape:tuple[int,int],pp:arguments.PipelineParams)->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
     #gs projection
