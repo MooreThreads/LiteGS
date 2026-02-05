@@ -566,7 +566,7 @@ class SphericalHarmonicToRGB(BaseWrapper):
         ([1,3,1024*512],torch.float32,True)]
 
 class EighAndInverse2x2Matrix(BaseWrapper):
-    def __eigh_inverse_2x2matrix_script(cov2d:torch.Tensor):
+    def __eigh_inverse_2x2matrix_script(cov2d:torch.Tensor,valid_length:torch.Tensor|None=None):
         with torch.no_grad():
             eigen_val,eigen_vec=torch.linalg.eigh(cov2d.permute(0,3,1,2).reshape(-1,2,2))
             eigen_val=eigen_val.reshape(cov2d.shape[0],cov2d.shape[3],2).permute(0,2,1)
@@ -576,21 +576,21 @@ class EighAndInverse2x2Matrix(BaseWrapper):
         cov2d_inv=cov2d_inv.reshape(cov2d.shape[0],cov2d.shape[3],2,2).permute(0,2,3,1)
         return eigen_val,eigen_vec,cov2d_inv
 
-    def __eigh_inverse_2x2matrix_fused(cov2d:torch.Tensor):
+    def __eigh_inverse_2x2matrix_fused(cov2d:torch.Tensor,valid_length:torch.Tensor|None=None):
         class EighAndInverse2x2Func(torch.autograd.Function):
             @staticmethod
-            def forward(ctx,input_matrix:torch.Tensor):
-                val,vec,inverse_matrix=litegs_fused.eigh_and_inv_2x2matrix_forward(input_matrix)
-                ctx.save_for_backward(inverse_matrix)
+            def forward(ctx,input_matrix:torch.Tensor,valid_length:torch.Tensor|None=None):
+                val,vec,inverse_matrix=litegs_fused.eigh_and_inv_2x2matrix_forward(input_matrix,valid_length)
+                ctx.save_for_backward(inverse_matrix,valid_length)
                 return val,vec,inverse_matrix
             
             @staticmethod
             def backward(ctx,val_grad,vec_grad,inverse_matrix_grad):
-                (inverse_matrix,)=ctx.saved_tensors
-                matrix_grad:torch.Tensor=litegs_fused.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad)
+                (inverse_matrix,valid_length)=ctx.saved_tensors
+                matrix_grad:torch.Tensor=litegs_fused.inv_2x2matrix_backward(inverse_matrix,inverse_matrix_grad,valid_length)
                 matrix_grad.nan_to_num_(0)
-                return matrix_grad
-        return EighAndInverse2x2Func.apply(cov2d)
+                return matrix_grad,None
+        return EighAndInverse2x2Func.apply(cov2d,valid_length)
 
     @classmethod
     def gen_inputs(cls):
@@ -651,8 +651,11 @@ class CreateViewProjFunc(torch.autograd.Function):
 
 class Binning(BaseWrapper):
     @torch.no_grad()
-    def __binning_script(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
-            img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
+    def __binning_script(
+        ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
+        valid_length:torch.Tensor|None,feedback_binning_allocate_size:torch.Tensor|None,idx_tensor:torch.Tensor|None,
+        img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]
+    ):
         def craete_2d_AABB(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,tile_size:int,img_pixel_shape:tuple[int,int],img_tile_shape:tuple[int,int]):
             # Major and minor axes -> AABB extensions
             opacity_clamped=opacity.unsqueeze(0).clamp_min(1/255)
@@ -712,13 +715,20 @@ class Binning(BaseWrapper):
         return tile_start_index,sorted_pointId,b_visible
     
     @torch.no_grad()
-    def __binning_fused(ndc:torch.Tensor,view_depth:torch.Tensor,inv_cov2d:torch.Tensor,opacity:torch.Tensor,
-            img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
+    def __binning_fused(
+        ndc:torch.Tensor,view_depth:torch.Tensor,inv_cov2d:torch.Tensor,opacity:torch.Tensor,
+        valid_length:torch.Tensor|None,feedback_binning_allocate_size:torch.Tensor|None,idx_tensor:torch.Tensor|None,
+        img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]
+    ):
         
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size[0]))),int(math.ceil(img_pixel_shape[1]/float(tile_size[1]))))
         tiles_num=img_tile_shape[0]*img_tile_shape[1]
 
-        pixel_left_up,pixel_right_down,allocate_size=litegs_fused.get_allocate_size(ndc,view_depth,inv_cov2d,opacity,img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+        pixel_left_up,pixel_right_down,allocate_size=litegs_fused.get_allocate_size(
+            ndc,view_depth,inv_cov2d,opacity,
+            img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1],
+            valid_length
+        )
         b_visible=(allocate_size!=0)
 
         #allocate

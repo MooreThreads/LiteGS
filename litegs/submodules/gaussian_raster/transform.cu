@@ -1364,6 +1364,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
 template <typename scalar_t>
 __global__ void eigh_and_inv_2x2matrix_kernel_forward(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> input,    //[batch,2,2,point_num] 
+    const int* __restrict__ valid_length,
     torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> val,   //[batch,2,point_num] 
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> vec,   //[batch,2,2,point_num] 
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> inv   //[batch,2,2,point_num] 
@@ -1372,51 +1373,50 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
 
-    if (batch_id < input.size(0) && index < input.size(3))
+    if (index >= input.size(3) || batch_id >= input.size(0) || (valid_length != nullptr && index >= valid_length[0]))
+        return;
+
+    float input_matrix[2][2] = { {input[batch_id][0][0][index],input[batch_id][0][1][index]},{input[batch_id][1][0][index],input[batch_id][1][1][index]}};
+    float det = input_matrix[0][0] * input_matrix[1][1] - input_matrix[0][1] * input_matrix[1][0];
+    //a*c-b*b  ->  (a-b)(c-b)+b*(a+c-2*b)
+    float det1 = (input_matrix[0][0] - input_matrix[0][1]) * (input_matrix[1][1] - input_matrix[0][1]) + input_matrix[0][1] * (input_matrix[0][0] + input_matrix[1][1] - 2 * input_matrix[0][1]);
+    det=(abs(det) < abs(1e-5f * input_matrix[0][1] * input_matrix[1][0])) ? det1 : det;
+        
+        
+    float temp0 = input_matrix[0][0] + input_matrix[1][1];
+    float temp1 = sqrt((input_matrix[0][0] - input_matrix[1][1]) * (input_matrix[0][0] - input_matrix[1][1])
+        + 4 * input_matrix[0][1] * input_matrix[0][1]);
+    temp1 = max(temp1, 1e-9f);
+
+    float eig_value0 = 0.5 * (temp0 - temp1);
+    float eig_value1= 0.5 * (temp0 + temp1);
+
+    val[batch_id][0][index] = eig_value0;
+    val[batch_id][1][index] = eig_value1;
+
+    float vec_0[2];
+    float vec_1[2];
+    if (abs(eig_value0 - input_matrix[0][0]) > abs(eig_value0 - input_matrix[1][1]))
     {
-        float input_matrix[2][2] = { {input[batch_id][0][0][index],input[batch_id][0][1][index]},{input[batch_id][1][0][index],input[batch_id][1][1][index]}};
-        float det = input_matrix[0][0] * input_matrix[1][1] - input_matrix[0][1] * input_matrix[1][0];
-        //a*c-b*b  ->  (a-b)(c-b)+b*(a+c-2*b)
-        float det1 = (input_matrix[0][0] - input_matrix[0][1]) * (input_matrix[1][1] - input_matrix[0][1]) + input_matrix[0][1] * (input_matrix[0][0] + input_matrix[1][1] - 2 * input_matrix[0][1]);
-        det=(abs(det) < abs(1e-5f * input_matrix[0][1] * input_matrix[1][0])) ? det1 : det;
-        
-        
-        float temp0 = input_matrix[0][0] + input_matrix[1][1];
-        float temp1 = sqrt((input_matrix[0][0] - input_matrix[1][1]) * (input_matrix[0][0] - input_matrix[1][1])
-            + 4 * input_matrix[0][1] * input_matrix[0][1]);
-        temp1 = max(temp1, 1e-9f);
-
-        float eig_value0 = 0.5 * (temp0 - temp1);
-        float eig_value1= 0.5 * (temp0 + temp1);
-
-        val[batch_id][0][index] = eig_value0;
-        val[batch_id][1][index] = eig_value1;
-
-        float vec_0[2];
-        float vec_1[2];
-        if (abs(eig_value0 - input_matrix[0][0]) > abs(eig_value0 - input_matrix[1][1]))
-        {
-            vec_0[0] = -input_matrix[0][1]; vec_0[1] = input_matrix[0][0] - eig_value0;
-            vec_1[0] = eig_value1 - input_matrix[1][1]; vec_1[1] = input_matrix[0][1];
-        }
-        else
-        {
-            vec_0[0] = input_matrix[1][1] - eig_value0; vec_0[1] = -input_matrix[0][1];
-            vec_1[0] = input_matrix[0][1]; vec_1[1] = eig_value1 - input_matrix[0][0];
-        }
-        float length0_rec = 1.0f / sqrt(vec_0[0] * vec_0[0] + vec_0[1] * vec_0[1]);
-        float length1_rec = 1.0f / sqrt(vec_1[0] * vec_1[0] + vec_1[1] * vec_1[1]);
-        vec[batch_id][0][0][index] = vec_0[0] * length0_rec; vec[batch_id][0][1][index] = vec_1[0] * length1_rec;
-        vec[batch_id][1][0][index] = vec_0[1] * length0_rec; vec[batch_id][1][1][index] = vec_1[1] * length1_rec;
-        
-        det = (abs(det) < 1e-9f ? 1e-9 : det);
-        float det_recip = 1 / det;
-        inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
-        inv[batch_id][1][0][index] = -input_matrix[1][0] * det_recip;
-        inv[batch_id][0][0][index] = input_matrix[1][1] * det_recip;
-        inv[batch_id][1][1][index] = input_matrix[0][0] * det_recip;
-
+        vec_0[0] = -input_matrix[0][1]; vec_0[1] = input_matrix[0][0] - eig_value0;
+        vec_1[0] = eig_value1 - input_matrix[1][1]; vec_1[1] = input_matrix[0][1];
     }
+    else
+    {
+        vec_0[0] = input_matrix[1][1] - eig_value0; vec_0[1] = -input_matrix[0][1];
+        vec_1[0] = input_matrix[0][1]; vec_1[1] = eig_value1 - input_matrix[0][0];
+    }
+    float length0_rec = 1.0f / sqrt(vec_0[0] * vec_0[0] + vec_0[1] * vec_0[1]);
+    float length1_rec = 1.0f / sqrt(vec_1[0] * vec_1[0] + vec_1[1] * vec_1[1]);
+    vec[batch_id][0][0][index] = vec_0[0] * length0_rec; vec[batch_id][0][1][index] = vec_1[0] * length1_rec;
+    vec[batch_id][1][0][index] = vec_0[1] * length0_rec; vec[batch_id][1][1][index] = vec_1[1] * length1_rec;
+        
+    det = (abs(det) < 1e-9f ? 1e-9 : det);
+    float det_recip = 1 / det;
+    inv[batch_id][0][1][index] = -input_matrix[0][1] * det_recip;
+    inv[batch_id][1][0][index] = -input_matrix[1][0] * det_recip;
+    inv[batch_id][0][0][index] = input_matrix[1][1] * det_recip;
+    inv[batch_id][1][1][index] = input_matrix[0][0] * det_recip;
 
 }
 
@@ -1425,66 +1425,93 @@ template <typename scalar_t>
 __global__ void inv_2x2matrix_kernel_backward(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> Invmatrix,    //[batch,2,2,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dInvmatrix,    //[batch,2,2,point_num] 
+    const int* __restrict__ valid_length,
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> dL_dMatrix   //[batch,2,2,point_num] 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
 
-    if (batch_id < Invmatrix.size(0) && index < Invmatrix.size(3))
-    {
-        scalar_t inv_matrix[2][2];
-        scalar_t dl_dinvmatrix[2][2];
-        scalar_t temp[2][2];
-        scalar_t dl_dmatrix[2][2];
+    if (index >= Invmatrix.size(3) || batch_id >= Invmatrix.size(0) || (valid_length != nullptr && index >= valid_length[0]))
+        return;
 
-        load_matrix_batch<scalar_t, 2, 2>(&inv_matrix, Invmatrix[batch_id],index);
-        load_matrix_batch<scalar_t, 2, 2>(&dl_dinvmatrix, dL_dInvmatrix[batch_id],index);
+    scalar_t inv_matrix[2][2];
+    scalar_t dl_dinvmatrix[2][2];
+    scalar_t temp[2][2];
+    scalar_t dl_dmatrix[2][2];
 
-        matmul<scalar_t, 2, 2, 2>(inv_matrix, dl_dinvmatrix, temp);
-        matmul<scalar_t, 2, 2, 2>(temp, inv_matrix, dl_dmatrix);
+    load_matrix_batch<scalar_t, 2, 2>(&inv_matrix, Invmatrix[batch_id],index);
+    load_matrix_batch<scalar_t, 2, 2>(&dl_dinvmatrix, dL_dInvmatrix[batch_id],index);
 
-        dl_dmatrix[0][0] = -dl_dmatrix[0][0]; dl_dmatrix[0][1] = -dl_dmatrix[0][1];
-        dl_dmatrix[1][0] = -dl_dmatrix[1][0]; dl_dmatrix[1][1] = -dl_dmatrix[1][1];
+    matmul<scalar_t, 2, 2, 2>(inv_matrix, dl_dinvmatrix, temp);
+    matmul<scalar_t, 2, 2, 2>(temp, inv_matrix, dl_dmatrix);
 
-        save_matrix_batch<scalar_t, 2, 2>(&dl_dmatrix, dL_dMatrix[batch_id],index);
-    }
+    dl_dmatrix[0][0] = -dl_dmatrix[0][0]; dl_dmatrix[0][1] = -dl_dmatrix[0][1];
+    dl_dmatrix[1][0] = -dl_dmatrix[1][0]; dl_dmatrix[1][1] = -dl_dmatrix[1][1];
+
+    save_matrix_batch<scalar_t, 2, 2>(&dl_dmatrix, dL_dMatrix[batch_id],index);
 
 }
 
-std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input)
+std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input, std::optional<at::Tensor> valid_length)
 {
     int N = input.size(0);
     int P = input.size(3);
     at::Tensor vec = torch::empty({ N,2,2,P }, input.options().requires_grad(false));
     at::Tensor val = torch::empty({ N,2,P }, input.options().requires_grad(false));
     at::Tensor inv = torch::empty({ N,2,2,P }, input.options());
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.TYPE(), __FUNCTION__, [&] {eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
-        input.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
-        val.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-        vec.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
-        inv.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+        input.TYPE(), 
+        __FUNCTION__, 
+        [&] {
+            eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
+                input.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+                p_valid_length,
+                val.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                vec.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+                inv.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()
+            ); 
+        }
+    );
     CUDA_CHECK_ERRORS;
     return { val,vec,inv };
 }
 
-at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix)
+at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix, std::optional<at::Tensor> valid_length)
 {
     int N = inv_matrix.size(0);
     int P = inv_matrix.size(3);
     at::Tensor dL_dMatrix = torch::empty_like(dL_dInvMatrix);
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(inv_matrix.TYPE(), __FUNCTION__, [&] {inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
-        inv_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
-        dL_dInvMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
-        dL_dMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+        inv_matrix.TYPE(), 
+        __FUNCTION__, 
+        [&] {
+            inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
+                inv_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+                dL_dInvMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+                p_valid_length,
+                dL_dMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()
+            ); 
+        }
+    );
     CUDA_CHECK_ERRORS;
     return dL_dMatrix;
 

@@ -138,7 +138,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 img,transmitance,depth,normal,primitive_visible=render.render(
                     view_matrix,proj_matrix,
                     culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
-                    valid_length,
+                    valid_length,frames_buffer.feedback_binning_allocate_size,idx_tensor,
                     actived_sh_degree,gt_image.shape[2:],pp
                 )
                 

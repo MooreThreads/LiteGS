@@ -253,6 +253,7 @@ __global__ void get_allocate_size_kernel(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> view_space_z,        //viewnum,pointnum
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> tensor_inv_cov2d,  //viewnum,2,2,pointnum
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_opacity,  //viewnum,pointnum
+    const int* __restrict__ valid_length,
     int img_h, int img_w, unsigned int tile_num_h, unsigned int tile_num_w,
     torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_left_up,//viewnum,2,pointnum
     torch::PackedTensorAccessor32 < int32_t, 3, torch::RestrictPtrTraits> tensor_right_down,//viewnum,2,pointnum
@@ -263,83 +264,85 @@ __global__ void get_allocate_size_kernel(
 
     int view_id = blockIdx.y;
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < tensor_ndc.size(2))
+
+    if (index >= tensor_ndc.size(2) || (valid_length != nullptr && index >= valid_length[0]))
+        return;
+
+    float4 ndc{ tensor_ndc[view_id][0][index],tensor_ndc[view_id][1][index],
+        tensor_ndc[view_id][2][index] ,tensor_ndc[view_id][3][index] };
+    float opacity = tensor_opacity[view_id][index];
+    float4 con_o{ tensor_inv_cov2d[view_id][0][0][index],tensor_inv_cov2d[view_id][0][1][index],tensor_inv_cov2d[view_id][1][1][index],opacity };
+    float disc = con_o.y * con_o.y - con_o.x * con_o.z;
+    float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
+    float2 p{ screen_uv.x * img_w - 0.5f,screen_uv.y * img_h - 0.5f };
+    const dim3 grid{ tile_num_w,tile_num_h,0 };
+
+    bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (view_space_z[view_id][index] <= 0.2f) || (con_o.w < 1.0f / 255));
+    bVisible &= ((con_o.x > 0)& (con_o.z > 0)& (disc < 0));
+
+    if (bVisible)
     {
-        float4 ndc{ tensor_ndc[view_id][0][index],tensor_ndc[view_id][1][index],
-            tensor_ndc[view_id][2][index] ,tensor_ndc[view_id][3][index] };
-        float opacity = tensor_opacity[view_id][index];
-        float4 con_o{ tensor_inv_cov2d[view_id][0][0][index],tensor_inv_cov2d[view_id][0][1][index],tensor_inv_cov2d[view_id][1][1][index],opacity };
-        float disc = con_o.y * con_o.y - con_o.x * con_o.z;
-        float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
-        float2 p{ screen_uv.x * img_w - 0.5f,screen_uv.y * img_h - 0.5f };
-        const dim3 grid{ tile_num_w,tile_num_h,0 };
+        float t = 2.0f * log(con_o.w * 255.0f);
+        float x_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.x));
+        x_term = (con_o.y < 0) ? x_term : -x_term;
+        float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
+        y_term = (con_o.y < 0) ? y_term : -y_term;
 
-        bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (view_space_z[view_id][index] <= 0.2f) || (con_o.w < 1.0f / 255));
-        bVisible &= ((con_o.x > 0)& (con_o.z > 0)& (disc < 0));
-
-        if (bVisible)
-        {
-            float t = 2.0f * log(con_o.w * 255.0f);
-            float x_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.x));
-            x_term = (con_o.y < 0) ? x_term : -x_term;
-            float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
-            y_term = (con_o.y < 0) ? y_term : -y_term;
-
-            float2 bbox_argmin = { p.y - y_term, p.x - x_term };
-            float2 bbox_argmax = { p.y + y_term, p.x + x_term };
+        float2 bbox_argmin = { p.y - y_term, p.x - x_term };
+        float2 bbox_argmax = { p.y + y_term, p.x + x_term };
             
-            float2 bbox_min = {
-                computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmin.x).x,
-                computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmin.y).x
-            };
-            float2 bbox_max = {
-                computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmax.x).y,
-                computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmax.y).y
-            };
+        float2 bbox_min = {
+            computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmin.x).x,
+            computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmin.y).x
+        };
+        float2 bbox_max = {
+            computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmax.x).y,
+            computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmax.y).y
+        };
 
-            tensor_left_up[view_id][0][index] = std::ceil(bbox_min.x);
-            tensor_left_up[view_id][1][index] = std::ceil(bbox_min.y);
-            tensor_right_down[view_id][0][index] = std::floor(bbox_max.x);
-            tensor_right_down[view_id][1][index] = std::floor(bbox_max.y);
+        tensor_left_up[view_id][0][index] = std::ceil(bbox_min.x);
+        tensor_left_up[view_id][1][index] = std::ceil(bbox_min.y);
+        tensor_right_down[view_id][0][index] = std::floor(bbox_max.x);
+        tensor_right_down[view_id][1][index] = std::floor(bbox_max.y);
 
-            // Rectangular tile extent of ellipse
-            int2 rect_min = {
-                max(0, min((int)grid.x, (int)(bbox_min.x / TileSizeX))),
-                max(0, min((int)grid.y, (int)(bbox_min.y / TileSizeY)))
-            };
-            int2 rect_max = {
-                max(0, min((int)grid.x, (int)((bbox_max.x + TileSizeX - 1) / TileSizeX))),
-                max(0, min((int)grid.y, (int)((bbox_max.y + TileSizeY - 1) / TileSizeY)))
-            };
+        // Rectangular tile extent of ellipse
+        int2 rect_min = {
+            max(0, min((int)grid.x, (int)(bbox_min.x / TileSizeX))),
+            max(0, min((int)grid.y, (int)(bbox_min.y / TileSizeY)))
+        };
+        int2 rect_max = {
+            max(0, min((int)grid.x, (int)((bbox_max.x + TileSizeX - 1) / TileSizeX))),
+            max(0, min((int)grid.y, (int)((bbox_max.y + TileSizeY - 1) / TileSizeY)))
+        };
 
-            int y_span = rect_max.y - rect_min.y;
-            int x_span = rect_max.x - rect_min.x;
-            int allocated_size = 0;
-            if (y_span * x_span > 0)
-            {
-                bool isY = y_span < x_span;
-                allocated_size = processTiles<TileSizeY, TileSizeX>(
-                    con_o, disc, t, p,
-                    bbox_min, bbox_max,
-                    bbox_argmin, bbox_argmax,
-                    rect_min, rect_max,
-                    grid, isY,
-                    index, 0,
-                    nullptr,
-                    nullptr);
-            }
-            tensor_allocated_size[view_id][index] = allocated_size;
-              
-        }
-        else
+        int y_span = rect_max.y - rect_min.y;
+        int x_span = rect_max.x - rect_min.x;
+        int allocated_size = 0;
+        if (y_span * x_span > 0)
         {
-            tensor_left_up[view_id][0][index] = -1;
-            tensor_left_up[view_id][1][index] = -1;
-            tensor_right_down[view_id][0][index] = -1;
-            tensor_right_down[view_id][1][index] = -1;
-            tensor_allocated_size[view_id][index] = 0;
+            bool isY = y_span < x_span;
+            allocated_size = processTiles<TileSizeY, TileSizeX>(
+                con_o, disc, t, p,
+                bbox_min, bbox_max,
+                bbox_argmin, bbox_argmax,
+                rect_min, rect_max,
+                grid, isY,
+                index, 0,
+                nullptr,
+                nullptr);
         }
+        tensor_allocated_size[view_id][index] = allocated_size;
+              
     }
+    else
+    {
+        tensor_left_up[view_id][0][index] = -1;
+        tensor_left_up[view_id][1][index] = -1;
+        tensor_right_down[view_id][0][index] = -1;
+        tensor_right_down[view_id][1][index] = -1;
+        tensor_allocated_size[view_id][index] = 0;
+    }
+    
 }
 
 #define LAUNCH_GET_ALLOCATE_SIZE_KERNEL(TILE_SIZE_H, TILE_SIZE_W)                                                \
@@ -347,13 +350,17 @@ __global__ void get_allocate_size_kernel(
     view_space_z.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),                                        \
     inv_cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),                                           \
     opacity.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),                                             \
+    p_valid_length,                                                                                              \
     height, width,tiles_num_h, tiles_num_w,                                                                      \
     left_up.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),                                           \
     right_down.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),                                        \
     allocated_size.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
 
-std::vector<at::Tensor> get_allocate_size(at::Tensor ndc, at::Tensor view_space_z, at::Tensor inv_cov2d, at::Tensor opacity,
-    int64_t height,int64_t width, int64_t tile_size_h, int64_t tile_size_w)
+std::vector<at::Tensor> get_allocate_size(
+    at::Tensor ndc, at::Tensor view_space_z, at::Tensor inv_cov2d, at::Tensor opacity,
+    int64_t height,int64_t width, int64_t tile_size_h, int64_t tile_size_w,
+    std::optional<at::Tensor> valid_length
+)
 {
     at::DeviceGuard guard(ndc.device());
 
@@ -366,6 +373,11 @@ std::vector<at::Tensor> get_allocate_size(at::Tensor ndc, at::Tensor view_space_
     at::Tensor left_up = torch::empty({ views_num,2,points_num }, ndc.options().dtype(torch::kInt32));
     at::Tensor right_down = torch::empty({ views_num,2,points_num }, ndc.options().dtype(torch::kInt32));
     at::Tensor allocated_size = torch::empty({ views_num,points_num }, ndc.options().dtype(torch::kInt32));
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     dim3 Block3d(std::ceil(points_num / 256.0f), views_num, 1);
     if (tile_size_h == 8 && tile_size_w == 16)
