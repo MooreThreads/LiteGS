@@ -95,45 +95,57 @@ at::Tensor jacobianRayspace(
 __global__ void create_transform_matrix_forward_kernel(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[4,point_num]  
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[3,point_num] 
+    const int* __restrict__ valid_length,
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> transform         //[3,3,point_num]
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( index < quaternion.size(1))
+    if ((valid_length != nullptr && index >= valid_length[0])|| index >= quaternion.size(1))
     {
-        float r = quaternion[0][index];
-        float x = quaternion[1][index];
-        float y = quaternion[2][index];
-        float z = quaternion[3][index];
-
-        float scale_x = scale[0][index];
-        float scale_y = scale[1][index];
-        float scale_z = scale[2][index];
-
-        transform[0][0][index] = (1 - 2 * (y * y + z * z))*scale_x;
-        transform[0][1][index] = 2 * (x * y + r * z) * scale_x;
-        transform[0][2][index] = 2 * (x * z - r * y) * scale_x;
-
-        transform[1][0][index] = 2 * (x * y - r * z) * scale_y;
-        transform[1][1][index] = (1 - 2 * (x * x + z * z)) * scale_y;
-        transform[1][2][index] = 2 * (y * z + r * x) * scale_y;
-
-        transform[2][0][index] = 2 * (x * z + r * y) * scale_z;
-        transform[2][1][index] = 2 * (y * z - r * x) * scale_z;
-        transform[2][2][index] = (1 - 2 * (x * x + y * y)) * scale_z;
+        return;
     }
+    
+    
+    float r = quaternion[0][index];
+    float x = quaternion[1][index];
+    float y = quaternion[2][index];
+    float z = quaternion[3][index];
+
+    float scale_x = scale[0][index];
+    float scale_y = scale[1][index];
+    float scale_z = scale[2][index];
+
+    transform[0][0][index] = (1 - 2 * (y * y + z * z))*scale_x;
+    transform[0][1][index] = 2 * (x * y + r * z) * scale_x;
+    transform[0][2][index] = 2 * (x * z - r * y) * scale_x;
+
+    transform[1][0][index] = 2 * (x * y - r * z) * scale_y;
+    transform[1][1][index] = (1 - 2 * (x * x + z * z)) * scale_y;
+    transform[1][2][index] = 2 * (y * z + r * x) * scale_y;
+
+    transform[2][0][index] = 2 * (x * z + r * y) * scale_z;
+    transform[2][1][index] = 2 * (y * z - r * x) * scale_z;
+    transform[2][2][index] = (1 - 2 * (x * x + y * y)) * scale_z;
+    
 }
 
-at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale)
+at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale, std::optional<at::Tensor> valid_length)
 {
     int P = quaternion.size(1);
     at::Tensor transform_matrix = torch::empty({ 3,3,P }, scale.options());
+
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
     create_transform_matrix_forward_kernel << <blocknum, threadsnum >> > (
         quaternion.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        p_valid_length,
         transform_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;
     return transform_matrix;
@@ -143,88 +155,93 @@ __global__ void create_transform_matrix_backward_kernel(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> quaternion,    //[3,point_num]  
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> scale,    //[4,point_num] 
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> grad_transform,         //[3,3,point_num]
+    const int* __restrict__ valid_length,
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_quaternion,    //[4,point_num]  
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> grad_scale    //[3,point_num] 
 
 )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( index < quaternion.size(1))
+    if ((valid_length != nullptr && index >= valid_length[0]) || index >= quaternion.size(1))
     {
-        float r = quaternion[0][index];
-        float x = quaternion[1][index];
-        float y = quaternion[2][index];
-        float z = quaternion[3][index];
-
-        float dt[9];
-        dt[0 * 3 + 0] = grad_transform[0][0][index];
-        dt[0 * 3 + 1] = grad_transform[0][1][index];
-        dt[0 * 3 + 2] = grad_transform[0][2][index];
-
-        dt[1 * 3 + 0] = grad_transform[1][0][index];
-        dt[1 * 3 + 1] = grad_transform[1][1][index];
-        dt[1 * 3 + 2] = grad_transform[1][2][index];
-
-        dt[2 * 3 + 0] = grad_transform[2][0][index];
-        dt[2 * 3 + 1] = grad_transform[2][1][index];
-        dt[2 * 3 + 2] = grad_transform[2][2][index];
-
-        {
-            float grad_scale_x = 0;
-            grad_scale_x += (1 - 2 * (y * y + z * z)) * dt[0 * 3 + 0];
-            grad_scale_x += 2 * (x * y + r * z) * dt[0 * 3 + 1];
-            grad_scale_x += 2 * (x * z - r * y) * dt[0 * 3 + 2];
-            grad_scale[0][index] = grad_scale_x;
-        }
-
-        {
-            float grad_scale_y = 0;
-            grad_scale_y += 2 * (x * y - r * z) * dt[1 * 3 + 0];
-            grad_scale_y += (1 - 2 * (x * x + z * z)) * dt[1 * 3 + 1];
-            grad_scale_y += 2 * (y * z + r * x) * dt[1 * 3 + 2];
-            grad_scale[1][index] = grad_scale_y;
-        }
-
-        {
-            float grad_scale_z = 0;
-            grad_scale_z += 2 * (x * z + r * y) * dt[2 * 3 + 0];
-            grad_scale_z += 2 * (y * z - r * x) * dt[2 * 3 + 1];
-            grad_scale_z += (1 - 2 * (x * x + y * y)) * dt[2 * 3 + 2];
-            grad_scale[2][index] = grad_scale_z;
-        }
-
-        {
-            dt[0 * 3 + 0] *= scale[0][index];
-            dt[0 * 3 + 1] *= scale[0][index];
-            dt[0 * 3 + 2] *= scale[0][index];
-
-            dt[1 * 3 + 0] *= scale[1][index];
-            dt[1 * 3 + 1] *= scale[1][index];
-            dt[1 * 3 + 2] *= scale[1][index];
-
-            dt[2 * 3 + 0] *= scale[2][index];
-            dt[2 * 3 + 1] *= scale[2][index];
-            dt[2 * 3 + 2] *= scale[2][index];
-
-            grad_quaternion[0][index] = 2 * z * (dt[0*3+1] - dt[1*3+0]) + 2 * y * (dt[2*3+0] - dt[0*3+2]) + 2 * x * (dt[1*3+2] - dt[2*3+1]);
-            grad_quaternion[1][index] = 2 * y * (dt[1*3+0] + dt[0*3+1]) + 2 * z * (dt[2*3+0] + dt[0*3+2]) + 2 * r * (dt[1*3+2] - dt[2*3+1]) - 4 * x * (dt[2*3+2] + dt[1*3+1]);
-            grad_quaternion[2][index] = 2 * x * (dt[1*3+0] + dt[0*3+1]) + 2 * r * (dt[2*3+0] - dt[0*3+2]) + 2 * z * (dt[1*3+2] + dt[2*3+1]) - 4 * y * (dt[2*3+2] + dt[0*3+0]);
-            grad_quaternion[3][index] = 2 * r * (dt[0*3+1] - dt[1*3+0]) + 2 * x * (dt[2*3+0] + dt[0*3+2]) + 2 * y * (dt[1*3+2] + dt[2*3+1]) - 4 * z * (dt[1*3+1] + dt[0*3+0]);
-        }
-
-
-
-
+        return;
     }
+
+    float r = quaternion[0][index];
+    float x = quaternion[1][index];
+    float y = quaternion[2][index];
+    float z = quaternion[3][index];
+
+    float dt[9];
+    dt[0 * 3 + 0] = grad_transform[0][0][index];
+    dt[0 * 3 + 1] = grad_transform[0][1][index];
+    dt[0 * 3 + 2] = grad_transform[0][2][index];
+
+    dt[1 * 3 + 0] = grad_transform[1][0][index];
+    dt[1 * 3 + 1] = grad_transform[1][1][index];
+    dt[1 * 3 + 2] = grad_transform[1][2][index];
+
+    dt[2 * 3 + 0] = grad_transform[2][0][index];
+    dt[2 * 3 + 1] = grad_transform[2][1][index];
+    dt[2 * 3 + 2] = grad_transform[2][2][index];
+
+    {
+        float grad_scale_x = 0;
+        grad_scale_x += (1 - 2 * (y * y + z * z)) * dt[0 * 3 + 0];
+        grad_scale_x += 2 * (x * y + r * z) * dt[0 * 3 + 1];
+        grad_scale_x += 2 * (x * z - r * y) * dt[0 * 3 + 2];
+        grad_scale[0][index] = grad_scale_x;
+    }
+
+    {
+        float grad_scale_y = 0;
+        grad_scale_y += 2 * (x * y - r * z) * dt[1 * 3 + 0];
+        grad_scale_y += (1 - 2 * (x * x + z * z)) * dt[1 * 3 + 1];
+        grad_scale_y += 2 * (y * z + r * x) * dt[1 * 3 + 2];
+        grad_scale[1][index] = grad_scale_y;
+    }
+
+    {
+        float grad_scale_z = 0;
+        grad_scale_z += 2 * (x * z + r * y) * dt[2 * 3 + 0];
+        grad_scale_z += 2 * (y * z - r * x) * dt[2 * 3 + 1];
+        grad_scale_z += (1 - 2 * (x * x + y * y)) * dt[2 * 3 + 2];
+        grad_scale[2][index] = grad_scale_z;
+    }
+
+    {
+        dt[0 * 3 + 0] *= scale[0][index];
+        dt[0 * 3 + 1] *= scale[0][index];
+        dt[0 * 3 + 2] *= scale[0][index];
+
+        dt[1 * 3 + 0] *= scale[1][index];
+        dt[1 * 3 + 1] *= scale[1][index];
+        dt[1 * 3 + 2] *= scale[1][index];
+
+        dt[2 * 3 + 0] *= scale[2][index];
+        dt[2 * 3 + 1] *= scale[2][index];
+        dt[2 * 3 + 2] *= scale[2][index];
+
+        grad_quaternion[0][index] = 2 * z * (dt[0*3+1] - dt[1*3+0]) + 2 * y * (dt[2*3+0] - dt[0*3+2]) + 2 * x * (dt[1*3+2] - dt[2*3+1]);
+        grad_quaternion[1][index] = 2 * y * (dt[1*3+0] + dt[0*3+1]) + 2 * z * (dt[2*3+0] + dt[0*3+2]) + 2 * r * (dt[1*3+2] - dt[2*3+1]) - 4 * x * (dt[2*3+2] + dt[1*3+1]);
+        grad_quaternion[2][index] = 2 * x * (dt[1*3+0] + dt[0*3+1]) + 2 * r * (dt[2*3+0] - dt[0*3+2]) + 2 * z * (dt[1*3+2] + dt[2*3+1]) - 4 * y * (dt[2*3+2] + dt[0*3+0]);
+        grad_quaternion[3][index] = 2 * r * (dt[0*3+1] - dt[1*3+0]) + 2 * x * (dt[2*3+0] + dt[0*3+2]) + 2 * y * (dt[1*3+2] + dt[2*3+1]) - 4 * z * (dt[1*3+1] + dt[0*3+0]);
+    }
+
 }
 
 
-std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale)
+std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale, std::optional<at::Tensor> valid_length)
 {
-    //todo
     int P = quaternion.size(1);
     at::Tensor grad_quaternion = torch::empty({ 4,P }, transform_matrix_grad.options());
     at::Tensor grad_scale = torch::empty({ 3,P }, transform_matrix_grad.options());
+
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -232,6 +249,7 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
         quaternion.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         transform_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        p_valid_length,
         grad_quaternion.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         grad_scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>());
     CUDA_CHECK_ERRORS;

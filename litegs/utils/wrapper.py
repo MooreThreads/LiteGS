@@ -177,25 +177,25 @@ class CreateTransformMatrix(BaseWrapper):
     Returns:
         torch.Tensor: A 3D transformation matrix of shape [3, 3, num_points], where each slice corresponds to the transformation for one point.
     """
-    def __create_transform_matrix_fused(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+    def __create_transform_matrix_fused(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor,valid_length:torch.Tensor)->torch.Tensor:
 
         class CreateTransformMatrixFunc(torch.autograd.Function):
             @staticmethod
             def forward(ctx,quaternion:torch.Tensor,scale:torch.Tensor):
-                ctx.save_for_backward(quaternion,scale)
-                transform_matrix=litegs_fused.createTransformMatrix_forward(quaternion,scale)
+                ctx.save_for_backward(quaternion,scale,valid_length)
+                transform_matrix=litegs_fused.createTransformMatrix_forward(quaternion,scale,valid_length)
                 return transform_matrix
             
             @staticmethod
             def backward(ctx,grad_transform_matrix:torch.Tensor):
-                (quaternion,scale)=ctx.saved_tensors
-                grad_quaternion,grad_scale=litegs_fused.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale)
+                (quaternion,scale,valid_length)=ctx.saved_tensors
+                grad_quaternion,grad_scale=litegs_fused.createTransformMatrix_backward(grad_transform_matrix,quaternion,scale,valid_length)
                 return grad_quaternion,grad_scale
             
         transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
         return transform_matrix
 
-    def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor)->torch.Tensor:
+    def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor,valid_length:torch.Tensor)->torch.Tensor:
         rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
 
         r=rotator_vec[0]
