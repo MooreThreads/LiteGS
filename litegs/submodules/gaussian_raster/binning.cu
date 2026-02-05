@@ -52,7 +52,7 @@ template<int TileSizeY, int TileSizeX>
 
          float4 ndc{ tensor_ndc[view_id][0][index],tensor_ndc[view_id][1][index],
              tensor_ndc[view_id][2][index] ,tensor_ndc[view_id][3][index] };
-         float opacity = max(tensor_opacity[view_id][index], 1.0f / 255);
+         float opacity = tensor_opacity[view_id][index];
          float4 con_o{ tensor_inv_cov2d[view_id][0][0][index],tensor_inv_cov2d[view_id][0][1][index],tensor_inv_cov2d[view_id][1][1][index],opacity };
          float disc = con_o.y * con_o.y - con_o.x * con_o.z;
          float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
@@ -267,14 +267,14 @@ __global__ void get_allocate_size_kernel(
     {
         float4 ndc{ tensor_ndc[view_id][0][index],tensor_ndc[view_id][1][index],
             tensor_ndc[view_id][2][index] ,tensor_ndc[view_id][3][index] };
-        float opacity = max(tensor_opacity[view_id][index], 1.0f / 255);
+        float opacity = tensor_opacity[view_id][index];
         float4 con_o{ tensor_inv_cov2d[view_id][0][0][index],tensor_inv_cov2d[view_id][0][1][index],tensor_inv_cov2d[view_id][1][1][index],opacity };
         float disc = con_o.y * con_o.y - con_o.x * con_o.z;
         float2 screen_uv{ ndc.x * 0.5f + 0.5f,ndc.y * 0.5f + 0.5f };
         float2 p{ screen_uv.x * img_w - 0.5f,screen_uv.y * img_h - 0.5f };
         const dim3 grid{ tile_num_w,tile_num_h,0 };
 
-        bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (view_space_z[view_id][index] <= 0.2f));
+        bool bVisible = !((ndc.x < -1.3f) || (ndc.x > 1.3f) || (ndc.y < -1.3f) || (ndc.y > 1.3f) || (view_space_z[view_id][index] <= 0.2f) || (con_o.w < 1.0f / 255));
         bVisible &= ((con_o.x > 0)& (con_o.z > 0)& (disc < 0));
 
         if (bVisible)

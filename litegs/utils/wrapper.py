@@ -177,7 +177,7 @@ class CreateTransformMatrix(BaseWrapper):
     Returns:
         torch.Tensor: A 3D transformation matrix of shape [3, 3, num_points], where each slice corresponds to the transformation for one point.
     """
-    def __create_transform_matrix_fused(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor,valid_length:torch.Tensor)->torch.Tensor:
+    def __create_transform_matrix_fused(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor,valid_length:torch.Tensor|None=None)->torch.Tensor:
 
         class CreateTransformMatrixFunc(torch.autograd.Function):
             @staticmethod
@@ -195,7 +195,7 @@ class CreateTransformMatrix(BaseWrapper):
         transform_matrix=CreateTransformMatrixFunc.apply(rotator_vec,scaling_vec)
         return transform_matrix
 
-    def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor,valid_length:torch.Tensor)->torch.Tensor:
+    def __create_transform_matrix_script(scaling_vec:torch.Tensor,rotator_vec:torch.Tensor,valid_length:torch.Tensor|None=None)->torch.Tensor:
         rotation_matrix=torch.zeros((3,3,rotator_vec.shape[-1]),device='cuda')
 
         r=rotator_vec[0]
