@@ -1,6 +1,6 @@
 #pragma once
 #include <torch/extension.h>
-at::Tensor jacobianRayspace(at::Tensor translate_position,at::Tensor proj_matrix,int64_t output_h,int64_t output_w,bool bTranspose);
+at::Tensor jacobianRayspace(at::Tensor translate_position,at::Tensor proj_matrix,int64_t output_h,int64_t output_w, std::optional<at::Tensor> valid_length);
 
 at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale, std::optional<at::Tensor> valid_length);
 std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matrix_grad, at::Tensor quaternion, at::Tensor scale, std::optional<at::Tensor> valid_length);

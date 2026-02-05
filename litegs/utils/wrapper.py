@@ -236,13 +236,12 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
         view_matrix (torch.Tensor): A tensor representing the camera view matrix with shape [num_views, 4, 4].
         proj_matrix (torch.Tensor): A tensor representing the focal lengths of the camera with shape [num_views, 4, 4].
         output_shape (tuple[int,int]): ...
-        bTranspose (bool, optional): A flag indicating whether to transpose certain matrix components during the computation. Default is True.
 
     Returns:
         torch.Tensor: A ray-space transformation matrix with shape [num_views, 3, 3, num_points].
     """
     @torch.no_grad()
-    def __create_rayspace_transform_script(view_pos:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
+    def __create_rayspace_transform_script(view_pos:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],valid_length:torch.Tensor|None=None)->torch.Tensor:
         t=view_pos
         t[:,2].clamp_(1e-2)#near plane 0.01
         J=torch.zeros((t.shape[0],3,3,t.shape[-1]),device=t.device)#view point mat3x3
@@ -251,17 +250,13 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
         focal_length_y=output_shape[0]*proj_matrix[:,1,1]*0.5
         J[:,0,0]=focal_length_x/t[:,2]#focal x
         J[:,1,1]=focal_length_y/t[:,2]#focal y
-        if bTranspose:
-            J[:,0,2]=-(focal_length_x*t[:,0])/tz_square
-            J[:,1,2]=-(focal_length_y*t[:,1])/tz_square
-        else:
-            J[:,2,0]=-(focal_length_x*t[:,0])/tz_square
-            J[:,2,1]=-(focal_length_y*t[:,1])/tz_square
+        J[:,2,0]=-(focal_length_x*t[:,0])/tz_square
+        J[:,2,1]=-(focal_length_y*t[:,1])/tz_square
         return J
 
     @torch.no_grad()
-    def __create_rayspace_transform_fused(view_pos:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
-        J=litegs_fused.jacobianRayspace(view_pos,proj_matrix,output_shape[0],output_shape[1],bTranspose)
+    def __create_rayspace_transform_fused(view_pos:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],valid_length:torch.Tensor|None=None)->torch.Tensor:
+        J=litegs_fused.jacobianRayspace(view_pos,proj_matrix,output_shape[0],output_shape[1],valid_length)
         return J
     
     _fused=__create_rayspace_transform_fused

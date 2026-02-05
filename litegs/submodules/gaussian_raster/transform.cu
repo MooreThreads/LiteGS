@@ -19,73 +19,70 @@ namespace cg = cooperative_groups;
     #define TYPE scalar_type
 #endif
 
-template <typename scalar_t,bool TRNASPOSE=true>
+template <typename scalar_t>
 __global__ void jacobian_rayspace_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> translated_position,    //[batch,4,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> proj_matrix,    //[batch,2] 
+    const int* __restrict__ valid_length,
     const int output_h,const int output_w,
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian         //[batch,3,3,point_num]
     )
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int batch_id = blockIdx.y;
-    if (batch_id < translated_position.size(0) && index < translated_position.size(2))
-    {
-        float focalx = proj_matrix[batch_id][0][0]*output_w*0.5f;
-        float focaly = proj_matrix[batch_id][1][1]*output_h*0.5f;
-        float3 t{ translated_position[batch_id][0][index] ,translated_position[batch_id][1][index] ,translated_position[batch_id][2][index] };
-        float limit_x = t.z / proj_matrix[batch_id][0][0] * 1.3f;
-        float limit_y = t.z / proj_matrix[batch_id][1][1] * 1.3f;
-        t.x = max(min(t.x, limit_x), -limit_x);
-        t.y = max(min(t.y, limit_y), -limit_y);
+    if ((valid_length != nullptr && index >= valid_length[0]) || batch_id >= translated_position.size(0) || index >= translated_position.size(2))
+        return;
 
-        float reciprocal_tz = 1.0f/max(t.z,1e-2f);//near plane 0.01
-        float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
+    float focalx = proj_matrix[batch_id][0][0]*output_w*0.5f;
+    float focaly = proj_matrix[batch_id][1][1]*output_h*0.5f;
+    float3 t{ translated_position[batch_id][0][index] ,translated_position[batch_id][1][index] ,translated_position[batch_id][2][index] };
+    float limit_x = t.z / proj_matrix[batch_id][0][0] * 1.3f;
+    float limit_y = t.z / proj_matrix[batch_id][1][1] * 1.3f;
+    t.x = max(min(t.x, limit_x), -limit_x);
+    t.y = max(min(t.y, limit_y), -limit_y);
 
-        jacobian[batch_id][0][0][index] = focalx * reciprocal_tz;
-        jacobian[batch_id][1][1][index] = focaly * reciprocal_tz;
-        if (TRNASPOSE)
-        {
-            jacobian[batch_id][0][2][index] = -focalx * t.x * square_reciprocal_tz;
-            jacobian[batch_id][1][2][index] = -focaly * t.y * square_reciprocal_tz;
-        }
-        else
-        {
-            jacobian[batch_id][2][0][index] = -focalx * t.x * square_reciprocal_tz;
-            jacobian[batch_id][2][1][index] = -focaly * t.y * square_reciprocal_tz;
-        }
-    }
+    float reciprocal_tz = 1.0f/max(t.z,1e-2f);//near plane 0.01
+    float square_reciprocal_tz = reciprocal_tz * reciprocal_tz;
+
+    jacobian[batch_id][0][0][index] = focalx * reciprocal_tz;
+    jacobian[batch_id][1][1][index] = focaly * reciprocal_tz;
+    jacobian[batch_id][2][0][index] = -focalx * t.x * square_reciprocal_tz;
+    jacobian[batch_id][2][1][index] = -focaly * t.y * square_reciprocal_tz;
+
 }
 
 at::Tensor jacobianRayspace(
     at::Tensor translated_position, //N,4,P
     at::Tensor proj_matrix, //N,2
     int64_t output_h,int64_t output_w,
-    bool bTranspose
+    std::optional<at::Tensor> valid_length
 )
 {
     int N = translated_position.size(0);
     int P = translated_position.size(2);
     at::Tensor jacobian_matrix = torch::zeros({N,3,3,P}, translated_position.options());
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P/(float)threadsnum), N, 1);
-    if (bTranspose)
-    {
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.TYPE(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t,true > << <Block3d, threadsnum >> > (
-            translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            output_h,output_w,
-            jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
-    }
-    else
-    {
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(translated_position.TYPE(), __FUNCTION__, [&] {jacobian_rayspace_kernel<scalar_t, false > << <Block3d, threadsnum >> > (
-            translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            output_h,output_w,
-            jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
-    }
+
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+        translated_position.TYPE(), 
+        __FUNCTION__, 
+        [&] {
+            jacobian_rayspace_kernel<scalar_t> << <Block3d, threadsnum >> > (
+                translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                p_valid_length,
+                output_h,output_w,
+                jacobian_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()
+            ); 
+        }
+    );
 
     CUDA_CHECK_ERRORS;
     return jacobian_matrix;
