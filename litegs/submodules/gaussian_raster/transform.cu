@@ -360,6 +360,230 @@ __device__ void matmul_AtA(scalar_t(*__restrict__ A)[N], scalar_t(*__restrict__ 
     }
 }
 
+__global__ void mvp_forward_kernel(
+    const float* __restrict__ view_matrix, // [B, 4, 4]
+    const float* __restrict__ proj_matrix, // [B, 4, 4]
+    const float* __restrict__ world_pos,   // [4, N]
+    const int* __restrict__ valid_length,  // [1]
+    float* __restrict__ view_pos,          // [B, 4, N]
+    float* __restrict__ ndc_pos,           // [B, 4, N]
+    int batch_size,
+    int num_points
+)
+{
+    // Grid: x=N_blocks, y=Batch
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int b_idx = blockIdx.y;
+
+    if (idx >= num_points || (valid_length != nullptr && idx >= valid_length[0])) return;
+
+    const float* V = view_matrix + b_idx * 16;
+    const float* P = proj_matrix + b_idx * 16;
+
+    float w_vec[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        w_vec[i] = world_pos[i * num_points + idx];
+    }
+
+    float v_vec[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        v_vec[i] = w_vec[0] * V[0 * 4 + i] + w_vec[1] * V[1 * 4 + i] + w_vec[2] * V[2 * 4 + i] + w_vec[3] * V[3 * 4 + i];
+    }
+
+    int batch_offset = b_idx * 4 * num_points;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        view_pos[batch_offset + i * num_points + idx] = v_vec[i];
+    }
+
+
+    float hom_vec[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        hom_vec[i] = v_vec[0] * P[0 * 4 + i] + v_vec[1] * P[1 * 4 + i] + v_vec[2] * P[2 * 4 + i] + v_vec[3] * P[3 * 4 + i];
+    }
+
+    float w = hom_vec[3];
+    float inv_w = (fabsf(w) > 1e-12f) ? (1.0f / w) : 0.0f;
+
+    float ndc_vec[4];
+    ndc_vec[0] = hom_vec[0] * inv_w;
+    ndc_vec[1] = hom_vec[1] * inv_w;
+    ndc_vec[2] = hom_vec[2] * inv_w;
+    ndc_vec[3] = 1.0f; // Convention: w becomes 1 after divide
+
+    // Write NDC Pos
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        ndc_pos[batch_offset + i * num_points + idx] = ndc_vec[i];
+    }
+
+}
+
+std::vector<at::Tensor> mvp_transform_forward(at::Tensor world_position, at::Tensor view_matrix, at::Tensor proj_matrix, std::optional<at::Tensor> valid_length)
+{
+
+
+    int B = view_matrix.size(0);
+    int N = world_position.size(1);
+    at::Tensor view_position = torch::empty({ B,4,N }, world_position.options());
+    at::Tensor ndc_position = torch::empty({ B,4,N }, world_position.options());
+
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(N / 256.0f), B, 1);
+
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
+
+    mvp_forward_kernel <<<Block3d, threadsnum >>> (
+        view_matrix.data_ptr<float>(),
+        proj_matrix.data_ptr<float>(),
+        world_position.data_ptr<float>(),
+        p_valid_length,
+        view_position.data_ptr<float>(),
+        ndc_position.data_ptr<float>(),
+        B, N
+        );
+
+    CUDA_CHECK_ERRORS;
+    return { view_position,ndc_position };
+}
+
+__global__ void mvp_backward_data_kernel(
+    const float* __restrict__ grad_ndc,    // [B, 4, N]
+    const float* __restrict__ grad_view,   // [B, 4, N]
+    const float* __restrict__ view_matrix, // [B, 4, 4]
+    const float* __restrict__ proj_matrix, // [B, 4, 4]
+    const float* __restrict__ view_pos,    // [B, 4, N]
+    const int* __restrict__ valid_length,  // [1]
+    float* __restrict__ grad_world,        // [4, N] (accumulate here)
+    int batch_size,
+    int num_points
+) 
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_points || (valid_length != nullptr && idx >= valid_length[0])) return;
+
+    // d_world 对于每个点，需要累加所有 Batch 的贡献
+    float d_w_accum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    for (int b = 0; b < batch_size; ++b) {
+        const float* V = view_matrix + b * 16;
+        const float* P = proj_matrix + b * 16;
+        int batch_offset = b * 4 * num_points;
+
+
+        float v_vec[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) v_vec[i] = view_pos[batch_offset + i * num_points + idx];
+        float hom_vec[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            hom_vec[i] = v_vec[0] * P[0 * 4 + i] + v_vec[1] * P[1 * 4 + i] + v_vec[2] * P[2 * 4 + i] + v_vec[3] * P[3 * 4 + i];
+        }
+        float w = hom_vec[3];
+        float inv_w = (fabsf(w) > 1e-12f) ? (1.0f / w) : 0.0f;
+
+        float ndc_vec[3];
+        ndc_vec[0] = hom_vec[0] * inv_w;
+        ndc_vec[1] = hom_vec[1] * inv_w;
+        ndc_vec[2] = hom_vec[2] * inv_w;
+
+
+        float g_ndc[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) g_ndc[i] = grad_ndc[batch_offset + i * num_points + idx];
+
+        float d_hom[4];
+        d_hom[0] = g_ndc[0] * inv_w;
+        d_hom[1] = g_ndc[1] * inv_w;
+        d_hom[2] = g_ndc[2] * inv_w;
+        float dot_g_n = g_ndc[0] * ndc_vec[0] + g_ndc[1] * ndc_vec[1] + g_ndc[2] * ndc_vec[2];
+        d_hom[3] = -dot_g_n * inv_w;
+
+        // Backprop through Projection: d_view_from_ndc = d_hom * P^T
+        float d_view_from_ndc[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i)
+        {
+            d_view_from_ndc[i] = d_hom[0] * P[i * 4 + 0] + d_hom[1] * P[i * 4 + 1] + d_hom[2] * P[i * 4 + 2] + d_hom[3] * P[i * 4 + 3];
+        }
+
+
+        float g_view_in[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) g_view_in[i] = grad_view[batch_offset + i * num_points + idx];
+        // Total d_view = g_view_in + d_view_from_ndc
+        float d_view_tot[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            d_view_tot[i] = g_view_in[i] + d_view_from_ndc[i];
+        }
+
+        // Backprop through View: d_world_contrib = d_view_tot * V^T
+        float d_world_contrib[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i)
+        {
+            d_world_contrib[i] = d_view_tot[0] * V[i * 4 + 0] + d_view_tot[1] * V[i * 4 + 1] + d_view_tot[2] * V[i * 4 + 2] + d_view_tot[3] * V[i * 4 + 3];
+        }
+
+#pragma unroll
+        for (int i = 0; i < 4; ++i) d_w_accum[i] += d_world_contrib[i];
+    }
+
+    // Write grad_world [4, N]
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        grad_world[i * num_points + idx] = d_w_accum[i];
+    }
+}
+
+at::Tensor mvp_transform_backward(
+    at::Tensor grad_ndc_pos, at::Tensor grad_view_pos,
+    at::Tensor view_matrix, at::Tensor proj_matrix, at::Tensor view_pos,
+    std::optional<at::Tensor> valid_length
+)
+{
+
+
+    int B = grad_ndc_pos.size(0);
+    int N = grad_ndc_pos.size(2);
+    at::Tensor grad_world_pos = torch::empty({ 4,N }, grad_ndc_pos.options());
+
+    int threadsnum = 256;
+    dim3 Block3d(std::ceil(N / 256.0f), 1, 1);
+
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
+
+    mvp_backward_data_kernel << <Block3d, threadsnum >> > (
+        grad_ndc_pos.data_ptr<float>(),
+        grad_view_pos.data_ptr<float>(),
+        view_matrix.data_ptr<float>(),
+        proj_matrix.data_ptr<float>(),
+        view_pos.data_ptr<float>(),
+        p_valid_length,
+        grad_world_pos.data_ptr<float>(),
+        B, N
+        );
+    //todo grad_view_matrix
+    //todo grad_proj_matrix
+
+    CUDA_CHECK_ERRORS;
+    return grad_world_pos;
+}
+
+
+
 __global__ void world2ndc_forward_kernel(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> tensor_view_project_matrix,    //[batch,4,4]  
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> tensor_world_position,    //[4,point_num] 

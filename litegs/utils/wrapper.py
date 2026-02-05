@@ -10,7 +10,7 @@ try:
 except:
     add_cmake_output_path()
     import litegs_fused
-    
+
 from . import spherical_harmonics
 from ..utils.statistic_helper import StatisticsHelperInst
 from ..utils.CompactedTensor import CompactedTensor
@@ -242,8 +242,8 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
         torch.Tensor: A ray-space transformation matrix with shape [num_views, 3, 3, num_points].
     """
     @torch.no_grad()
-    def __create_rayspace_transform_script(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
-        t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
+    def __create_rayspace_transform_script(view_pos:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
+        t=view_pos
         t[:,2].clamp_(1e-2)#near plane 0.01
         J=torch.zeros((t.shape[0],3,3,t.shape[-1]),device=t.device)#view point mat3x3
         tz_square=t[:,2]*t[:,2]
@@ -260,9 +260,8 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
         return J
 
     @torch.no_grad()
-    def __create_rayspace_transform_fused(point_positions:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
-        t=torch.matmul(view_matrix.transpose(-1,-2),point_positions)
-        J=litegs_fused.jacobianRayspace(t,proj_matrix,output_shape[0],output_shape[1],bTranspose)
+    def __create_rayspace_transform_fused(view_pos:torch.Tensor,proj_matrix:torch.Tensor,output_shape:tuple[int,int],bTranspose:bool=True)->torch.Tensor:
+        J=litegs_fused.jacobianRayspace(view_pos,proj_matrix,output_shape[0],output_shape[1],bTranspose)
         return J
     
     _fused=__create_rayspace_transform_fused
@@ -272,6 +271,23 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
                  ([1,4,4],torch.float32,False),
                  ((1080,1920),None,None),
                  (True,None,None)]
+
+class MVPTransform(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,position:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,valid_length:torch.Tensor|None=None):
+        view_pos,ndc_pos=litegs_fused.mvp_transform_forward(position,view_matrix,proj_matrix,valid_length)
+        ctx.save_for_backward(view_pos,view_matrix,proj_matrix,valid_length)
+        return view_pos,ndc_pos
+    
+    @staticmethod
+    def backward(ctx,grad_view_pos:torch.Tensor,grad_ndc_pos:torch.Tensor):
+        (view_pos,view_matrix,proj_matrix,valid_length)=ctx.saved_tensors
+        position_grad=litegs_fused.mvp_transform_backward(
+            grad_ndc_pos,grad_view_pos,
+            view_matrix,proj_matrix,view_pos,
+            valid_length
+        )
+        return (position_grad,None,None,None)
 
 class World2NdcFunc(torch.autograd.Function):
     '''

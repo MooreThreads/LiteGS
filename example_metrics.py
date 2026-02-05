@@ -135,6 +135,7 @@ if __name__ == "__main__":
                 img,transmitance,depth,normal,primitive_visible=litegs.render.render(
                     view_matrix,proj_matrix,
                     culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
+                    None,
                     lp.sh_degree,gt_image.shape[2:],pp
                 )
                 psnr_value=psnr_metrics(img,gt_image)

@@ -8,6 +8,14 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
 std::vector<at::Tensor> world2ndc_forward(at::Tensor world_position,at::Tensor view_project_matrix);
 at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor position, at::Tensor repc_hom_w, at::Tensor grad_ndcpos);
 
+std::vector<at::Tensor> mvp_transform_forward(at::Tensor world_position, at::Tensor view_matrix, at::Tensor proj_matrix, std::optional<at::Tensor> valid_length);
+at::Tensor mvp_transform_backward(
+    at::Tensor grad_ndc_pos, at::Tensor grad_view_pos,
+    at::Tensor view_matrix, at::Tensor proj_matrix, at::Tensor view_pos,
+    std::optional<at::Tensor> valid_length
+);
+
+
 at::Tensor createCov2dDirectly_forward(at::Tensor J, at::Tensor view_matrix,at::Tensor transform_matrix);
 at::Tensor createCov2dDirectly_backward(at::Tensor cov2d_grad, at::Tensor J, at::Tensor view_matrix, at::Tensor transform_matrix);
 

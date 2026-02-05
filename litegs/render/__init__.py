@@ -54,13 +54,14 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
 
     #gs projection
     nvtx.range_push("Proj")
+    view_pos,ndc_pos=utils.wrapper.MVPTransform.apply(xyz,view_matrix,proj_matrix,None)
     transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot)
-    J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(xyz,view_matrix,proj_matrix,output_shape,False)#todo script
+    J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(view_pos,proj_matrix,output_shape,False)#todo script
     cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
     eigen_val,eigen_vec,inv_cov2d=utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
-    ndc_pos=utils.wrapper.World2NdcFunc.apply(xyz,view_matrix@proj_matrix)
+    
 
-    view_depth=(view_matrix.transpose(1,2)@xyz)[:,2]
+    view_depth=view_pos[:,2,:]
     nvtx.range_pop()
     
     #visibility table

@@ -20,6 +20,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("createTransformMatrix_backward", &createTransformMatrix_backward);
 	m.def("world2ndc_forward", &world2ndc_forward);
 	m.def("world2ndc_backword", &world2ndc_backword);
+	m.def("mvp_transform_forward", &mvp_transform_forward);
+	m.def("mvp_transform_backward", &mvp_transform_backward);
 	m.def("createCov2dDirectly_forward", &createCov2dDirectly_forward);
 	m.def("createCov2dDirectly_backward", &createCov2dDirectly_backward);
 	m.def("sh2rgb_forward", &sh2rgb_forward);

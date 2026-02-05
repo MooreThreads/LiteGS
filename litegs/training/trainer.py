@@ -121,7 +121,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     intr=denoised_training_intr
                     view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
 
-                #cluster culling
+                #cluster culling 
                 (
                     visible_chunkid,visible_chunks_num,
                     culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity
@@ -131,9 +131,14 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     frames_buffer.feedback_visible_chunks_num,idx_tensor,
                     pp,actived_sh_degree
                 )
+
+                valid_length=None
+                if visible_chunks_num is not None:
+                    valid_length=visible_chunks_num*pp.cluster_size
                 img,transmitance,depth,normal,primitive_visible=render.render(
                     view_matrix,proj_matrix,
                     culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
+                    valid_length,
                     actived_sh_degree,gt_image.shape[2:],pp
                 )
                 

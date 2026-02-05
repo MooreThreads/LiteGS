@@ -10,6 +10,8 @@ from torch.utils.data import Dataset
 from . import utils
 from .utils.statistic_helper import StatisticsHelperInst
 
+# View-Projection Style: DX/Unreal (Row-Major&Row-Vector)
+
 class CameraInfo:
     def __init__(self):
         self.id:int=0
