@@ -372,7 +372,7 @@ std::vector<at::Tensor> get_allocate_size(
     int points_num = ndc.size(2);
     at::Tensor left_up = torch::empty({ views_num,2,points_num }, ndc.options().dtype(torch::kInt32));
     at::Tensor right_down = torch::empty({ views_num,2,points_num }, ndc.options().dtype(torch::kInt32));
-    at::Tensor allocated_size = torch::empty({ views_num,points_num }, ndc.options().dtype(torch::kInt32));
+    at::Tensor allocated_size = torch::zeros({ views_num,points_num }, ndc.options().dtype(torch::kInt32));
     int* p_valid_length = nullptr;
     if (valid_length.has_value())
     {
