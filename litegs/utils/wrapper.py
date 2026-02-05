@@ -378,7 +378,7 @@ class CreateCov2dDirectly(BaseWrapper):
 
     Users can invoke the computations through `call_fused`, `call_script`, or `call` methods.
     """
-    def create_2dcov_fused(J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
+    def create_2dcov_fused(J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor,valid_length:torch.Tensor|None=None)->torch.Tensor:
         '''
         An optimized function to calculate cov2d
 
@@ -395,18 +395,18 @@ class CreateCov2dDirectly(BaseWrapper):
         '''
         class Cov2dCreateV2Func(torch.autograd.Function):
             @staticmethod
-            def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor)->torch.Tensor:
-                ctx.save_for_backward(J,view_matrix,transform_matrix)
-                cov2d=litegs_fused.createCov2dDirectly_forward(J,view_matrix,transform_matrix)
+            def forward(ctx,J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor,valid_length:torch.Tensor|None=None)->torch.Tensor:
+                ctx.save_for_backward(J,view_matrix,transform_matrix,valid_length)
+                cov2d=litegs_fused.createCov2dDirectly_forward(J,view_matrix,transform_matrix,valid_length)
                 return cov2d
             
             @staticmethod
             def backward(ctx,grad_cov2d:torch.Tensor):
-                (J,view_matrix,transform_matrix)=ctx.saved_tensors
-                transform_matrix_grad=litegs_fused.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix)
-                return (None,None,transform_matrix_grad)
+                (J,view_matrix,transform_matrix,valid_length)=ctx.saved_tensors
+                transform_matrix_grad=litegs_fused.createCov2dDirectly_backward(grad_cov2d,J,view_matrix,transform_matrix,valid_length)
+                return (None,None,transform_matrix_grad,None)
 
-        cov2d=Cov2dCreateV2Func.apply(J,view_matrix,transform_matrix)
+        cov2d=Cov2dCreateV2Func.apply(J,view_matrix,transform_matrix,valid_length)
         return cov2d
     
     _fused=create_2dcov_fused
@@ -417,7 +417,7 @@ class CreateCov2dDirectly(BaseWrapper):
     _relative_error_threshold=5e-2#ProjCov3dTo2dFunc 引入浮点误差，适度放大relative error
     
     @classmethod
-    def call_script(cls, J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor):
+    def call_script(cls, J:torch.Tensor,view_matrix:torch.Tensor,transform_matrix:torch.Tensor,valid_length:torch.Tensor|None=None):
         """
         Script-based implementation for creating 2D covariance matrices.
 

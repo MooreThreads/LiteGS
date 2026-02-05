@@ -738,6 +738,7 @@ __global__ void create_cov2d_forward(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,3,3,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> view_matrix,    //[batch,4,4] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> world_transform_matrix,    //[3,3,point_num] 
+    const int* __restrict__ valid_length,
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> cov2d         //[batch,2,2,point_num]
 )
 {
@@ -753,35 +754,37 @@ __global__ void create_cov2d_forward(
     }
     __syncthreads();
 
-    if (batch_id < view_matrix.size(0) && index < world_transform_matrix.size(2))
-    {
-        // world_transform_matrix @ view_matrix
-        scalar_t T[3][3];
-        scalar_t temp0[3][3];
-        load_matrix_batch<scalar_t, 3, 3>(&T, world_transform_matrix, index);
-        matmul<scalar_t, 3, 3, 3>(T, view, temp0);//world_transform_matrix@view_matrix
+    if (index >= world_transform_matrix.size(2) || batch_id >= view_matrix.size(0) || (valid_length != nullptr && index >= valid_length[0]))
+        return;
 
-        scalar_t J[3][2];
-        scalar_t temp1[3][2];
-        load_matrix_batch<scalar_t, 3, 2>(&J, jacobian_matrix[batch_id],index);
-        matmul<scalar_t, 3, 2, 3>(temp0, J, temp1);//(world_transform_matrix@view_matrix)@jacobian_matrix
+    // world_transform_matrix @ view_matrix
+    scalar_t T[3][3];
+    scalar_t temp0[3][3];
+    load_matrix_batch<scalar_t, 3, 3>(&T, world_transform_matrix, index);
+    matmul<scalar_t, 3, 3, 3>(T, view, temp0);//world_transform_matrix@view_matrix
 
-        scalar_t result[2][2];
-        matmul_AtA<scalar_t, 3, 2>(temp1, result);//A.trans@A
+    scalar_t J[3][2];
+    scalar_t temp1[3][2];
+    load_matrix_batch<scalar_t, 3, 2>(&J, jacobian_matrix[batch_id],index);
+    matmul<scalar_t, 3, 2, 3>(temp0, J, temp1);//(world_transform_matrix@view_matrix)@jacobian_matrix
 
-        //low-pass filter
-        result[0][0] += 0.3f;
-        result[1][1] += 0.3f;
+    scalar_t result[2][2];
+    matmul_AtA<scalar_t, 3, 2>(temp1, result);//A.trans@A
 
-        save_matrix_batch<scalar_t, 2, 2>(&result, cov2d[batch_id],index);
-    }
+    //low-pass filter
+    result[0][0] += 0.3f;
+    result[1][1] += 0.3f;
+
+    save_matrix_batch<scalar_t, 2, 2>(&result, cov2d[batch_id],index);
+    
 }
 
 
 at::Tensor createCov2dDirectly_forward(
     at::Tensor J, //N,3,3,P
     at::Tensor view_matrix, //N,4,4
-    at::Tensor transform_matrix //3,3,P
+    at::Tensor transform_matrix, //3,3,P
+    std::optional<at::Tensor> valid_length
 )
 {
     int N = view_matrix.size(0);
@@ -789,22 +792,28 @@ at::Tensor createCov2dDirectly_forward(
     assert(J.size(0) == N);
     assert(J.size(3) == P);
     at::Tensor cov2d = torch::empty({ N,2,2,P }, transform_matrix.options());
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 512;
     dim3 Block3d(std::ceil(P / (float)threadsnum), N, 1);
 
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(transform_matrix.TYPE(), __FUNCTION__, [&] {
-        create_cov2d_forward<scalar_t> << <Block3d, threadsnum >> > (
-            J.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
-            view_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            transform_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
-            cov2d.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()); });
-
-    /*create_cov2d_forward<float> << <Block3d, threadsnum >> > (
-        J.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        transform_matrix.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-        cov2d.packed_accessor32<float, 4, torch::RestrictPtrTraits>());*/
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+        transform_matrix.TYPE(), 
+        __FUNCTION__, 
+        [&] {
+            create_cov2d_forward<scalar_t> << <Block3d, threadsnum >> > (
+                J.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+                view_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                transform_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+                p_valid_length,
+                cov2d.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()
+            ); 
+        }
+    );
 
     CUDA_CHECK_ERRORS;
     return cov2d;
@@ -817,6 +826,7 @@ __global__ void create_cov2d_backward(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> jacobian_matrix,    //[batch,3,3,point_num] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> view_matrix,    //[batch,4,4] 
     const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> world_transform_matrix,    //[3,3,point_num] 
+    const int* __restrict__ valid_length,
     torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> transform_matrix_grad         //[3,3,point_num]
 )
 {
@@ -834,7 +844,7 @@ __global__ void create_cov2d_backward(
         }
         __syncthreads();
 
-        if ( index < world_transform_matrix.size(2))
+        if ((index < world_transform_matrix.size(2)) && (valid_length == nullptr || index < valid_length[0]))
         {
             scalar_t view_rayspace_transform[3][2];
             scalar_t rayspace_transform[3][2];
@@ -883,7 +893,8 @@ at::Tensor createCov2dDirectly_backward(
     at::Tensor cov2d_grad, //N,2,2,P
     at::Tensor J, //N,3,3,P
     at::Tensor view_matrix, //N,1,4,4
-    at::Tensor transform_matrix //3,3,P
+    at::Tensor transform_matrix, //3,3,P
+    std::optional<at::Tensor> valid_length
 )
 {
     int N = view_matrix.size(0);
@@ -891,6 +902,11 @@ at::Tensor createCov2dDirectly_backward(
     assert(cov2d_grad.size(0) == N);
     assert(cov2d_grad.size(3) == P);
     at::Tensor transform_matrix_grad = torch::empty({ 3,3,P }, cov2d_grad.options());
+    int* p_valid_length = nullptr;
+    if (valid_length.has_value())
+    {
+        p_valid_length = (*valid_length).data_ptr<int>();
+    }
 
     int threadsnum = 512;
     int blocknum=std::ceil(P / (float)threadsnum);
@@ -901,7 +917,9 @@ at::Tensor createCov2dDirectly_backward(
         J.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         transform_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
-        transform_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
+        p_valid_length,
+        transform_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
+    );
 
     CUDA_CHECK_ERRORS;
     return transform_matrix_grad;

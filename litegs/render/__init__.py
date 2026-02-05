@@ -57,7 +57,7 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     view_pos,ndc_pos=utils.wrapper.MVPTransform.apply(xyz,view_matrix,proj_matrix,valid_length)
     transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot,valid_length)
     J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(view_pos,proj_matrix,output_shape,valid_length)
-    cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix)
+    cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix,valid_length)
     eigen_val,eigen_vec,inv_cov2d=utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d)
     
 
