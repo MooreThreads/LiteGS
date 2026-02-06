@@ -106,7 +106,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
-
+        torch.cuda.synchronize()
         with StatisticsHelperInst.try_start(epoch):
             for view_matrix,proj_matrix,frustumplane,gt_image,idx_tensor in train_loader:
                 view_matrix=view_matrix.cuda()

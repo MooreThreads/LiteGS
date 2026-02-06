@@ -38,8 +38,8 @@ template<int TileSizeY, int TileSizeX>
      const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tensor_offset,        //viewnum,pointnum+1
      const torch::PackedTensorAccessor32<int64_t, 2, torch::RestrictPtrTraits> depth_sorted_point_id,        //viewnum,pointnum
      int img_h, int img_w, unsigned int tile_num_h, unsigned int tile_num_w,
-     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tensor_key,//viewnum,pointnum
-     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tensor_value//viewnum,pointnum
+     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tensor_key,//viewnum,allocated_size
+     torch::PackedTensorAccessor32 < int32_t, 2, torch::RestrictPtrTraits> tensor_value//viewnum,allocated_size
     )
 {
      int view_id = blockIdx.y;
@@ -60,7 +60,7 @@ template<int TileSizeY, int TileSizeX>
          const dim3 grid{ tile_num_w,tile_num_h,0 };
 
 
-         if (allocated_size>0)
+         if ((allocated_size>0)&&(buffer_offset+allocated_size<=tensor_key.size(1)))
          {
              float t = 2.0f * log(con_o.w * 255.0f);
              float x_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.x));
@@ -120,8 +120,10 @@ template<int TileSizeY, int TileSizeX>
         table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),         \
         table_pointId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());
 
- std::vector<at::Tensor> create_table(at::Tensor ndc, at::Tensor inv_cov2d, at::Tensor opacity, at::Tensor offset, at::Tensor depth_sorted_pointid,
-     int64_t allocate_size, int64_t height, int64_t width, int64_t tile_size_h, int64_t tile_size_w)
+ std::vector<at::Tensor> create_table(
+     at::Tensor ndc, at::Tensor inv_cov2d, at::Tensor opacity, at::Tensor offset, at::Tensor depth_sorted_pointid,
+     std::optional<at::Tensor> feedback_buffer_arg, std::optional<at::Tensor> data_idx_arg,
+     int64_t height, int64_t width, int64_t tile_size_h, int64_t tile_size_w)
 {
     // assert(tile_size_h == 8 && tile_size_w == 16);
     int tiles_num_h = (height + tile_size_h - 1) / tile_size_h;
@@ -132,8 +134,41 @@ template<int TileSizeY, int TileSizeX>
     int64_t view_num = ndc.sizes()[0];
     int64_t points_num = ndc.sizes()[2];
 
-    std::vector<int64_t> output_shape{ view_num, allocate_size };
+    int pred_allocate_size = 0;
+    if (feedback_buffer_arg.has_value() && data_idx_arg.has_value())
+    {
+        int* feedback_buffer = (*feedback_buffer_arg).data_ptr<int>();
+        for (int i = 0; i < view_num; i++)
+        {
+            int idx = (*data_idx_arg)[i].item().toInt();
+            if (feedback_buffer[idx] > pred_allocate_size)
+            {
+                pred_allocate_size = feedback_buffer[idx];
+            }
+            cudaMemcpyAsync(&feedback_buffer[idx], offset.data_ptr<int>() + (i * points_num) + (points_num - 1), sizeof(int), cudaMemcpyDeviceToHost);
+        }
+    }
+    pred_allocate_size = 1.5f * pred_allocate_size;
+    if (pred_allocate_size <= 0)//sync
+    {
+        int temp = 0;
+        for (int i = 0; i < view_num; i++)
+        {
+            cudaMemcpy(&temp, offset.data_ptr<int>() + (i * points_num) + (points_num - 1), sizeof(int), cudaMemcpyDeviceToHost);
+        }
+        if (temp > pred_allocate_size)
+        {
+            pred_allocate_size = temp;
+        }
+    }
+    TORCH_CHECK(pred_allocate_size > 0, "error pred_allocate_size\n");
+    /*if (pred_allocate_size <= 0 || pred_allocate_size > 10 * 1024 * 1024)
+    {
+        printf("error %d\n",pred_allocate_size);
+    }*/
+    CUDA_CHECK_ERRORS;
 
+    std::vector<int64_t> output_shape{ view_num, pred_allocate_size };
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(ndc.device()).requires_grad(false);
     auto table_tileId = torch::zeros(output_shape, opt);
     auto table_tileId_sorted = torch::empty(output_shape, opt);
@@ -172,7 +207,7 @@ template<int TileSizeY, int TileSizeX>
         sort_tmp_buffer_size,
         (int*)table_tileId.data_ptr(), (int*)table_tileId_sorted.data_ptr(),
         (int*)table_pointId.data_ptr(), (int*)table_pointId_sorted.data_ptr(),
-        allocate_size, 0, bit);
+        pred_allocate_size, 0, bit);
     auto temp_buffer_tensor=torch::empty({ ((int)sort_tmp_buffer_size + 4 - 1) / 4 }, opt);
     
     for (int view_id = 0; view_id < view_num; view_id++)
@@ -182,8 +217,9 @@ template<int TileSizeY, int TileSizeX>
             sort_tmp_buffer_size,
             (int*)table_tileId.data_ptr(), (int*)table_tileId_sorted.data_ptr(),
             (int*)table_pointId.data_ptr(), (int*)table_pointId_sorted.data_ptr(),
-            allocate_size, 0, bit);
+            pred_allocate_size, 0, bit);
     }
+    CUDA_CHECK_ERRORS;
 
     return { table_tileId_sorted ,table_pointId_sorted };
     
@@ -228,17 +264,20 @@ __global__ void tile_range_kernel(
     }
 }
 
-at::Tensor tileRange(at::Tensor table_tileId, int64_t table_length, int64_t max_tileId)
+at::Tensor tileRange(at::Tensor table_tileId, int64_t max_tileId)
 {
     at::DeviceGuard guard(table_tileId.device());
 
-    int64_t view_num = table_tileId.sizes()[0];
-    std::vector<int64_t> output_shape{ view_num,max_tileId + 1 + 1 };//+1 for tail
+    int64_t view_num = table_tileId.size(0);
+    int64_t table_length = table_tileId.size(1);
+    std::vector<int64_t> output_shape{ view_num, max_tileId + 2 };//out[max_tileId]:start offset out[mat_tileId+1]:end_offset
     //printf("\ntensor shape in tileRange:%ld,%ld\n", view_num, max_tileId+1-1);
     auto opt = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(table_tileId.device()).requires_grad(false);
     auto out = torch::ones(output_shape, opt)*-1;
 
     dim3 Block3d(std::ceil(table_length / 512.0f), view_num, 1);
+    //if(std::ceil(table_length / 512.0f)<=0|| std::ceil(table_length / 512.0f)>=65536||view_num<=0||view_num>=65536)
+    //    printf("table_length %d\n", table_length);
 
     tile_range_kernel<<<Block3d, 512 >>>
         (table_tileId.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(), table_length, max_tileId, out.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>());

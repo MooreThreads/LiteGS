@@ -743,12 +743,13 @@ class Binning(BaseWrapper):
 
         #calc the item num of table and the start index in table of each point
         prefix_sum=depth_sorted_allocate_size.cumsum(1,dtype=torch.int32)#start index of points
-        total_tiles_num_batch=prefix_sum[:,-1]
-        total_allocate_size=total_tiles_num_batch.max().cpu()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
-                                                int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+        my_table=litegs_fused.create_table(
+            ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
+            feedback_binning_allocate_size,idx_tensor,
+            img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1]
+        )
         sorted_tileId:torch.Tensor=my_table[0]
         sorted_pointId:torch.Tensor=my_table[1]
 
@@ -757,7 +758,7 @@ class Binning(BaseWrapper):
         # sorted_pointId=pointId_table.gather(dim=1,index=indices)
 
         # range
-        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(total_allocate_size),int(tiles_num-1+1))#max_tile_id:tilesnum-1, +1 for offset(tileId 0 is invalid)
+        tile_start_index=litegs_fused.tileRange(sorted_tileId,int(tiles_num))#max_tile_id==tilesnum, tile_id0 is invalid, +1 for offset
             
         return tile_start_index,sorted_pointId,b_visible.sum(0)
     
