@@ -3,7 +3,7 @@ import math
 
 from .. import utils
 
-def cluster_points(chunksize,*args:list[torch.Tensor])->list[torch.Tensor]:
+def cluster_points(chunksize,*args:torch.Tensor) -> tuple[torch.Tensor, ...]:
     '''
     input:[...,N]
 
@@ -19,14 +19,14 @@ def cluster_points(chunksize,*args:list[torch.Tensor])->list[torch.Tensor]:
         output.append(input.view(*input.shape[:-1],chunks_num,chunksize))
     return *output,
 
-def uncluster(*args:list[torch.Tensor])->list[torch.Tensor]:
+def uncluster(*args:torch.Tensor)->tuple[torch.Tensor, ...]:
     output=[]
     for input in args:
         output.append(input.view(*input.shape[:-2],input.shape[-1]*input.shape[-2]))
     return *output,
 
 @torch.no_grad()
-def get_cluster_AABB(clustered_xyz:torch.Tensor,clustered_scale:torch.Tensor,clustered_rot:torch.Tensor)->torch.Tensor:
+def get_cluster_AABB(clustered_xyz:torch.Tensor,clustered_scale:torch.Tensor,clustered_rot:torch.Tensor)->tuple[torch.Tensor,torch.Tensor]:
     '''
     '''
     chunk_size=clustered_xyz.shape[-1]
@@ -50,7 +50,7 @@ def get_visible_cluster(cluster_origin:torch.Tensor,cluster_extend:torch.Tensor,
     visible_chunkid=chunk_visibility.nonzero()[:,0]
     return visible_chunkid
 
-def culling(visible_chunkid:torch.Tensor,*args)->list[torch.Tensor]:
+def culling(visible_chunkid:torch.Tensor,*args)->tuple[torch.Tensor,...]:
     culled_tensors=[]
     for tensor in args:
         culled_tensors.append(tensor[...,visible_chunkid,:].contiguous())

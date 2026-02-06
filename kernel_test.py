@@ -2,7 +2,9 @@ import torch;import torch_musa
 import litegs_info
 import time
 from litegs.utils.statistic_helper import StatisticsHelperInst
+from litegs.utils.spherical_harmonics import rgb_to_sh0
 import math
+import matplotlib.pyplot as plt
 
 def get_frustumplane(view_matrix,proj_matrix):
     viewproj_matrix=view_matrix@proj_matrix
@@ -66,22 +68,84 @@ def get_projection_matrix(znear, zfar, fovX, fovY, device="musa"):
     P[2, 3] = -(zfar * znear) / (zfar - znear)
     return P
 
+def get_morton_code(coords: torch.Tensor) -> torch.Tensor:
+    """
+    计算2D坐标的Morton Code (Z-Order Curve value)
+    
+    Args:
+        coords: shape为 [N, 2] 的Tensor，类型为 torch.int16 或 torch.int32
+                coords[:, 0] 为 x 坐标
+                coords[:, 1] 为 y 坐标
+                
+    Returns:
+        morton_code: shape为 [N] 的Tensor，类型为 torch.int32
+    """
+    # 1. 必须先转为 int32，因为 int16 展开后会变成 32位，
+    #    如果在 int16 下做位移会溢出或截断
+    x = coords[:, 0].to(torch.int32)
+    y = coords[:, 1].to(torch.int32)
+    
+    # 2. 定义用于位扩展(Bit Spreading)的掩码 (Magic Numbers)
+    # 这些掩码用于将16位整数的位隔开，扩展分布到32位中
+    # 过程: abcd -> ..a.b.c.d
+    
+    # Step 1: 0000000011111111 -> 00000000111111110000000011111111
+    # 这一步对于int16输入其实不是必须的，但为了通用性保留
+    mask1 = 0x00FF00FF
+    mask2 = 0x0F0F0F0F
+    mask3 = 0x33333333
+    mask4 = 0x55555555
+
+    def spread_bits(v):
+        v = (v | (v << 8)) & mask1
+        v = (v | (v << 4)) & mask2
+        v = (v | (v << 2)) & mask3
+        v = (v | (v << 1)) & mask4
+        return v
+
+    # 3. 对 x 和 y 分别进行位扩展
+    xx = spread_bits(x)
+    yy = spread_bits(y)
+
+    # 4. 合并 (y 左移一位，占据奇数位; x 占据偶数位)
+    # Morton = ... y1 x1 y0 x0
+    morton_code = (yy << 1) | xx
+
+    return morton_code
+
 if __name__ == "__main__":
 
-    gs, cam = torch.load('./profiler_input_data/data.pth',map_location=torch.device('musa'))
-    complex_tile_id=torch.load('./profiler_input_data/complex_tile_2048.pth',map_location=torch.device('musa')).int()
-    sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list_2048.pth',map_location=torch.device('musa')).int()
+    gs, cam = torch.load('./profiler_input_data/crossroad.pt')
+    sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pt').int()
     StatisticsHelperInst.cur_sample="cross_road"
-    StatisticsHelperInst.cached_complex_tile["cross_road"]=complex_tile_id
     StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_tile_list
+    StatisticsHelperInst.cached_heavy_tile["cross_road"]=sorted_tile_list[:512]
+
+    #morton code scheduling
+    # tiles_num_x=math.ceil(cam['width']/litegs_info.Config.tile_size[1])
+    # tiles_num_y=math.ceil(cam['height']/litegs_info.Config.tile_size[0])
+    # coords=torch.meshgrid(torch.arange(tiles_num_x, device='cuda', dtype=torch.int16),torch.arange(tiles_num_y, device='cuda', dtype=torch.int16),indexing='xy')
+    # coords=torch.cat((coords[1].unsqueeze(-1),coords[0].unsqueeze(-1)),dim=-1)
+    # morton_code=get_morton_code(coords.view(-1,2))
+    # _,sorted_indices=morton_code.sort(stable=True)
+    # StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_indices.int()+1# tile index start from 1
+
+    #inverse activate
+    opacities = gs['_opacities'].squeeze()
+    opacities = torch.log(opacities/(1-opacities))
+    colors=gs['_rgbs']
+    sh_0=rgb_to_sh0(colors)
+    scales=gs['_scales']
+    scales=scales.log()
+    
 
     # init & warmup
     cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity = litegs_info.cluster(
         means=gs['_means'],
         quats=gs['_quats'],
-        scales=gs['_scales'],
-        opacities=gs['_opacities'].squeeze(),
-        colors=gs['_rgbs'],
+        scales=scales,
+        opacities=opacities,
+        sh_0=sh_0,
     )
     xyz=torch.nn.Parameter(xyz.contiguous())
     scale=torch.nn.Parameter(scale.contiguous())
@@ -106,6 +170,8 @@ if __name__ == "__main__":
     frustumplane=get_frustumplane(view_matrix, proj_matrix)
 
 
+    loop_num=50
+
     #warm up 
     renders, alphas, info = litegs_info.rasterization(
         cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity,
@@ -116,6 +182,11 @@ if __name__ == "__main__":
         width=W,
         height=H)
     renders.mean().backward()
+    xyz.grad=None
+    scale.grad=None
+    rot.grad=None
+    sh_0.grad=None
+    opacity.grad=None
     # xyz_grad,scale_grad,rot_grad,sh_0_grad,opacity_grad=torch.load("./profiler_input_data/cross_road_grad.pth")
     # assert (xyz_grad-xyz.grad).abs().sum()<1e-6
     # assert (scale_grad-scale.grad).abs().sum()<1e-6
@@ -127,10 +198,8 @@ if __name__ == "__main__":
 
 
     # test forward + backward time
-    torch.musa.synchronize()
+    torch.cuda.synchronize()
     start = time.time()
-    loop_num=40
-    viewmats=torch.linalg.inv(cam['camera_to_world'])[None, ...]
     for _ in range(loop_num):
         renders, alphas, info = litegs_info.rasterization(
             cluster_origin,cluster_extend,xyz,scale,rot,sh_0,opacity,
@@ -141,11 +210,12 @@ if __name__ == "__main__":
             width=W,
             height=H)
         renders.mean().backward()
-        xyz.gard=None
+        xyz.grad=None
         scale.grad=None
         rot.grad=None
         sh_0.grad=None
         opacity.grad=None
-    torch.musa.synchronize()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
     print('litegs forward&backward: ', (time.time()-start)*1000/loop_num, 'ms')
 

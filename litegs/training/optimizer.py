@@ -33,7 +33,7 @@ class SparseGaussianAdam(torch.optim.Adam):
                 exp_avg = stored_state["exp_avg"].view(-1,param.shape[-2],param.shape[-1])
                 exp_avg_sq = stored_state["exp_avg_sq"].view(-1,param.shape[-2],param.shape[-1])
                 param_view=param.data.view(-1,param.shape[-2],param.shape[-1])
-                sparse_adam_update(param_view, param.grad._values().reshape(param_view.shape[0],visible_chunk.shape[0],param_view.shape[-1]), exp_avg, exp_avg_sq, visible_chunk, lr, 0.9, 0.999, eps)
+                sparse_adam_update(param_view, param.grad.compacted_values, exp_avg, exp_avg_sq, visible_chunk, lr, 0.9, 0.999, eps)
             else:
                 stored_state = self.state.get(param, None)
                 exp_avg = stored_state["exp_avg"]

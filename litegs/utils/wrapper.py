@@ -6,6 +6,7 @@ import math
 from .platform import add_cmake_output_path
 from . import spherical_harmonics
 from ..utils.statistic_helper import StatisticsHelperInst
+from ..utils.CompactedTensor import CompactedTensor
 
 
 try:
@@ -432,7 +433,7 @@ class GaussiansRasterFunc(torch.autograd.Function):
     def forward(
         ctx,
         primitives_in_tile:torch.Tensor,tile_start:torch.Tensor,tile_end:torch.Tensor,tiles:torch.Tensor,
-        primitives_in_subtile:torch.Tensor,subtile_start:torch.Tensor,subtile_end:torch.Tensor,complex_tiles:torch.Tensor,
+        primitives_in_subtile:torch.Tensor,subtile_start:torch.Tensor,subtile_end:torch.Tensor,heavy_tiles:torch.Tensor,
         ndc:torch.Tensor,
         cov2d_inv:torch.Tensor,
         color:torch.Tensor,
@@ -444,18 +445,17 @@ class GaussiansRasterFunc(torch.autograd.Function):
         enable_transmitance:bool=False,
         enable_depth:bool=False
     ):
+   
         img,transmitance,depth,lst_contributor,packed_params,fragment_count,fragment_weight=litegs_fused.rasterize_forward(primitives_in_tile,tile_start,tile_end,tiles,
-                                                                                                                            primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
-                                                                                                                            ndc,cov2d_inv,color,opacities,
-                                                                                                                            img_h,img_w,tile_h,tile_w,
-                                                                                                                            StatisticsHelperInst.bStart,
-                                                                                                                            enable_transmitance,enable_depth)
-        if StatisticsHelperInst.bStart:
-            StatisticsHelperInst.update_tile_blend_count(lst_contributor)
+            primitives_in_subtile,subtile_start,subtile_end,heavy_tiles,
+            ndc,cov2d_inv,color,opacities,
+            img_h,img_w,tile_h,tile_w,
+            StatisticsHelperInst.bStart,
+            enable_transmitance,enable_depth)
 
         ctx.save_for_backward(primitives_in_tile,tile_start,tile_end,tiles,
-                              primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
-                              transmitance,lst_contributor,packed_params,fragment_count,fragment_weight)
+            primitives_in_subtile,subtile_start,subtile_end,heavy_tiles,
+            transmitance,lst_contributor,packed_params,fragment_count,fragment_weight)
         ctx.arg_tile_size=(tile_h,tile_w)
         ctx.img_hw=(img_h,img_w)
 
@@ -464,15 +464,13 @@ class GaussiansRasterFunc(torch.autograd.Function):
         if enable_transmitance==False:
             transmitance=None
         normal=None
-        return img,transmitance,depth,normal
+        return img,transmitance,depth,normal,lst_contributor
 
     @staticmethod
-    def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor):
-        
+    def backward(ctx, grad_rgb_image:torch.Tensor, grad_transmitance_image:torch.Tensor,grad_depth_image:torch.Tensor,grad_normal_image:torch.Tensor,_:torch.Tensor):
         (primitives_in_tile,tile_start,tile_end,tiles,
-         primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
-         transmitance,lst_contributor,packed_params,fragment_count,fragment_weight)=ctx.saved_tensors
-        
+            primitives_in_subtile,subtile_start,subtile_end,heavy_tiles,
+            transmitance,lst_contributor,packed_params,fragment_count,fragment_weight)=ctx.saved_tensors
         (img_h,img_w)=ctx.img_hw
         tile_h,tile_w=ctx.arg_tile_size
 
@@ -483,11 +481,13 @@ class GaussiansRasterFunc(torch.autograd.Function):
         grad_rgb_image_max=grad_rgb_image.abs().max()
         grad_rgb_image=grad_rgb_image/grad_rgb_image_max
         grad_ndc,grad_cov2d_inv,grad_color,grad_opacities,_,grad_o_square=litegs_fused.rasterize_backward(primitives_in_tile,tile_start,tile_end,tiles,
-                                                                                                            primitives_in_subtile,subtile_start,subtile_end,complex_tiles,
-                                                                                                            packed_params,
-                                                                                                            transmitance,lst_contributor,
-                                                                                                            grad_rgb_image,grad_transmitance_image,grad_depth_image,grad_rgb_image_max,
-                                                                                                            img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
+            primitives_in_subtile,subtile_start,subtile_end,heavy_tiles,
+            packed_params,
+            transmitance,lst_contributor,
+            grad_rgb_image,grad_transmitance_image,grad_depth_image,
+            grad_rgb_image_max,
+            img_h,img_w,tile_h,tile_w,StatisticsHelperInst.bStart)
+        
         if StatisticsHelperInst.bStart:
             #if err_sum.isinf().any() or err_square_sum.isinf().any():
             #    breakpoint()
@@ -500,20 +500,13 @@ class GaussiansRasterFunc(torch.autograd.Function):
         #             or grad_ndc.isnan().any() or grad_ndc.isinf().any():
         #     breakpoint()
 
-        grads = (
-            None,None,None,None,
+        grads = (None,None,None,None,
             None,None,None,None,
             grad_ndc,
             grad_cov2d_inv,
             grad_color,
             grad_opacities,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None
-        )
+            None,None,None,None,None,None)
 
         return grads
 
@@ -601,6 +594,48 @@ class EighAndInverse2x2Matrix(BaseWrapper):
     _relative_error_threshold=1e-2
 
 
+class CreateViewProjFunc(torch.autograd.Function):
+    """
+    Create view-projection matrix from camera parameters.
+    
+    Args:
+        position (torch.Tensor): Camera position [N, 3]
+        orientation (torch.Tensor): Camera orientation quaternion [N, 4] 
+        fovy (float): Field of view in y direction
+        aspect (float): Aspect ratio
+        near (float): Near plane distance 
+        far (float): Far plane distance
+    
+    Returns:
+        torch.Tensor: View-projection matrix [N, 4, 4]
+    """
+    
+    @staticmethod
+    def forward(ctx, position: torch.Tensor, orientation: torch.Tensor,
+                fovy: float, aspect: float, near: float, far: float):
+        
+        # Save inputs for backward
+        ctx.save_for_backward(position, orientation)
+        ctx.params = (fovy, aspect, near, far)
+        
+        # Forward pass
+        view_proj = litegs_fused.create_viewproj_forward(
+            position, orientation, fovy, aspect, near, far)
+            
+        return view_proj
+        
+    @staticmethod 
+    def backward(ctx, grad_view_proj: torch.Tensor):
+        position, orientation = ctx.saved_tensors
+        fovy, aspect, near, far = ctx.params
+        
+        # Backward pass
+        grad_position, grad_orientation = litegs_fused.create_viewproj_backward(
+            grad_view_proj, position, orientation, fovy, aspect, near, far)
+            
+        # Return grads for all inputs (None for scalar params)
+        return grad_position, grad_orientation, None, None, None, None
+
 class Binning(BaseWrapper):
     @torch.no_grad()
     def __binning_script(ndc:torch.Tensor,eigen_val:torch.Tensor,eigen_vec:torch.Tensor,opacity:torch.Tensor,
@@ -662,7 +697,7 @@ class Binning(BaseWrapper):
         return tile_start_index,sorted_pointId,b_visible
     
     @torch.no_grad()
-    def __binning_fused(ndc:torch.Tensor,view_depth:torch.Tensor,inv_cov2d:torch.Tensor,opacity:torch.Tensor,
+    def __binning_fused(ndc:torch.Tensor,view_depth:torch.Tensor,inv_cov2d:torch.Tensor,opacity:torch.Tensor,heavy_tile_id:torch.Tensor,
             img_pixel_shape:tuple[int,int],tile_size:tuple[int,int]):
         
         img_tile_shape=(int(math.ceil(img_pixel_shape[0]/float(tile_size[0]))),int(math.ceil(img_pixel_shape[1]/float(tile_size[1]))))
@@ -687,71 +722,88 @@ class Binning(BaseWrapper):
         total_allocate_size=total_tiles_num_batch.max().cpu()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        my_table=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
+        sorted_tileId,sorted_pointId=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
                                                 int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
-        tileId_table:torch.Tensor=my_table[0]
-        pointId_table:torch.Tensor=my_table[1]
-        if tiles_num<32768:
-            tileId_table=tileId_table.short()
-
-        # sort tile_id with torch.sort
-        sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
-        sorted_pointId=pointId_table.gather(dim=1,index=indices)
-
         # range
         tile_start,tile_end=litegs_fused.tileRange(sorted_tileId.int(),int(total_allocate_size),int(tiles_num))
-        
-        complex_tile_id=None
-        try:
-            complex_tile_id=StatisticsHelperInst.cached_complex_tile[StatisticsHelperInst.cur_sample]
-        except:
-            pass
+
+        # heavy tile
         subtile_start=None
         subtile_end=None
         subtile_primitive=None
-        if complex_tile_id is not None and complex_tile_id.shape[0]>0:
-            subtile_allocate_num=(tile_end[0,complex_tile_id]-tile_start[0,complex_tile_id]).sum().cpu()*4
-            subtile_id,subtile_primitive,num=litegs_fused.create_subtile(sorted_pointId,tile_start,tile_end,complex_tile_id,subtile_allocate_num,
+        if heavy_tile_id is not None and heavy_tile_id.shape[0]>0:
+            subtile_allocate_num=(tile_end[0,heavy_tile_id]-tile_start[0,heavy_tile_id]).sum().cpu()*4
+            subtile_id,subtile_primitive,num=litegs_fused.create_subtile(sorted_pointId,tile_start,tile_end,heavy_tile_id,subtile_allocate_num,
                                         ndc,inv_cov2d,opacity,
                                         img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
             subtile_id=subtile_id.unsqueeze(0)
             subtile_primitive=subtile_primitive.unsqueeze(0)
-            complex_tile_id=complex_tile_id.unsqueeze(0)
+            heavy_tile_id=heavy_tile_id.unsqueeze(0)
             subtile_start,subtile_end=litegs_fused.tileRange(subtile_id,int(subtile_allocate_num),int(tiles_num*4))
-
             
-        return sorted_pointId,tile_start,tile_end,subtile_primitive,subtile_start,subtile_end,complex_tile_id,b_visible.sum(0)
+        return sorted_pointId,tile_start,tile_end,subtile_primitive,subtile_start,subtile_end,heavy_tile_id,b_visible.sum(0)
     
     
     _fused=__binning_fused
     _script=__binning_script
 ###
-### compact params
+### PreProcess
 ###
 
-class CompactVisibleWithSparseGrad(torch.autograd.Function):
+class CreateViewProj(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,visible_id:torch.Tensor,*args:list[torch.Tensor])->list[torch.Tensor]:
-        compacted_tensors=[]
-        for tensor in args:
-            compacted_tensors.append(tensor[...,visible_id,:].contiguous())
-        ctx.chunk_num=args[0].shape[-2]
-        ctx.chunk_size=args[0].shape[-1]
-        return *compacted_tensors,
+    def forward(ctx,view_params:torch.Tensor,proj_params:torch.Tensor,img_h:int,img_w:int,z_near:float,z_far:float)->tuple[torch.Tensor,...]:
+        view_matrix, proj_matrix, viewproj_matrix, frustumplane=litegs_fused.create_viewproj_forward(view_params,proj_params,img_h,img_w,z_near,z_far)
+        ctx.save_for_backward(view_params,proj_params)
+        ctx.img_h=img_h
+        ctx.img_w=img_w
+        ctx.z_near=z_near
+        ctx.z_far=z_far
+        return view_matrix, proj_matrix, viewproj_matrix, frustumplane
     
     @staticmethod
-    def backward(ctx,*args):
+    def backward(ctx,view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,frustumplane_grad):
+        img_h=ctx.img_h
+        img_w=ctx.img_w
+        z_near=ctx.z_near
+        z_far=ctx.z_far
+        view_params,proj_params=ctx.saved_tensors
+        view_params_grad,proj_params_grad=litegs_fused.create_viewproj_backward(view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,view_params,proj_params,img_h,img_w,z_near,z_far)
+        return view_params_grad,proj_params_grad,None,None,None,None
+
+class CullCompactActivateWithSparseGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx,cluster_origin,cluster_extend,frustumplane,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)->tuple[torch.Tensor,...]:
+        ctx.chunk_num=xyz.shape[-2]
+        ctx.chunk_size=xyz.shape[-1]
+        ctx.sh_degree=sh_degree
+        
+        visible_chunkid, activated_position,activated_scale,activated_rotation,color,activated_opacity=litegs_fused.cull_compact_activate(cluster_origin,cluster_extend,frustumplane,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity)
+
+        ctx.save_for_backward(visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity)
+
+        return visible_chunkid, activated_position,activated_scale,activated_rotation,color,activated_opacity
+    
+    @staticmethod
+    def backward(ctx,_,activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad):
         chunk_num=ctx.chunk_num
         chunk_size=ctx.chunk_size
-        grads=[]#the index of sprase tensor is invalid!! backward compact with Our Optimizer
-        for grad in args:
-            sparse_value=grad.reshape(-1,chunk_size)
-            placeholder_grad=torch.sparse_coo_tensor(torch.empty(grad.dim()-1,sparse_value.shape[0],device='musa'),sparse_value,(*grad.shape[:-2],chunk_num,chunk_size))
-            # placeholder_grad=torch.concat((grad, torch.empty((*grad.shape[:-2], chunk_num-grad.shape[-2], chunk_size),device='musa')), dim=-2)
-            grads.append(placeholder_grad)
-        return None,*grads
+        sh_degree=ctx.sh_degree
+        visible_chunkid,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity=ctx.saved_tensors
+        visible_chunk_num=visible_chunkid.shape[0]
+        compactd_grads=litegs_fused.activate_backward(
+            visible_chunkid,view_matrix,sh_degree,xyz,scale,rot,sh_0,sh_rest,opacity,
+            activated_position_grad,activated_scale_grad,activated_rotation_grad,color_grad,activated_opacity_grad)
+        grads=[]
+        for grad in compactd_grads:
+            size=(*grad.shape[:-2],chunk_num,chunk_size)
+            grads.append(CompactedTensor(size,visible_chunkid,grad.reshape(-1,visible_chunk_num,chunk_size)))
+        return None,None,None,None,None,*grads
 
 def sparse_adam_update(param:torch.Tensor, grad:torch.Tensor, exp_avg:torch.Tensor, exp_avg_sq:torch.Tensor, visible_chunk:torch.Tensor, 
                        lr:float, b1:float, b2:float, eps:float):
-    litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+    if param.shape[0]!=0:
+        litegs_fused.adamUpdate(param,grad,exp_avg,exp_avg_sq,visible_chunk,lr,b1,b2,eps)
+    else:
+        pass
     return

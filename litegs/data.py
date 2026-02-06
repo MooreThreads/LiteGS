@@ -3,6 +3,7 @@ import numpy as np
 import numpy.typing as npt
 import os
 import PIL.Image
+import cv2
 import torch
 from torch.utils.data import Dataset
 
@@ -34,14 +35,15 @@ class PinHoleCameraInfo(CameraInfo):
         super(PinHoleCameraInfo,self).__init__(id,"PINHOLE",width,height)
         focal_length_x=parameters[0]
         focal_length_y=parameters[1]
-        focal_x=focal_length_x/(width*0.5)
-        focal_y=focal_length_y/(height*0.5)
-        self.proj_matrix=np.array([[focal_x,0,0,0],
-                  [0,focal_y,0,0],
+        recp_tan_half_fov_x=focal_length_x/(width*0.5)
+        recp_tan_half_fov_y=focal_length_y/(height*0.5)
+        self.intr_params=recp_tan_half_fov_x.astype(np.float32)
+        self.proj_matrix=np.array([[recp_tan_half_fov_x,0,0,0],
+                  [0,recp_tan_half_fov_y,0,0],
                   [0,0,z_far/(z_far-z_near),-z_far*z_near/(z_far-z_near)],
                   [0,0,1,0]],dtype=np.float32).transpose()
-        self.inv_z_proj_matrix=np.array([[focal_x,0,0,0],
-                  [0,focal_y,0,0],
+        self.inv_z_proj_matrix=np.array([[recp_tan_half_fov_x,0,0,0],
+                  [0,recp_tan_half_fov_y,0,0],
                   [0,0,-z_near/(z_far-z_near),z_far*z_near/(z_far-z_near)],
                   [0,0,1,0]],dtype=np.float32).transpose()
         return
@@ -54,7 +56,7 @@ class PinHoleCameraInfo(CameraInfo):
     
 WARNED = False
 
-class CameraFrame:
+class ImageFrame:
     def __init__(self):
         self.id:int=0
         self.viewtransform_rotation:npt.NDArray=np.array((0,0,0,0))
@@ -69,6 +71,7 @@ class CameraFrame:
         self.id:int=id
         viewtransform_rotation:npt.NDArray=utils.qvec2rotmat(np.array(qvec))
         viewtransform_position:npt.NDArray=np.array(tvec)
+        self.extr_params=np.concatenate([qvec,tvec]).astype(np.float32)
         self.view_matrix = utils.get_view_matrix(viewtransform_rotation,viewtransform_position).transpose()
         self.camera_center = -viewtransform_rotation.transpose()@viewtransform_position
         self.camera_id:int=camera_id
@@ -110,6 +113,26 @@ class CameraFrame:
     def get_camera_center(self)->npt.NDArray:
         return self.camera_center
     
+class VideoFrame(ImageFrame):
+    def load_image(self,downsample:int=-1):
+        if self.image.get(downsample,None) is None:
+            cap = cv2.VideoCapture(self.img_source)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, self.name-1)
+            ret, frame = cap.read()
+            if ret:
+                if downsample==-1 or downsample==1:
+                    self.image[downsample]=frame.transpose(2,0,1)[(2,1,0),...]
+                else:
+                    image=PIL.Image.fromarray(frame)
+                    orig_w, orig_h = image.size
+                    resolution = round(orig_w/ downsample), round(orig_h/ downsample)
+                    self.image[downsample]=np.array(image.resize(resolution),dtype=np.uint8).transpose(2,0,1)[(2,1,0),...]
+            else:
+                print(f"Failed to read frame {self.name}")
+        return self.image[downsample]
+
 class CameraFrameDataset(Dataset):
     def __get_frustumplane(self,view_matrix:npt.NDArray,proj_matrix:npt.NDArray)->npt.NDArray:
         viewproj_matrix=view_matrix@proj_matrix
@@ -150,18 +173,20 @@ class CameraFrameDataset(Dataset):
         frustumplane[5,3]=viewproj_matrix[3,3]-viewproj_matrix[3,2]
         return frustumplane
     
-    def __init__(self,cameras:dict[int,PinHoleCameraInfo],frames:list[CameraFrame],downsample:int=-1,bDevice=True):
+    def __init__(self,cameras:dict[int,PinHoleCameraInfo],frames:list[ImageFrame],downsample:int=-1,bDevice=True):
         self.cameras=cameras
         self.frames=frames
         self.downsample=downsample
+        self.idx_array=None
         
         if bDevice:
             for camera in cameras.values():
-                camera.proj_matrix=torch.Tensor(camera.proj_matrix).musa()
+                camera.proj_matrix=torch.tensor(camera.proj_matrix).cuda()
             for frame in frames:
                 frame.view_matrix=torch.Tensor(frame.view_matrix).musa()
                 for key in frame.image.keys():
-                    frame.image[key]=torch.tensor(frame.image[key]).musa()
+                    frame.image[key]=torch.tensor(frame.image[key]).cuda()
+            self.idx_array=torch.arange(0,len(frames)).cuda()
         
         #init frustumplanes
         self.frustumplanes=[]
@@ -173,20 +198,20 @@ class CameraFrameDataset(Dataset):
                 self.frustumplanes.append(frustumplane)
 
         #init ray_d
-        self.ray_d=[]
-        for frame in frames:
-            output_shape=frame.image[downsample].shape
-            half_W=output_shape[2]*0.5
-            half_H=output_shape[1]*0.5
-            focal_length=(cameras[frame.camera_id].proj_matrix[0,0]*half_W+cameras[frame.camera_id].proj_matrix[1,1]*half_H)*0.5
-            X=(torch.arange(0,output_shape[2],1,device='musa')+0.5).unsqueeze(0).repeat(output_shape[1],1)-half_W
-            Y=(torch.arange(0,output_shape[1],1,device='musa')+0.5).unsqueeze(1).repeat(1,output_shape[2])-half_H
-            Z=torch.ones([output_shape[1],output_shape[2]],device='musa')*focal_length
-            camera_ray_d=torch.concat([X.unsqueeze(-1),Y.unsqueeze(-1),Z.unsqueeze(-1)],dim=-1)
-            #camera_ray_d=torch.nn.functional.normalize(camera_ray_d,dim=-1)
-            world_ray_d=camera_ray_d@(frame.get_viewmatrix()[:3,:3].transpose(0,1))
-            world_ray_d=torch.nn.functional.normalize(world_ray_d,dim=-1)
-            self.ray_d.append(world_ray_d)
+        # self.ray_d=[]
+        # for frame in frames:
+        #     output_shape=frame.image[downsample].shape
+        #     half_W=output_shape[2]*0.5
+        #     half_H=output_shape[1]*0.5
+        #     focal_length=(cameras[frame.camera_id].proj_matrix[0,0]*half_W+cameras[frame.camera_id].proj_matrix[1,1]*half_H)*0.5
+        #     X=(torch.arange(0,output_shape[2],1,device='cuda')+0.5).unsqueeze(0).repeat(output_shape[1],1)-half_W
+        #     Y=(torch.arange(0,output_shape[1],1,device='cuda')+0.5).unsqueeze(1).repeat(1,output_shape[2])-half_H
+        #     Z=torch.ones([output_shape[1],output_shape[2]],device='cuda')*focal_length
+        #     camera_ray_d=torch.concat([X.unsqueeze(-1),Y.unsqueeze(-1),Z.unsqueeze(-1)],dim=-1)
+        #     #camera_ray_d=torch.nn.functional.normalize(camera_ray_d,dim=-1)
+        #     world_ray_d=camera_ray_d@(frame.get_viewmatrix()[:3,:3].transpose(0,1))
+        #     world_ray_d=torch.nn.functional.normalize(world_ray_d,dim=-1)
+        #     self.ray_d.append(world_ray_d)
             
         return
     
@@ -198,10 +223,10 @@ class CameraFrameDataset(Dataset):
         view_matrix=self.frames[idx].get_viewmatrix()
         proj_matrix=self.cameras[self.frames[idx].camera_id].get_project_matrix()
         frustumplane=self.frustumplanes[idx]
-        ray_o=self.frames[idx].get_camera_center()
-        ray_d=self.ray_d[idx]
         StatisticsHelperInst.cur_sample=self.frames[idx].name
-        return torch.Tensor(view_matrix),torch.Tensor(proj_matrix),torch.Tensor(frustumplane),torch.Tensor(image)
+        if self.idx_array is not None:
+            idx=self.idx_array[idx]
+        return view_matrix,proj_matrix,frustumplane,image,idx
     
     def get_norm(self)->tuple[float,float]:
         def get_center_and_diag(cam_centers):

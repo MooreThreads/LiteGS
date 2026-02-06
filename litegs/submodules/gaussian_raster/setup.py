@@ -7,23 +7,29 @@ musa_flags = {
     "mcc": ['--offload-arch=mp_31', '-resource-usage','-use_fast_math'],  
 }
 
-setup(
-    name="litegs_fused",
-    packages=['litegs_fused'],
-    package_dir={'litegs_fused':"."},
-    ext_modules=[
-        MUSAExtension(
-            name="litegs_fused",
-            sources=[
-            "binning.mu",
-            "compact.mu",
-            "cuda_errchk.cpp",
-            "ext_cuda.cpp",
-            "raster.mu",
-            "transform.mu"],
-            extra_compile_args=musa_flags)
+if __name__ == '__main__':
+    remove_unwanted_pytorch_nvcc_flags()
+    setup(
+        name="litegs_fused",
+        packages=['litegs_fused'],
+        package_dir={'litegs_fused':"."},
+        ext_modules=[
+            CUDAExtension(
+                name="litegs_fused",
+                sources=[
+                "binning.cu",
+                "compact.cu",
+                "cuda_errchk.cpp",
+                "ext_cuda.cpp",
+                "raster.cu",
+                "transform.cu"],
+                extra_compile_args={
+                        'cxx': ['-O3'],
+                        'nvcc': ['-O3', '--use_fast_math']
+                },
+            )
         ],
-    cmdclass={
-        'build_ext': BuildExtension
-    }
-)
+        cmdclass={
+            'build_ext': BuildExtension
+        }
+    )

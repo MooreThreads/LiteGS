@@ -29,6 +29,7 @@ target_compile_options(litegs_fused PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
 >)
 
 #link
+set(USE_SYSTEM_NVTX ON)#fix for windows
 find_package(Torch REQUIRED)
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_library(TORCH_PYTHON_LIBRARY torch_python PATH "${TORCH_INSTALL_PREFIX}/lib")

@@ -6,6 +6,12 @@ from tqdm import tqdm
 import numpy as np
 import math
 import os
+<<<<<<< HEAD
+=======
+import torch.cuda.nvtx as nvtx
+import matplotlib.pyplot as plt
+import json
+>>>>>>> origin/cuda_subtile
 
 from .. import arguments
 from .. import data
@@ -16,6 +22,7 @@ from ..data import CameraFrameDataset
 from .. import render
 from ..utils.statistic_helper import StatisticsHelperInst
 from . import densify
+from .. import utils
 
 def __l1_loss(network_output:torch.Tensor, gt:torch.Tensor)->torch.Tensor:
     return torch.abs((network_output - gt)).mean()
@@ -24,7 +31,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
           test_epochs=[],save_ply=[],save_checkpoint=[],start_checkpoint:str=None):
     
     cameras_info:dict[int,data.CameraInfo]=None
-    camera_frames:list[data.CameraFrame]=None
+    camera_frames:list[data.ImageFrame]=None
     cameras_info,camera_frames,init_xyz,init_color=io_manager.load_colmap_result(lp.source_path,lp.images)#lp.sh_degree,lp.resolution
 
     #preload
@@ -33,8 +40,14 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
     #Dataset
     if lp.eval:
-        training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
-        test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
+        if os.path.exists(os.path.join(lp.source_path,"train_test_split.json")):
+            with open(os.path.join(lp.source_path,"train_test_split.json"), "r") as file:
+                train_test_split = json.load(file)
+                training_frames=[c for c in camera_frames if c.name in train_test_split["train"]]
+                test_frames=[c for c in camera_frames if c.name in train_test_split["test"]]
+        else:
+            training_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 != 0]
+            test_frames=[c for idx, c in enumerate(camera_frames) if idx % 8 == 0]
     else:
         training_frames=camera_frames
         test_frames=None
@@ -66,9 +79,18 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         start_epoch=0
     else:
         xyz,scale,rot,sh_0,sh_rest,opacity,start_epoch,opt,schedular=io_manager.load_checkpoint(start_checkpoint)
-        if pp.cluster_size:
-            cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
+    if pp.cluster_size:
+        cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     actived_sh_degree=0
+
+    #learnable view matrix
+    if op.learnable_viewproj:
+        noise_extr=torch.cat([frame.extr_params[None,:] for frame in trainingset.frames])
+        denoised_training_extr=torch.nn.Embedding(noise_extr.shape[0],noise_extr.shape[1],_weight=noise_extr.clone(),sparse=True)
+        noise_intr=torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
+        denoised_training_intr=torch.nn.Parameter(torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0))#todo fix multi cameras
+        view_opt=torch.optim.SparseAdam(denoised_training_extr.parameters(),lr=1e-4)
+        proj_opt=torch.optim.Adam([denoised_training_intr,],lr=1e-5)
 
     #init
     total_epoch=int(op.iterations/len(trainingset))
@@ -83,28 +105,45 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         with torch.no_grad():
             if pp.cluster_size>0 and (epoch-1)%dp.densification_interval==0:
-                scene.spatial_refine(pp.cluster_size>0,opt,xyz)
+                xyz,scale,rot,sh_0,sh_rest,opacity=scene.spatial_refine(pp.cluster_size>0,opt,xyz)
                 cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
             if actived_sh_degree<lp.sh_degree:
                 actived_sh_degree=min(int(epoch/5),lp.sh_degree)
 
         with StatisticsHelperInst.try_start(epoch):
+<<<<<<< HEAD
             for view_matrix,proj_matrix,frustumplane,gt_image in train_loader:
                 view_matrix=view_matrix.musa()
                 proj_matrix=proj_matrix.musa()
                 frustumplane=frustumplane.musa()
                 gt_image=gt_image.musa()/255.0
+=======
+            for view_matrix,proj_matrix,frustumplane,gt_image,idx in train_loader:
+                nvtx.range_push("Iter Init")
+                view_matrix=view_matrix.cuda()
+                proj_matrix=proj_matrix.cuda()
+                frustumplane=frustumplane.cuda()
+                gt_image=gt_image.cuda()/255.0
+                idx=idx.cuda()
+                if op.learnable_viewproj:
+                    #fix view matrix
+                    extr=denoised_training_extr(idx)
+                    intr=denoised_training_intr
+                    view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+                nvtx.range_pop()
+>>>>>>> origin/cuda_subtile
 
                 #cluster culling
-                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,
-                                                                                                               xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
-                img,transmitance,depth,normal,primitive_visible=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+                visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,actived_sh_degree)
+                img,transmitance,depth,normal,primitive_visible=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
                                                             actived_sh_degree,gt_image.shape[2:],pp)
                 
                 l1_loss=__l1_loss(img,gt_image)
                 ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
                 loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
                 loss+=(culled_scale).square().mean()*op.reg_weight
+                if pp.enable_transmitance:
+                    loss+=(1-transmitance).abs().mean()
                 loss.backward()
                 if StatisticsHelperInst.bStart:
                     StatisticsHelperInst.backward_callback()
@@ -113,6 +152,11 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                 else:
                     opt.step()
                 opt.zero_grad(set_to_none = True)
+                if op.learnable_viewproj:
+                    view_opt.step()
+                    view_opt.zero_grad()
+                    # proj_opt.step()
+                    # proj_opt.zero_grad()
                 schedular.step()
 
         if epoch in test_epochs:
@@ -127,6 +171,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     loaders["Testset"]=test_loader
                 for name,loader in loaders.items():
                     psnr_list=[]
+<<<<<<< HEAD
                     for view_matrix,proj_matrix,frustumplane,gt_image in loader:
                         view_matrix=view_matrix.musa()
                         proj_matrix=proj_matrix.musa()
@@ -135,6 +180,28 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                         _,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=render.render_preprocess(_cluster_origin,_cluster_extend,frustumplane,
                                                                                                                 xyz,scale,rot,sh_0,sh_rest,opacity,op,pp)
                         img,transmitance,depth,normal,_=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity,
+=======
+                    for view_matrix,proj_matrix,frustumplane,gt_image,idx in loader:
+                        view_matrix=view_matrix.cuda()
+                        proj_matrix=proj_matrix.cuda()
+                        frustumplane=frustumplane.cuda()
+                        gt_image=gt_image.cuda()/255.0
+                        idx=idx.cuda()
+                        if op.learnable_viewproj:
+                            if name=="Trainingset":
+                                #fix view matrix
+                                extr=denoised_training_extr(idx)
+                                intr=denoised_training_intr
+                            else:
+                                nearest_idx=(extr-denoised_training_extr._parameters['weight']).abs().sum(dim=1).argmin()
+                                delta=denoised_training_extr(nearest_idx)-noise_extr[nearest_idx]
+                                extr=extr+delta
+                            view_matrix,proj_matrix,viewproj_matrix,frustumplane=utils.wrapper.CreateViewProj.apply(extr,intr,gt_image.shape[2],gt_image.shape[3],0.01,5000)
+
+                        #cluster culling
+                        visible_chunkid,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity=render.render_preprocess(cluster_origin,cluster_extend,frustumplane,view_matrix,xyz,scale,rot,sh_0,sh_rest,opacity,op,pp,actived_sh_degree)
+                        img,transmitance,depth,normal,primitive_visible=render.render(view_matrix,proj_matrix,culled_xyz,culled_scale,culled_rot,culled_color,culled_opacity,
+>>>>>>> origin/cuda_subtile
                                                                     actived_sh_degree,gt_image.shape[2:],pp)
                         psnr_list.append(psnr_metrics(img,gt_image).unsqueeze(0))
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch,name,torch.concat(psnr_list,dim=0).mean()))
@@ -145,10 +212,10 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
         if epoch in save_ply or epoch==total_epoch-1:
             if epoch==total_epoch-1:
                 progress_bar.close()
-                print("{} takes: {} s".format(lp.model_path,progress_bar.format_dict['elapsed']))
-                ply_path=os.path.join(lp.model_path,"point_cloud","finish","point_cloud.ply")
+                print("{} takes: {}".format(lp.model_path,progress_bar.format_dict['elapsed']))
+                save_path=os.path.join(lp.model_path,"point_cloud","finish")
             else:
-                ply_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch),"point_cloud.ply")    
+                save_path=os.path.join(lp.model_path,"point_cloud","iteration_{}".format(epoch))    
 
             if pp.cluster_size:
                 tensors=scene.cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -157,8 +224,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
             param_nyp=[]
             for tensor in tensors:
                 param_nyp.append(tensor.detach().cpu().numpy())
-            io_manager.save_ply(ply_path,*param_nyp)
-            pass
+            io_manager.save_ply(os.path.join(save_path,"point_cloud.ply"),*param_nyp)
+            if op.learnable_viewproj:
+                torch.save(list(denoised_training_extr.parameters())+[denoised_training_intr],os.path.join(save_path,"viewproj.pth"))
 
         if epoch in save_checkpoint:
             io_manager.save_checkpoint(lp.model_path,epoch,opt,schedular)
