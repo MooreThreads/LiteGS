@@ -34,7 +34,6 @@ def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tens
         culled_xyz,culled_scale,culled_rot,culled_sh_0,culled_sh_rest,culled_opacity=xyz,scale,rot,sh_0,sh_rest,opacity
         visible_chunkid=None
 
-    nvtx.range_push("Activate")
     pad_one=torch.ones((1,culled_xyz.shape[-1]),dtype=culled_xyz.dtype,device=culled_xyz.device)
     culled_xyz=torch.concat((culled_xyz,pad_one),dim=0)
     culled_scale=culled_scale.exp()
@@ -45,7 +44,6 @@ def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tens
         dirs=culled_xyz[:3]-camera_center.unsqueeze(-1)
         dirs=torch.nn.functional.normalize(dirs,dim=-2)
     color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,culled_sh_0,culled_sh_rest,dirs)
-    nvtx.range_pop()
 
     return visible_chunkid,culled_xyz,culled_scale,culled_rot,color,culled_opacity
 
@@ -70,7 +68,6 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     ndc_pos=utils.wrapper.World2NdcFunc.apply(xyz,view_matrix@proj_matrix)
 
     view_depth=(view_matrix.transpose(1,2)@xyz)[:,2]
-    nvtx.range_pop()
     
     #visibility table
     primitives_in_tile,tile_start,tile_end,primitives_in_subtile,subtile_start,subtile_end,heavy_tile_id,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,heavy_tile,output_shape,pp.tile_size)

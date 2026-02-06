@@ -30,7 +30,7 @@ class StatisticsHelper:
         self.mean_and_std:dict[str,MeanStdData]={}
         self.max_and_min:dict[str,list[torch.Tensor]]={}
 
-        self.visible_count=torch.zeros(chunk_num,chunk_size,dtype=torch.int32,device='cuda')
+        self.visible_count=torch.zeros(chunk_num,chunk_size,dtype=torch.int32,device='musa')
         self.compact_mask:Optional[torch.Tensor]=None
 
         self.handle_list:list[tuple[torch.Tensor,Callable[[StatisticsHelper, torch.Tensor],None]]]=[]

@@ -8,21 +8,20 @@ musa_flags = {
 }
 
 if __name__ == '__main__':
-    remove_unwanted_pytorch_nvcc_flags()
     setup(
         name="litegs_fused",
         packages=['litegs_fused'],
         package_dir={'litegs_fused':"."},
         ext_modules=[
-            CUDAExtension(
+            MUSAExtension(
                 name="litegs_fused",
                 sources=[
-                "binning.cu",
-                "compact.cu",
+                "binning.mu",
+                "compact.mu",
                 "cuda_errchk.cpp",
                 "ext_cuda.cpp",
-                "raster.cu",
-                "transform.cu"],
+                "raster.mu",
+                "transform.mu"],
                 extra_compile_args={
                         'cxx': ['-O3'],
                         'nvcc': ['-O3', '--use_fast_math']

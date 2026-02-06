@@ -9,6 +9,7 @@ trace_*.json
 *.trace.json
 *.7z
 *.zip
+*.so
 debug_gradient*
 profiler_input_data
 nan_data

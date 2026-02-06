@@ -86,7 +86,7 @@ if __name__ == "__main__":
         cluster_origin,cluster_extend=litegs.scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
     if op.learnable_viewproj:
         noise_extr=torch.cat([frame.extr_params[None,:] for frame in trainingset.frames])
-        noise_intr=torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='cuda').unsqueeze(0)
+        noise_intr=torch.tensor(list(trainingset.cameras.values())[0].intr_params,dtype=torch.float32,device='musa').unsqueeze(0)
         denoised_training_extr,denoised_training_intr=torch.load(os.path.join(lp.model_path,"point_cloud","finish","viewproj.pth"))
 
     #metrics
@@ -106,11 +106,11 @@ if __name__ == "__main__":
             psnr_list=[]
             lpips_list=[]
             for index,(view_matrix,proj_matrix,frustumplane,gt_image,idx) in enumerate(loader):
-                view_matrix=view_matrix.cuda()
-                proj_matrix=proj_matrix.cuda()
-                frustumplane=frustumplane.cuda()
-                gt_image=gt_image.cuda()/255.0
-                idx=idx.cuda()
+                view_matrix=view_matrix.musa()
+                proj_matrix=proj_matrix.musa()
+                frustumplane=frustumplane.musa()
+                gt_image=gt_image.musa()/255.0
+                idx=idx.musa()
                 if op.learnable_viewproj:
                     if loader_name=="Trainingset":
                         #fix view matrix

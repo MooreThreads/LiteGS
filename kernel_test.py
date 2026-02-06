@@ -115,16 +115,16 @@ def get_morton_code(coords: torch.Tensor) -> torch.Tensor:
 
 if __name__ == "__main__":
 
-    gs, cam = torch.load('./profiler_input_data/crossroad.pt')
-    sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pt').int()
+    gs, cam = torch.load('./profiler_input_data/crossroad.pt',map_location=torch.device('musa'))
+    sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pt',map_location=torch.device('musa')).int()
     StatisticsHelperInst.cur_sample="cross_road"
     StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_tile_list
-    StatisticsHelperInst.cached_heavy_tile["cross_road"]=sorted_tile_list[:512]
+    StatisticsHelperInst.cached_heavy_tile["cross_road"]=sorted_tile_list[:128]
 
     #morton code scheduling
     # tiles_num_x=math.ceil(cam['width']/litegs_info.Config.tile_size[1])
     # tiles_num_y=math.ceil(cam['height']/litegs_info.Config.tile_size[0])
-    # coords=torch.meshgrid(torch.arange(tiles_num_x, device='cuda', dtype=torch.int16),torch.arange(tiles_num_y, device='cuda', dtype=torch.int16),indexing='xy')
+    # coords=torch.meshgrid(torch.arange(tiles_num_x, device='musa', dtype=torch.int16),torch.arange(tiles_num_y, device='musa', dtype=torch.int16),indexing='xy')
     # coords=torch.cat((coords[1].unsqueeze(-1),coords[0].unsqueeze(-1)),dim=-1)
     # morton_code=get_morton_code(coords.view(-1,2))
     # _,sorted_indices=morton_code.sort(stable=True)
@@ -198,7 +198,7 @@ if __name__ == "__main__":
 
 
     # test forward + backward time
-    torch.cuda.synchronize()
+    torch.musa.synchronize()
     start = time.time()
     for _ in range(loop_num):
         renders, alphas, info = litegs_info.rasterization(
@@ -215,7 +215,7 @@ if __name__ == "__main__":
         rot.grad=None
         sh_0.grad=None
         opacity.grad=None
-    torch.cuda.synchronize()
-    torch.cuda.empty_cache()
+    torch.musa.synchronize()
+    torch.musa.empty_cache()
     print('litegs forward&backward: ', (time.time()-start)*1000/loop_num, 'ms')
 

@@ -722,8 +722,15 @@ class Binning(BaseWrapper):
         total_allocate_size=total_tiles_num_batch.max().cpu()
         
         # allocate table and fill it (Table: tile_id-uint16,point_id-uint16)
-        sorted_tileId,sorted_pointId=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
+        tileId_table,pointId_table=litegs_fused.create_table(ndc,inv_cov2d,opacity,prefix_sum,depth_sorted_index,
                                                 int(total_allocate_size),img_pixel_shape[0],img_pixel_shape[1],tile_size[0],tile_size[1])
+        if tiles_num<32768:
+            tileId_table=tileId_table.short()
+
+        # sort tile_id with torch.sort
+        sorted_tileId,indices=torch.sort(tileId_table,dim=1,stable=True)
+        sorted_pointId=pointId_table.gather(dim=1,index=indices)
+
         # range
         tile_start,tile_end=litegs_fused.tileRange(sorted_tileId.int(),int(total_allocate_size),int(tiles_num))
 

@@ -9,7 +9,7 @@
 namespace cg = cooperative_groups;
 
 #include <ATen/core/TensorAccessor.h>
-#include <ATen/cuda/CUDAContext.h>
+#include <ATen/musa/MUSAContext.h>
 #include "cuda_errchk.h"
 #include"compact.h"
 
@@ -300,7 +300,7 @@ std::vector<at::Tensor> create_viewproj_backward(
     torch::Tensor grad_recp_tan_half_fov_x = torch::zeros_like(recp_tan_half_fov_x);
 
     int blocks_num = std::ceil(views_num / 128.0f);
-    create_viewproj_backward_kernel << <blocks_num, 128 >> > (
+    create_viewproj_backward_kernel <<<blocks_num, 128 >>> (
         view_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         proj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         viewproj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -973,9 +973,9 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
 {
 
     // Create Stream to cover MemcpyDevice2Host latency
-    cudaStream_t torch_stream = at::cuda::getCurrentCUDAStream();
-    cudaEvent_t cpy_event;
-    cudaEventCreate(&cpy_event);
+    musaStream_t torch_stream = at::musa::getCurrentMUSAStream();
+    musaEvent_t cpy_event;
+    musaEventCreate(&cpy_event);
 
     // Get dimensions
     int views_num = frustumplane.size(0);
@@ -987,7 +987,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
     torch::Tensor visible_chunkid = torch::empty({ chunks_num }, torch::dtype(torch::kInt64).device(frustumplane.device()));
 
     // Launch kernel
-    frustum_culling_aabb_kernel << <(chunks_num + 255) / 256, 256,0, torch_stream >> > (
+    frustum_culling_aabb_kernel <<<(chunks_num + 255) / 256, 256,0, torch_stream >>> (
         frustumplane.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         aabb_origin.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         aabb_ext.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
@@ -1000,8 +1000,8 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
     //visible_chunks_num to host
     int* device_data=visible_chunks_num.data_ptr<int>();
     int visible_chunks_num_host = 0;
-    cudaMemcpyAsync(&visible_chunks_num_host, device_data, sizeof(int), cudaMemcpyDeviceToHost, torch_stream);
-    cudaEventRecord(cpy_event, torch_stream);
+    musaMemcpyAsync(&visible_chunks_num_host, device_data, sizeof(int), musaMemcpyDeviceToHost, torch_stream);
+    musaEventRecord(cpy_event, torch_stream);
 
 
     //activate
@@ -1021,7 +1021,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
     switch (sh_degree)
     {
     case 0:
-        activate_forward_kernel<0> << <chunks_num, chunksize,0, torch_stream >> > (
+        activate_forward_kernel<0> <<<chunks_num, chunksize,0, torch_stream >>> (
             visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1037,7 +1037,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
             actived_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
-        activate_forward_kernel<1> << <chunks_num, chunksize, 0, torch_stream >> > (
+        activate_forward_kernel<1> <<<chunks_num, chunksize, 0, torch_stream >>> (
             visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1053,7 +1053,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
             actived_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
-        activate_forward_kernel<2> << <chunks_num, chunksize, 0, torch_stream >> > (
+        activate_forward_kernel<2> <<<chunks_num, chunksize, 0, torch_stream >>> (
             visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1069,7 +1069,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
             actived_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
-        activate_forward_kernel<3> << <chunks_num, chunksize, 0, torch_stream >> > (
+        activate_forward_kernel<3> <<<chunks_num, chunksize, 0, torch_stream >>> (
             visibility.packed_accessor32<bool, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1089,8 +1089,8 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
     }
 
     //compact
-    cudaEventSynchronize(cpy_event);
-    cudaEventDestroy(cpy_event);
+    musaEventSynchronize(cpy_event);
+    musaEventDestroy(cpy_event);
     visible_chunkid=visible_chunkid.slice(0, 0, visible_chunks_num_host);
     tensor_shape = actived_position.sizes();
     at::Tensor compacted_position = torch::empty({ tensor_shape[0], visible_chunks_num_host, chunksize }, position.options());
@@ -1104,7 +1104,7 @@ std::vector<at::Tensor> cull_compact_activate(at::Tensor aabb_origin, at::Tensor
     at::Tensor compacted_opacity = torch::empty({ tensor_shape[0], visible_chunks_num_host, chunksize }, opacity.options());
 
     //dim3 Block3d(32, 1, 1);
-    compact_visible_params_kernel << <visible_chunks_num_host, chunksize, 0, torch_stream >> > (
+    compact_visible_params_kernel <<<visible_chunks_num_host, chunksize, 0, torch_stream >>> (
         visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
         actived_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         actived_scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1144,7 +1144,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
     switch (sh_degree)
     {
     case 0:
-        activate_backward_kernel<0> << <visible_chunks_num, chunksize >> > (
+        activate_backward_kernel<0> <<<visible_chunks_num, chunksize >>> (
             visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1166,7 +1166,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
             compacted_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
-        activate_backward_kernel<1> << <visible_chunks_num, chunksize >> > (
+        activate_backward_kernel<1> <<<visible_chunks_num, chunksize >>> (
             visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1188,7 +1188,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
             compacted_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
-        activate_backward_kernel<2> << <visible_chunks_num, chunksize >> > (
+        activate_backward_kernel<2> <<<visible_chunks_num, chunksize >>> (
             visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1210,7 +1210,7 @@ std::vector<at::Tensor> activate_backward(at::Tensor visible_chunkid, at::Tensor
             compacted_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
-        activate_backward_kernel<3> << <visible_chunks_num, chunksize >> > (
+        activate_backward_kernel<3> <<<visible_chunks_num, chunksize >>> (
             visible_chunkid.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
