@@ -1,3 +1,4 @@
 [submodule "litegs/submodules/fused_ssim"]
 	path = litegs/submodules/fused_ssim
-	url = https://github.com/rahul-goel/fused-ssim.git
+	url = https://github.com/kemchenj/fused-ssim.git
+	branch = fused-l1-ssim-loss
