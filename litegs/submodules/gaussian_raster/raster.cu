@@ -405,8 +405,8 @@ std::vector<at::Tensor> rasterize_forward(
     int64_t viewsnum = start_index.sizes()[0];
     int tilesnum_x = std::ceil(img_w / float(tile_w));
     int tilesnum_y = std::ceil(img_h / float(tile_h));
-    img_w = tilesnum_x * tile_w;
-    img_h = tilesnum_y * tile_h;
+    int pad_img_w = tilesnum_x * tile_w;
+    int pad_img_h = tilesnum_y * tile_h;
     int64_t tilesnum = tilesnum_x * tilesnum_y;
     int64_t render_tile_num = tilesnum;
     at::Tensor specific_tiles;
@@ -435,19 +435,19 @@ std::vector<at::Tensor> rasterize_forward(
     //raster
     
     torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
-    at::Tensor output_img = torch::empty({ viewsnum, 3, img_h, img_w }, opt_img);
+    at::Tensor output_img = torch::empty({ viewsnum, 3, pad_img_h, pad_img_w }, opt_img);
 
     torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(enable_trans);
-    at::Tensor output_transmitance = torch::empty({ viewsnum,1, img_h, img_w }, opt_t);
+    at::Tensor output_transmitance = torch::empty({ viewsnum,1, pad_img_h, pad_img_w }, opt_t);
 
     at::Tensor output_depth = torch::empty({ 0, 0, 0, 0 }, opt_t);
     if (enable_depth)
     {
-        output_depth = torch::empty({ viewsnum,1, img_h, img_w }, opt_t.requires_grad(true));
+        output_depth = torch::empty({ viewsnum,1, pad_img_h, pad_img_w }, opt_t.requires_grad(true));
     }
 
     torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kShort).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
-    at::Tensor output_last_contributor = torch::empty({ viewsnum, 1, img_h, img_w }, opt_c);
+    at::Tensor output_last_contributor = torch::empty({ viewsnum, 1, pad_img_h, pad_img_w }, opt_c);
 
     at::Tensor fragment_count = torch::zeros({ viewsnum,1,points_num }, packed_params.options().dtype(torch::kI32));
     at::Tensor fragment_weight_sum = torch::zeros({ viewsnum,1,points_num }, packed_params.options().dtype(torch::kFloat32));
@@ -511,8 +511,8 @@ std::vector<at::Tensor> rasterize_forward_packed(
     int64_t viewsnum = start_index.sizes()[0];
     int tilesnum_x = std::ceil(img_w / float(tile_w));
     int tilesnum_y = std::ceil(img_h / float(tile_h));
-    img_w = tilesnum_x * tile_w;
-    img_h = tilesnum_y * tile_h;
+    int pad_img_w = tilesnum_x * tile_w;
+    int pad_img_h = tilesnum_y * tile_h;
     int64_t tilesnum = tilesnum_x * tilesnum_y;
     int64_t render_tile_num = tilesnum;
     at::Tensor specific_tiles;
@@ -528,19 +528,19 @@ std::vector<at::Tensor> rasterize_forward_packed(
     //raster
 
     torch::TensorOptions opt_img = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(true);
-    at::Tensor output_img = torch::empty({ viewsnum, 3, img_h, img_w }, opt_img);
+    at::Tensor output_img = torch::empty({ viewsnum, 3, pad_img_h, pad_img_w }, opt_img);
 
     torch::TensorOptions opt_t = torch::TensorOptions().dtype(torch::kFloat32).layout(torch::kStrided).device(start_index.device()).requires_grad(enable_trans);
-    at::Tensor output_transmitance = torch::empty({ viewsnum, 1, img_h,img_w }, opt_t);
+    at::Tensor output_transmitance = torch::empty({ viewsnum, 1, pad_img_h, pad_img_w }, opt_t);
 
     at::Tensor output_depth = torch::empty({ 0, 0, 0, 0 }, opt_t);
     if (enable_depth)
     {
-        output_depth = torch::empty({ viewsnum,1,  img_h,img_w }, opt_t.requires_grad(true));
+        output_depth = torch::empty({ viewsnum,1,  pad_img_h, pad_img_w }, opt_t.requires_grad(true));
     }
 
     torch::TensorOptions opt_c = torch::TensorOptions().dtype(torch::kShort).layout(torch::kStrided).device(start_index.device()).requires_grad(false);
-    at::Tensor output_last_contributor = torch::empty({ viewsnum, 1, img_h,img_w }, opt_c);
+    at::Tensor output_last_contributor = torch::empty({ viewsnum, 1, pad_img_h, pad_img_w }, opt_c);
 
     int points_num = packed_params.size(1);
     at::Tensor fragment_count = torch::zeros({ viewsnum,1,points_num }, packed_params.options().dtype(torch::kI32));
