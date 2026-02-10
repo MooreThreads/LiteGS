@@ -81,14 +81,14 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
                                             output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
     
     if StatisticsHelperInst.bStart:
-        StatisticsHelperInst.update_tile_blend_count(lst_contributor)
+        StatisticsHelperInst.update_tile_blend_count(lst_contributor,pp.tile_size[0],pp.tile_size[1])
 
 
-    img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+    img=img[...,:output_shape[0],:output_shape[1]].contiguous()
     if transmitance is not None:
-        transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+        transmitance=transmitance[...,:output_shape[0],:output_shape[1]].contiguous()
     if depth is not None:
-        depth=utils.tiles2img_torch(depth,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+        depth=depth[...,:output_shape[0],:output_shape[1]].contiguous()
     if normal is not None:
-        normal=utils.tiles2img_torch(normal,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
+        normal=normal[...,:output_shape[0],:output_shape[1]].contiguous()
     return img,transmitance,depth,normal,primitive_visible
