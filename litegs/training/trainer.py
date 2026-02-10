@@ -142,10 +142,9 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
                     actived_sh_degree,gt_image.shape[2:],pp
                 )
                 
-                l1_loss=__l1_loss(img,gt_image)
-                ssim_loss:torch.Tensor=1-fused_ssim.fused_ssim(img,gt_image)
-                loss=(1.0-op.lambda_dssim)*l1_loss+op.lambda_dssim*ssim_loss
-                loss+=(culled_scale).square().mean()*op.reg_weight
+                loss=fused_ssim.fused_l1_ssim_loss(img,gt_image)
+                if op.reg_weight>0.0:
+                    loss+=(culled_scale).square().mean()*op.reg_weight
                 if pp.enable_transmitance:
                     loss+=(1-transmitance).abs().mean()
                 loss.backward()
