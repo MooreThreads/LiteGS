@@ -855,7 +855,7 @@ __global__ void raster_backward_kernel(
 __global__ void unpack_gradient(
     const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> packed_grad,//[batch,point_num,property_num]
     const float* grad_inv_scaler,int img_h,int img_w,
-    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,3,point_num]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_ndc,         //[batch,4,point_num]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> d_cov2d_inv,      //[batch,2,2,point_num]
     torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> d_color,          //[batch,3,point_num]
     torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> d_opacity          //[1,point_num]
@@ -869,6 +869,8 @@ __global__ void unpack_gradient(
         PackedGrad* grads = (PackedGrad*)&packed_grad[blockIdx.y][index][0];
         d_ndc[blockIdx.y][0][index] = grads->dx * 0.5f * img_w * inv_scaleer;
         d_ndc[blockIdx.y][1][index] = grads->dy * 0.5f * img_h * inv_scaleer;
+        d_ndc[blockIdx.y][2][index] = 0.0f;
+        d_ndc[blockIdx.y][3][index] = 0.0f;
         d_cov2d_inv[blockIdx.y][0][0][index] = grads->inv_cov00 * inv_scaleer;
         d_cov2d_inv[blockIdx.y][0][1][index] = grads->inv_cov01 * inv_scaleer;
         d_cov2d_inv[blockIdx.y][1][0][index] = grads->inv_cov01 * inv_scaleer;
@@ -976,10 +978,6 @@ std::vector<at::Tensor> rasterize_backward(
     }
     int batch_num = packed_params.size(0);
     int points_num = packed_params.size(1);
-    at::Tensor d_ndc = torch::zeros({ batch_num,4,points_num }, packed_params.options());
-    at::Tensor d_cov2d_inv = torch::zeros({ batch_num,2,2,points_num }, packed_params.options());
-    at::Tensor d_color = torch::zeros({ batch_num,3,points_num }, packed_params.options());
-    at::Tensor d_opacity = torch::zeros({ 1,points_num }, packed_params.options());
     at::Tensor packed_grad = torch::zeros({ batch_num,points_num,sizeof(PackedGrad)/sizeof(float)}, packed_params.options());
     at::Tensor err_square_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
     at::Tensor err_sum = torch::zeros({ batch_num,1,points_num }, packed_params.options());
@@ -1019,6 +1017,11 @@ std::vector<at::Tensor> rasterize_backward(
     }
 
     CUDA_CHECK_ERRORS;
+
+    at::Tensor d_ndc = torch::empty({ batch_num,4,points_num }, packed_params.options());
+    at::Tensor d_cov2d_inv = torch::empty({ batch_num,2,2,points_num }, packed_params.options());
+    at::Tensor d_color = torch::empty({ batch_num,3,points_num }, packed_params.options());
+    at::Tensor d_opacity = torch::empty({ 1,points_num }, packed_params.options());
 
     dim3 UnpackBlock3d(std::ceil(points_num / 512.0f), batch_num, 1);
     unpack_gradient<<<UnpackBlock3d,512>>>(
