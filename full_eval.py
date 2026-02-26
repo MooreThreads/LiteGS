@@ -84,7 +84,7 @@ eval_args_template="-s {0} -m {1} --sh_degree 3 -i {2} --eval"
 take_time_pattern = r"takes:\s*([+-]?\d+(?:\.\d+)?)"
 eval_pattern = r"(SSIM|PSNR|LPIPS)\s*:\s*([+-]?\d+(?:\.\d+)?)"
 csv_header=["scene","primitives","repeat_i","takes","SSIM_train","PSNR_train","LPIPS_train","SSIM_test","PSNR_test","LPIPS_test"]
-csv_file=open(os.path.join(args.output_path,"full_eval_results.csv"), 'w', newline="")
+csv_file=open(os.path.join(args.output_path,"litegs_results.csv"), 'w', newline="")
 result_csv_writer=csv.writer(csv_file)
 result_csv_writer.writerow(csv_header)
 
