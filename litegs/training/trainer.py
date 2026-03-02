@@ -203,6 +203,7 @@ def start(lp:arguments.ModelParams,op:arguments.OptimizationParams,pp:arguments.
 
         if epoch in save_ply or epoch==total_epoch-1:
             if epoch==total_epoch-1:
+                torch.cuda.synchronize()
                 progress_bar.close()
                 print("{} takes: {}".format(lp.model_path,progress_bar.format_dict['elapsed']))
                 save_path=os.path.join(lp.model_path,"point_cloud","finish")
