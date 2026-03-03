@@ -647,9 +647,9 @@ __device__ void sh2rgb_forward_kernel(
     result.x += 0.5f;
     result.y += 0.5f;
     result.z += 0.5f;
-    rgb[view_id][0][compacted_chunk_id][index] = max(min(result.x, 1.0f), 0.0f);
-    rgb[view_id][1][compacted_chunk_id][index] = max(min(result.y, 1.0f), 0.0f);
-    rgb[view_id][2][compacted_chunk_id][index] = max(min(result.z, 1.0f), 0.0f);
+    rgb[view_id][0][compacted_chunk_id][index] = result.x;
+    rgb[view_id][1][compacted_chunk_id][index] = result.y;
+    rgb[view_id][2][compacted_chunk_id][index] = result.z;
 }
 
 template <int degree,bool bInit>

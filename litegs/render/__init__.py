@@ -84,7 +84,7 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
         StatisticsHelperInst.update_tile_blend_count(lst_contributor,pp.tile_size[0],pp.tile_size[1])
 
 
-    img=img[...,:output_shape[0],:output_shape[1]].contiguous()
+    img=img[...,:output_shape[0],:output_shape[1]].clamp(0,1).contiguous()
     if transmitance is not None:
         transmitance=transmitance[...,:output_shape[0],:output_shape[1]].contiguous()
     if depth is not None:
