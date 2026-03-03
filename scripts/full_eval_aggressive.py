@@ -16,19 +16,19 @@ import re
 import csv
 
 scene_primitive = {
-    "bicycle": 680000*2,#54275
-    "flowers": 610000*2,#38347
-    "garden": 730000*2,#138766
-    "stump": 670000*2,#32049
-    "treehill": 580000*2,#52363
-    "room": 400000*2,#112627
-    "counter": 400000*2,#155767
-    "kitchen": 600000*2,#241367
-    "bonsai": 600000*2,#206613
-    "truck": 340000*2,#136029
-    "train": 360000*2,#182686
-    "drjohnson": 800000*2,#80861
-    "playroom": 490000*2#37005
+    "bicycle": 1000000,#54275
+    "flowers": 1000000,#38347
+    "garden": 1000000,#138766
+    "stump": 1000000,#32049
+    "treehill": 1000000,#52363
+    "room": 1000000,#112627
+    "counter": 1000000,#155767
+    "kitchen": 1000000,#241367
+    "bonsai": 1000000,#206613
+    "truck": 1000000,#136029
+    "train": 1000000,#182686
+    "drjohnson": 1000000,#80861
+    "playroom": 1000000#37005
 }
 
 images={
@@ -50,7 +50,7 @@ images={
 parser = ArgumentParser(description="Full evaluation script parameters")
 parser.add_argument("--skip_training", action="store_true")
 parser.add_argument("--output_path", default="./output")
-parser.add_argument("--repeat", default=10, type=int)
+parser.add_argument("--repeat", default=3, type=int)
 parser.add_argument('--mipnerf360', "-m360", required=True, type=str)
 parser.add_argument("--tanksandtemples", "-tat", required=True, type=str)
 parser.add_argument("--deepblending", "-db", required=True, type=str)
@@ -77,8 +77,8 @@ training_args_tempalte="-s {0} -m {1} --eval --sh_degree 3 --target_primitives {
 eval_args_template="-s {0} -m {1} --sh_degree 3 -i {2} --eval"
 take_time_pattern = r"takes:\s*([+-]?\d+(?:\.\d+)?)"
 eval_pattern = r"(SSIM|PSNR|LPIPS)\s*:\s*([+-]?\d+(?:\.\d+)?)"
-csv_header=["scene","primitives","takes","SSIM_train","PSNR_train","LPIPS_train","SSIM_test","PSNR_test","LPIPS_test"]
-csv_file=open(os.path.join(args.output_path,"litegs_extreme_results.csv"), 'w', newline="")
+csv_header=["scene","primitives","time","SSIM_train","PSNR_train","LPIPS_train","SSIM_test","PSNR_test","LPIPS_test"]
+csv_file=open(os.path.join(args.output_path,"litegs_aggressive_results.csv"), 'w', newline="")
 result_csv_writer=csv.writer(csv_file)
 result_csv_writer.writerow(csv_header)
 
@@ -90,7 +90,7 @@ if not args.skip_training:
                 
                 target_primitives=scene_primitive[scene_name]
                 scene_input_path=os.path.join(args.__getattribute__(dataset.split('_')[0]),scene_name)
-                scene_output_path=os.path.join(args.output_path,scene_name+'-extreme-{}k-{}'.format(int(target_primitives/1000), i))
+                scene_output_path=os.path.join(args.output_path,scene_name+'-aggressive-{}k-{}'.format(int(target_primitives/1000), i))
                 print("------------ scene:{} #primitive:{} ------------".format(scene_name,target_primitives))
 
                 #training
