@@ -70,26 +70,24 @@ def render(view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     view_depth=(view_matrix.transpose(1,2)@xyz)[:,2]
     
     #visibility table
-    primitives_in_tile,tile_start,tile_end,primitives_in_subtile,subtile_start,subtile_end,heavy_tile_id,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,heavy_tile,output_shape,pp.tile_size)
+    primitives_in_tile,virtual_tile_start,virtual_tile_end,virtual_tile_next,virtual_tile_pixel_index,primitive_visible=utils.wrapper.Binning.call_fused(ndc_pos,view_depth,inv_cov2d,opacity,heavy_tile,output_shape,pp.tile_size)
 
     #raster
     tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))
     tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size[0])))
 
-    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(primitives_in_tile,tile_start,tile_end,tiles,
-        primitives_in_subtile,subtile_start,subtile_end,heavy_tile_id,
+    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(primitives_in_tile,virtual_tile_start,virtual_tile_end,virtual_tile_pixel_index,
         ndc_pos,inv_cov2d,color,opacity,
         output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
     
     if StatisticsHelperInst.bStart:
         StatisticsHelperInst.update_tile_blend_count(lst_contributor)
 
+    img,transmitance=utils.wrapper.BlendVirtualTile.apply(virtual_tile_next,img,transmitance,output_shape[0],output_shape[1])
+    img=img.clamp(0,1)
+    
+    #todo depth&normal
+    depth=None
+    normal=None
 
-    img=utils.tiles2img_torch(img,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
-    if transmitance is not None:
-        transmitance=utils.tiles2img_torch(transmitance,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
-    if depth is not None:
-        depth=utils.tiles2img_torch(depth,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
-    if normal is not None:
-        normal=utils.tiles2img_torch(normal,tiles_x,tiles_y)[...,:output_shape[0],:output_shape[1]].contiguous()
     return img,transmitance,depth,normal,primitive_visible

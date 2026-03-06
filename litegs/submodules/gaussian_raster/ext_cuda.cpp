@@ -11,11 +11,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("create_viewproj_backward", &create_viewproj_backward);
 	m.def("create_table", &create_table);
 	m.def("create_subtile", &create_subtile);
+	m.def("split_virtual_tiles", &split_virtual_tiles);
 	m.def("tileRange", &tileRange);
 	m.def("get_allocate_size", &get_allocate_size);
 	m.def("rasterize_forward", &rasterize_forward);
 	m.def("rasterize_forward_packed", &rasterize_forward_packed);
 	m.def("rasterize_backward", &rasterize_backward);
+	m.def("global_blending_forward", &global_blending_forward);
+	m.def("global_blending_backward", &global_blending_backward);
 	m.def("jacobianRayspace", &jacobianRayspace);
 	m.def("createTransformMatrix_forward", &createTransformMatrix_forward);
 	m.def("createTransformMatrix_backward", &createTransformMatrix_backward);

@@ -115,11 +115,13 @@ def get_morton_code(coords: torch.Tensor) -> torch.Tensor:
 
 if __name__ == "__main__":
 
-    gs, cam = torch.load('./profiler_input_data/crossroad.pt',map_location=torch.device('musa'))
-    sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pt',map_location=torch.device('musa')).int()
-    StatisticsHelperInst.cur_sample="cross_road"
-    StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_tile_list
-    StatisticsHelperInst.cached_heavy_tile["cross_road"]=sorted_tile_list[:128]
+    # gs, cam = torch.load('./profiler_input_data/crossroad.pt',map_location=torch.device('musa'))
+    # sorted_tile_list=torch.load('./profiler_input_data/sorted_tile_list.pt',map_location=torch.device('musa')).int()
+    # StatisticsHelperInst.cur_sample="cross_road"
+    # StatisticsHelperInst.cached_sorted_tile_list["cross_road"]=sorted_tile_list
+    # StatisticsHelperInst.cached_heavy_tile["cross_road"]=sorted_tile_list[:128]
+
+    gs, cam = torch.load('/data/4dgs-renderer/gs_data.pth',map_location=torch.device('musa'))
 
     #morton code scheduling
     # tiles_num_x=math.ceil(cam['width']/litegs_info.Config.tile_size[1])
@@ -180,7 +182,9 @@ if __name__ == "__main__":
         frustumplane=frustumplane,
         Ks=Ks,  # [C, 3, 3]
         width=W,
-        height=H)
+        height=H
+    )
+    plt.imsave('./render.png',renders[0,0].permute(1,2,0).detach().cpu())
     renders.mean().backward()
     xyz.grad=None
     scale.grad=None
@@ -208,7 +212,8 @@ if __name__ == "__main__":
             frustumplane=frustumplane,
             Ks=Ks,  # [C, 3, 3]
             width=W,
-            height=H)
+            height=H
+        )
         renders.mean().backward()
         xyz.grad=None
         scale.grad=None

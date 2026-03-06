@@ -618,3 +618,113 @@ std::vector<at::Tensor> create_subtile(at::Tensor primitive_list, at::Tensor til
     return { subtileid_list ,subtile_primitives ,subtile_item_num };
 
 }
+
+__global__ void split_virtual_tiles_kernel(
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_start,// [batch_size, tiles_num]
+    const torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> tile_end,// [batch_size, tiles_num]
+    torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> virtual_tile_start,// [batch_size, virtual_tiles_num]
+    torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> virtual_tile_end,// [batch_size, virtual_tiles_num]
+    torch::PackedTensorAccessor32<int32_t, 2, torch::RestrictPtrTraits> virtual_tile_next,// [batch_size, virtual_tiles_num]
+    torch::PackedTensorAccessor32<int32_t, 3, torch::RestrictPtrTraits> virtual_tile_pixel_index,// [batch_size, virtual_tiles_num, 2]
+    int32_t* __restrict__ alloc_counters, // [batch_size]
+    int tile_h_num,int tile_w_num,int tile_size_h,int tile_size_w,
+    int max_prims_per_tile // 例如 1024
+) {
+    int tile_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int b = blockIdx.y; // batch_id
+    
+    int tiles_num = tile_start.size(1);
+
+    // 只处理基础的物理 Tile
+    if (tile_id < tiles_num) { 
+        int start = tile_start[b][tile_id];
+        int end = tile_end[b][tile_id];
+
+        if (start >= end||tile_id==0) {// tile_id 0 is reserved for invalid tile
+            virtual_tile_start[b][tile_id] = 0;
+            virtual_tile_end[b][tile_id] = 0;
+            virtual_tile_next[b][tile_id] = 0;//tile_id 0 is invalid, can be used as NULL_NODE
+            virtual_tile_pixel_index[b][tile_id][0]=0;
+            virtual_tile_pixel_index[b][tile_id][1]=0;
+            return;
+        }
+
+        // 2. 初始化头节点 (它直接占据原本的 physical tile_id 的位置)
+        int curr_node = tile_id;
+        int tile_x=(tile_id-1) % tile_w_num;
+        int tile_y=(tile_id-1) / tile_w_num;
+        int pixel_x=tile_x * tile_size_w;
+        int pixel_y=tile_y * tile_size_h;
+        int curr_start = start;
+        int chunk_end = min(curr_start + max_prims_per_tile, end);
+
+        virtual_tile_start[b][curr_node] = curr_start;
+        virtual_tile_end[b][curr_node] = chunk_end;
+        virtual_tile_next[b][curr_node] = 0; //tile_id 0 is invalid, can be used as NULL_NODE
+        virtual_tile_pixel_index[b][curr_node][0]=pixel_x;
+        virtual_tile_pixel_index[b][curr_node][1]=pixel_y;
+
+        curr_start = chunk_end;
+
+
+        while (curr_start < end) {
+            int next_node = atomicAdd(&alloc_counters[b], 1);
+            int new_idx = next_node + tiles_num;
+
+            virtual_tile_next[b][curr_node] = new_idx;
+            chunk_end = min(curr_start + max_prims_per_tile, end);
+
+            // 所有的属性全部写入 new_idx
+            virtual_tile_start[b][new_idx] = curr_start;
+            virtual_tile_end[b][new_idx] = chunk_end;
+            virtual_tile_next[b][new_idx] = 0; 
+            virtual_tile_pixel_index[b][new_idx][0] = pixel_x;
+            virtual_tile_pixel_index[b][new_idx][1] = pixel_y;
+
+            // 推进指针时，当前节点也必须变成 new_idx
+            curr_node = new_idx;
+            curr_start = chunk_end;
+        }
+    }
+}
+
+std::vector<at::Tensor> split_virtual_tiles(
+    at::Tensor tile_start,  // [batch_size, tiles_num]
+    at::Tensor tile_end,    // [batch_size, tiles_num]
+    int virtual_tile_allocate_size,
+    int tile_h_num,int tile_w_num,int tile_size_h,int tile_size_w,
+    int max_prims_per_tile
+) {
+    int batch_size = tile_start.size(0);
+    int tiles_num = tile_start.size(1);
+
+    torch::Tensor virtual_tile_start=torch::empty({ batch_size, virtual_tile_allocate_size }, tile_start.options()); // [batch_size, tiles_num]
+    torch::Tensor virtual_tile_end=torch::empty({ batch_size, virtual_tile_allocate_size }, tile_start.options());   // [batch_size, tiles_num]
+    torch::Tensor virtual_tile_next=torch::empty({ batch_size, virtual_tile_allocate_size }, tile_start.options());  // [batch_size, tiles_num]
+    torch::Tensor virtual_tile_pixel_index=torch::empty({ batch_size, virtual_tile_allocate_size,2 }, tile_start.options());  // [batch_size, tiles_num]
+    torch::Tensor virtual_tile_counters=torch::zeros({batch_size}, tile_start.options());
+
+    // 启动配置：
+    // Grid.x 管所有的物理 Tile
+    // Grid.y 管 Batch
+    int threads = 256;
+    int blocks = (tiles_num + threads - 1) / threads;
+    dim3 grid(blocks, batch_size, 1);
+    dim3 block(threads, 1, 1);
+
+    split_virtual_tiles_kernel<<<grid, block>>>(
+        tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        virtual_tile_start.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        virtual_tile_end.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        virtual_tile_next.packed_accessor32<int32_t, 2, torch::RestrictPtrTraits>(),
+        virtual_tile_pixel_index.packed_accessor32<int32_t, 3, torch::RestrictPtrTraits>(),
+        virtual_tile_counters.data_ptr<int32_t>(),
+        tile_h_num, tile_w_num, tile_size_h, tile_size_w,
+        max_prims_per_tile
+    );
+    
+    CUDA_CHECK_ERRORS;
+
+    return { virtual_tile_start, virtual_tile_end, virtual_tile_next,virtual_tile_pixel_index,virtual_tile_counters };
+}
