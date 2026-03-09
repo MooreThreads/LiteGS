@@ -23,12 +23,30 @@ def render_preprocess(cluster_origin:torch.Tensor|None,cluster_extend:torch.Tens
         visibility,visible_chunks_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb(cluster_origin,cluster_extend,frustumplane,feedback_buffer,idx_tensor)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_compact_mask(visible_chunkid,visible_chunks_num)
-        culled_xyz,culled_scale,culled_rot,color,culled_opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
-            pp.sparse_grad,actived_sh_degree,
+
+        # culled_xyz,culled_scale,culled_rot,color,culled_opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
+        #     pp.sparse_grad,actived_sh_degree,
+        #     visible_chunkid,visible_chunks_num,
+        #     view_matrix,
+        #     xyz,scale,rot,sh_0,sh_rest,opacity
+        # )
+
+        # Step 1: Compact + Activate (without SH)
+        culled_xyz,culled_scale,culled_rot,culled_opacity=utils.wrapper.CompactActivateNoSH.apply(
+            pp.sparse_grad,
+            visible_chunkid,visible_chunks_num,
+            xyz,scale,rot,opacity
+        )
+
+        # Step 2: Compact + SH (using activated position for view direction)
+        color=utils.wrapper.CompactSH.apply(
+            pp.sparse_grad,
+            actived_sh_degree,
             visible_chunkid,visible_chunks_num,
             view_matrix,
-            xyz,scale,rot,sh_0,sh_rest,opacity
+            xyz,sh_0,sh_rest
         )
+
         culled_xyz,culled_scale,culled_rot,color,culled_opacity=scene.cluster.uncluster(culled_xyz,culled_scale,culled_rot,color,culled_opacity)  
     else:
         nvtx.range_push("Activate")

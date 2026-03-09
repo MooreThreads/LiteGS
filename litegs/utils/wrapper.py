@@ -790,7 +790,147 @@ class CreateViewProj(torch.autograd.Function):
         view_params_grad,proj_params_grad=litegs_fused.create_viewproj_backward(view_matrix_grad,proj_matrix_grad,viewproj_matrix_grad,view_params,proj_params,img_h,img_w,z_near,z_far)
         return view_params_grad,proj_params_grad,None,None,None,None
 
-class CullCompactActivateWithSparseGrad(torch.autograd.Function):
+
+class CompactActivateNoSH(torch.autograd.Function):
+    """
+    Compact and activate Gaussian primitives WITHOUT spherical harmonics.
+    This does compact + activate (exp, normalize, sigmoid) only.
+
+    Returns: activated_position, activated_scale, activated_rotation, activated_opacity
+    """
+    @staticmethod
+    def forward(
+        ctx,
+        b_sparse_grad,
+        visible_chunkid, visible_chunk_num,
+        xyz, scale, rot, opacity
+    ):
+        ctx.chunk_num = xyz.shape[-2]
+        ctx.chunk_size = xyz.shape[-1]
+        ctx.b_sparse_grad = b_sparse_grad
+
+        # Call compact activate without SH
+        activated_position, activated_scale, activated_rotation, activated_opacity = litegs_fused.cull_compact_activate_nosh(
+            visible_chunkid, visible_chunk_num,
+            xyz, scale, rot, opacity
+        )
+
+        ctx.save_for_backward(visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity)
+
+        return activated_position, activated_scale, activated_rotation, activated_opacity
+
+    @staticmethod
+    def backward(ctx, activated_position_grad, activated_scale_grad, activated_rotation_grad, activated_opacity_grad):
+        chunk_num = ctx.chunk_num
+        chunk_size = ctx.chunk_size
+        b_sparse_grad = ctx.b_sparse_grad
+
+        visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity = ctx.saved_tensors
+
+        # Call backward without SH
+        compactd_grads = litegs_fused.activate_backward_nosh(
+            visible_chunkid, visible_chunk_num,
+            xyz, scale, rot, opacity,
+            activated_position_grad, activated_scale_grad, activated_rotation_grad, activated_opacity_grad
+        )
+
+        if b_sparse_grad:
+            allocate_chunk_num = visible_chunkid.shape[0]
+            grads = []
+            for grad in compactd_grads:
+                size = (*grad.shape[:-2], chunk_num, chunk_size)
+                grads.append(CompactedTensor(size, visible_chunkid, grad.reshape(-1, allocate_chunk_num, chunk_size)))
+        else:
+            grads = []
+            for compacted_grad in compactd_grads:
+                size = (*compacted_grad.shape[:-2], chunk_num, chunk_size)
+                grad = torch.zeros(size, device=compacted_grad.device, dtype=compacted_grad.dtype)
+                grad[..., visible_chunkid, :] = compacted_grad
+                grads.append(grad)
+
+        # Return grads for xyz, scale, rot, opacity
+        return None, None, None, *grads
+
+
+class CompactSH(torch.autograd.Function):
+    """
+    Compact and compute spherical harmonics to RGB.
+    This does compact + SH computation only (no activate).
+
+    Returns: color (RGB)
+    """
+    @staticmethod
+    def forward(
+        ctx,
+        b_sparse_grad,
+        sh_degree,
+        visible_chunkid, visible_chunk_num,
+        view_matrix,
+        position, sh_base, sh_rest
+    ):
+        ctx.sh_degree = sh_degree
+        ctx.chunk_num = sh_base.shape[-2]
+        ctx.chunk_size = sh_base.shape[-1]
+        ctx.b_sparse_grad = b_sparse_grad
+
+        # Call compact SH forward
+        color = litegs_fused.compact_sh_forward(
+            sh_degree,
+            visible_chunkid, visible_chunk_num,
+            view_matrix,
+            position, sh_base, sh_rest
+        )[0]
+
+        # Clamp color to ensure non-negative
+        color = color.clamp_min(0)
+
+        ctx.save_for_backward(visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+
+        return color
+
+    @staticmethod
+    def backward(ctx, color_grad):
+        sh_degree = ctx.sh_degree
+        chunk_num = ctx.chunk_num
+        chunk_size = ctx.chunk_size
+        b_sparse_grad = ctx.b_sparse_grad
+
+        visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest = ctx.saved_tensors
+
+        # Call compact SH backward
+        sh_base_grad, sh_rest_grad = litegs_fused.compact_sh_backward(
+            sh_degree,
+            visible_chunkid, visible_chunk_num,
+            view_matrix,
+            position, sh_base, sh_rest,
+            color_grad
+        )
+
+        if b_sparse_grad:
+            allocate_chunk_num = visible_chunkid.shape[0]
+            grads = []
+
+            size = (*sh_base_grad.shape[:-2], chunk_num, chunk_size)
+            sh_base_grad=CompactedTensor(size, visible_chunkid, sh_base_grad.reshape(-1, allocate_chunk_num, chunk_size))
+            size = (*sh_rest_grad.shape[:-2], chunk_num, chunk_size)
+            sh_rest_grad=CompactedTensor(size, visible_chunkid, sh_rest_grad.reshape(-1, allocate_chunk_num, chunk_size))
+        else:
+            size = (*sh_base_grad.shape[:-2], chunk_num, chunk_size)
+            grad = torch.zeros(size, device=sh_base_grad.device, dtype=sh_base_grad.dtype)
+            grad[..., visible_chunkid, :] = sh_base_grad
+            sh_base_grad=grad
+            size = (*sh_rest_grad.shape[:-2], chunk_num, chunk_size)
+            grad = torch.zeros(size, device=sh_rest_grad.device, dtype=sh_rest_grad.dtype)
+            grad[..., visible_chunkid, :] = sh_rest_grad
+            sh_rest_grad=grad
+
+
+
+        # Return grads: sh_degree, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest
+        return None, None, None, None, None, None, sh_base_grad, sh_rest_grad
+
+
+class CullCompactActivated(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
@@ -842,6 +982,7 @@ class CullCompactActivateWithSparseGrad(torch.autograd.Function):
                 size=(*compacted_grad.shape[:-2],chunk_num,chunk_size)
                 grad=torch.zeros(size,device=compacted_grad.device,dtype=compacted_grad.dtype)
                 grad[...,visible_chunkid,:]=compacted_grad
+                grads.append(grad)
         return None,None,None,None,None,*grads
 
 def sparse_adam_update(

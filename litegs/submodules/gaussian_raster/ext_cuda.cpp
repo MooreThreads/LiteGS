@@ -29,7 +29,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("eigh_and_inv_2x2matrix_forward", &eigh_and_inv_2x2matrix_forward);
 	m.def("inv_2x2matrix_backward", &inv_2x2matrix_backward);
 	m.def("cull_compact_activate", &cull_compact_activate);
+	m.def("cull_compact_activate_nosh", &cull_compact_activate_nosh);
+	m.def("compact_sh_forward", &compact_sh_forward);
+	m.def("compact_sh_backward", &compact_sh_backward);
 	m.def("activate_backward", &activate_backward);
+	m.def("activate_backward_nosh", &activate_backward_nosh);
 	m.def("adamUpdate", &adamUpdate);
 	m.def("frustum_culling_aabb", &frustum_culling_aabb);
 	m.def("gpu_driven_pipeline_sparse_op", &gpu_driven_pipeline_sparse_op);

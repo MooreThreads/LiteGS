@@ -10,9 +10,39 @@ std::vector<at::Tensor> cull_compact_activate(
 std::vector<at::Tensor> activate_backward(
 	int sh_degree,
 	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
-	at::Tensor view_matrix, 
+	at::Tensor view_matrix,
 	at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor sh_base, at::Tensor sh_rest, at::Tensor opacity,
 	at::Tensor activated_position_grad, at::Tensor activated_scale_grad, at::Tensor activated_rotation_grad, at::Tensor color_grad, at::Tensor activated_opacity_grad
+);
+
+// Compact + Activate WITHOUT SH
+std::vector<at::Tensor> cull_compact_activate_nosh(
+	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+	at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor opacity
+);
+
+// Backward for compact + activate without SH
+std::vector<at::Tensor> activate_backward_nosh(
+	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+	at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor opacity,
+	at::Tensor activated_position_grad, at::Tensor activated_scale_grad, at::Tensor activated_rotation_grad, at::Tensor activated_opacity_grad
+);
+
+// Compact + SH ONLY (no activate, just compact and compute SH to RGB)
+std::vector<at::Tensor> compact_sh_forward(
+	int sh_degree,
+	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+	at::Tensor view_matrix,
+	at::Tensor position, at::Tensor sh_base, at::Tensor sh_rest
+);
+
+// Backward for compact + SH only
+std::vector<at::Tensor> compact_sh_backward(
+	int sh_degree,
+	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+	at::Tensor view_matrix,
+	at::Tensor position, at::Tensor sh_base, at::Tensor sh_rest,
+	at::Tensor color_grad
 );
 
 void adamUpdate(

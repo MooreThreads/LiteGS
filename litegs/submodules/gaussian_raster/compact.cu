@@ -1334,3 +1334,427 @@ void gpu_driven_pipeline_sparse_op(
         }
     );
 }
+
+// ========================================================================
+// New: Compact + Activate WITHOUT SH (only exp, normalize, sigmoid)
+// ========================================================================
+
+__global__ void activate_forward_kernel_nosh(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,    //[allocate_size]
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,    //[1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[4,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[1,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_position,    //[4,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_scale,    //[3,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_rotation,    //[4,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_opacity    //[1,allocate_size,chunk_size]
+)
+{
+    int index = threadIdx.x;
+    int compacted_chunk_id = blockIdx.x;
+    int chunk_id = visible_chunk_id[blockIdx.x];
+
+    if (compacted_chunk_id < visible_chunks_num[0])
+    {
+        // Position: add homogeneous coordinate w=1.0 (with compact)
+        activated_position[0][compacted_chunk_id][index] = position[0][chunk_id][index];
+        activated_position[1][compacted_chunk_id][index] = position[1][chunk_id][index];
+        activated_position[2][compacted_chunk_id][index] = position[2][chunk_id][index];
+        activated_position[3][compacted_chunk_id][index] = 1.0f;
+
+        // Scale: exp (with compact)
+        activated_scale[0][compacted_chunk_id][index] = __expf(scale[0][chunk_id][index]);
+        activated_scale[1][compacted_chunk_id][index] = __expf(scale[1][chunk_id][index]);
+        activated_scale[2][compacted_chunk_id][index] = __expf(scale[2][chunk_id][index]);
+
+        // Rotation: normalize quaternion (with compact)
+        float w = rotation[0][chunk_id][index];
+        float x = rotation[1][chunk_id][index];
+        float y = rotation[2][chunk_id][index];
+        float z = rotation[3][chunk_id][index];
+        float recp_norm = rsqrtf(w * w + x * x + y * y + z * z + 1e-12f);
+        activated_rotation[0][compacted_chunk_id][index] = w * recp_norm;
+        activated_rotation[1][compacted_chunk_id][index] = x * recp_norm;
+        activated_rotation[2][compacted_chunk_id][index] = y * recp_norm;
+        activated_rotation[3][compacted_chunk_id][index] = z * recp_norm;
+
+        // Opacity: sigmoid (with compact)
+        activated_opacity[0][compacted_chunk_id][index] = 1.0f / (1.0f + __expf(-opacity[0][chunk_id][index]));
+    }
+    else
+    {
+        activated_opacity[0][compacted_chunk_id][threadIdx.x] = 0.0f;
+    }
+}
+
+__global__ void activate_backward_kernel_nosh(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,    //[allocate_size]
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,    //[1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale,    //[3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation,    //[4,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity,    //[1,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_position_grad,    //[4,allocate_size,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_scale_grad,    //[3,allocate_size,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_rotation_grad,    //[4,allocate_size,chunk_size]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> activated_opacity_grad,    //[1,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position_grad,    //[3,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> scale_grad,    //[3,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> rotation_grad,    //[4,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> opacity_grad    //[1,allocate_size,chunk_size]
+)
+{
+    int index = threadIdx.x;
+    int chunk_id = blockIdx.x;
+    int source_chunk_id = visible_chunk_id[blockIdx.x];
+
+    if (chunk_id < visible_chunks_num[0])
+    {
+        // Position gradient (with compact)
+        position_grad[0][chunk_id][index] = activated_position_grad[0][chunk_id][index];
+        position_grad[1][chunk_id][index] = activated_position_grad[1][chunk_id][index];
+        position_grad[2][chunk_id][index] = activated_position_grad[2][chunk_id][index];
+
+        // Scale gradient: d(exp(x))/dx = exp(x) (with compact)
+        scale_grad[0][chunk_id][index] = __expf(scale[0][source_chunk_id][index]) * activated_scale_grad[0][chunk_id][index];
+        scale_grad[1][chunk_id][index] = __expf(scale[1][source_chunk_id][index]) * activated_scale_grad[1][chunk_id][index];
+        scale_grad[2][chunk_id][index] = __expf(scale[2][source_chunk_id][index]) * activated_scale_grad[2][chunk_id][index];
+
+        // Rotation gradient (with compact)
+        float w = rotation[0][source_chunk_id][index];
+        float x = rotation[1][source_chunk_id][index];
+        float y = rotation[2][source_chunk_id][index];
+        float z = rotation[3][source_chunk_id][index];
+        float recp_norm = rsqrtf(w * w + x * x + y * y + z * z + 1e-12f);
+        float out_w = w * recp_norm;
+        float out_x = x * recp_norm;
+        float out_y = y * recp_norm;
+        float out_z = z * recp_norm;
+        float dot = activated_rotation_grad[0][chunk_id][index] * out_w
+            + activated_rotation_grad[1][chunk_id][index] * out_x
+            + activated_rotation_grad[2][chunk_id][index] * out_y
+            + activated_rotation_grad[3][chunk_id][index] * out_z;
+
+        rotation_grad[0][chunk_id][index] = recp_norm * (activated_rotation_grad[0][chunk_id][index] - dot * out_w);
+        rotation_grad[1][chunk_id][index] = recp_norm * (activated_rotation_grad[1][chunk_id][index] - dot * out_x);
+        rotation_grad[2][chunk_id][index] = recp_norm * (activated_rotation_grad[2][chunk_id][index] - dot * out_y);
+        rotation_grad[3][chunk_id][index] = recp_norm * (activated_rotation_grad[3][chunk_id][index] - dot * out_z);
+
+        // Opacity gradient (with compact)
+        opacity_grad[0][chunk_id][index] = activated_opacity_grad[0][chunk_id][index] * (1.0f - 1.0f / (1.0f + __expf(opacity[0][source_chunk_id][index])));
+    }
+}
+
+std::vector<at::Tensor> cull_compact_activate_nosh(
+    at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+    at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor opacity
+)
+{
+    int chunksize = position.size(2);
+    int allocate_chunks_num = visible_chunk_id.size(0);
+
+    auto tensor_shape = position.sizes();
+    at::Tensor actived_position = torch::empty({ 4, allocate_chunks_num, chunksize }, position.options());
+    tensor_shape = scale.sizes();
+    at::Tensor actived_scale = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, scale.options());
+    tensor_shape = rotation.sizes();
+    at::Tensor actived_rotation = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, rotation.options());
+    tensor_shape = opacity.sizes();
+    at::Tensor actived_opacity = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, opacity.options());
+
+    activate_forward_kernel_nosh <<<allocate_chunks_num, chunksize, 0>>> (
+        visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+        position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        actived_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        actived_scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        actived_rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        actived_opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
+    );
+
+    return { actived_position, actived_scale, actived_rotation, actived_opacity };
+}
+
+std::vector<at::Tensor> activate_backward_nosh(
+    at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+    at::Tensor position, at::Tensor scale, at::Tensor rotation, at::Tensor opacity,
+    at::Tensor activated_position_grad, at::Tensor activated_scale_grad, at::Tensor activated_rotation_grad, at::Tensor activated_opacity_grad
+)
+{
+    int chunksize = position.size(2);
+    int allocate_chunks_num = visible_chunk_id.size(0);
+
+    auto tensor_shape = position.sizes();
+    at::Tensor position_grad = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, position.options());
+    tensor_shape = scale.sizes();
+    at::Tensor scale_grad = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, scale.options());
+    tensor_shape = rotation.sizes();
+    at::Tensor rotation_grad = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, rotation.options());
+    tensor_shape = opacity.sizes();
+    at::Tensor opacity_grad = torch::empty({ tensor_shape[0], allocate_chunks_num, chunksize }, opacity.options());
+
+    activate_backward_kernel_nosh <<<allocate_chunks_num, chunksize, 0>>> (
+        visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+        scale.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        opacity.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        activated_position_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        activated_scale_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        activated_rotation_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        activated_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        position_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        scale_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        rotation_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+        opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>()
+    );
+
+    return { position_grad, scale_grad, rotation_grad, opacity_grad };
+}
+
+// ========================================================================
+// New: Compact + SH ONLY (no activate, just compact and compute SH to RGB)
+// ========================================================================
+
+template <int degree>
+__global__ void compact_sh_forward_kernel(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,    //[allocate_size]
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,    //[1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[views_num,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color    //[views_num,3,allocate_size,chunk_size]
+)
+{
+    int index = threadIdx.x;
+    int compacted_chunk_id = blockIdx.x;
+    int chunk_id = visible_chunk_id[blockIdx.x];
+
+    if (compacted_chunk_id < visible_chunks_num[0])
+    {
+        // Get position for view direction calculation (with compact)
+        float3 pos{ position[0][chunk_id][index], position[1][chunk_id][index], position[2][chunk_id][index] };
+
+        // Compute SH to RGB for each view (with compact)
+        for (int view_id = 0; view_id < view_matrix.size(0); view_id++)
+        {
+            // Calculate camera center from view matrix
+            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
+            float3 camera_center;
+            camera_center.x = inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2];
+            camera_center.y = inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2];
+            camera_center.z = inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2];
+
+            // Direction from camera to gaussian (with compact)
+            float3 dir{ pos.x - camera_center.x, pos.y - camera_center.y, pos.z - camera_center.z };
+            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
+            dir.x *= norm_recp;
+            dir.y *= norm_recp;
+            dir.z *= norm_recp;
+
+            // SH to RGB (with compact using compacted_chunk_id)
+            sh2rgb_forward_kernel<degree>(view_id, compacted_chunk_id, chunk_id, index, dir, sh_base, sh_rest, color);
+        }
+    }
+}
+
+template <int degree>
+__global__ void compact_sh_backward_kernel(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,    //[allocate_size]
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,    //[1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[views_num,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunks_num,chunk_size]
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color_grad,    //[views_num,3,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base_grad,    //[1,3,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest_grad    //[?,3,allocate_size,chunk_size]
+)
+{
+    int index = threadIdx.x;
+    int chunk_id = blockIdx.x;
+    int source_chunk_id = visible_chunk_id[blockIdx.x];
+
+    if (chunk_id < visible_chunks_num[0])
+    {
+        // Compute SH backward for each view (with compact)
+        for (int view_id = 0; view_id < view_matrix.size(0); view_id++)
+        {
+            // Calculate camera center from view matrix
+            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
+            float3 camera_center;
+            camera_center.x = inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2];
+            camera_center.y = inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2];
+            camera_center.z = inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2];
+
+            // Direction from camera to gaussian (with compact)
+            float3 dir{ position[0][source_chunk_id][index] - camera_center.x,
+                        position[1][source_chunk_id][index] - camera_center.y,
+                        position[2][source_chunk_id][index] - camera_center.z };
+            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
+            dir.x *= norm_recp;
+            dir.y *= norm_recp;
+            dir.z *= norm_recp;
+
+            float3 dL_dRGB{ color_grad[view_id][0][chunk_id][index], color_grad[view_id][1][chunk_id][index], color_grad[view_id][2][chunk_id][index] };
+
+            // Only accumulate sh_base_grad for view_id == 0
+            if (view_id == 0)
+            {
+                sh2rgb_backward_kernel<degree, true>(chunk_id, source_chunk_id, index, dir, dL_dRGB, sh_base, sh_rest, color_grad, sh_base_grad, sh_rest_grad);
+            }
+            else
+            {
+                sh2rgb_backward_kernel<degree, false>(chunk_id, source_chunk_id, index, dir, dL_dRGB, sh_base, sh_rest, color_grad, sh_base_grad, sh_rest_grad);
+            }
+        }
+    }
+}
+
+std::vector<at::Tensor> compact_sh_forward(
+    int sh_degree,
+    at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+    at::Tensor view_matrix,
+    at::Tensor position, at::Tensor sh_base, at::Tensor sh_rest
+)
+{
+    int chunksize = position.size(2);
+    int allocate_chunks_num = visible_chunk_id.size(0);
+    int views_num = view_matrix.size(0);
+
+    at::Tensor color = torch::empty({ views_num, 3, allocate_chunks_num, chunksize }, sh_base.options());
+
+    switch (sh_degree)
+    {
+    case 0:
+        compact_sh_forward_kernel<0> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    case 1:
+        compact_sh_forward_kernel<1> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    case 2:
+        compact_sh_forward_kernel<2> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    case 3:
+        compact_sh_forward_kernel<3> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    default:
+        AT_ERROR("Unsupported sh_degree: ", sh_degree);
+    }
+    CUDA_CHECK_ERRORS;
+    return { color };
+}
+
+std::vector<at::Tensor> compact_sh_backward(
+    int sh_degree,
+    at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+    at::Tensor view_matrix,
+    at::Tensor position, at::Tensor sh_base, at::Tensor sh_rest,
+    at::Tensor color_grad
+)
+{
+    int chunksize = position.size(2);
+    int allocate_chunks_num = visible_chunk_id.size(0);
+
+    auto tensor_shape = sh_base.sizes();
+    at::Tensor sh_base_grad = torch::empty({ tensor_shape[0],tensor_shape[1], allocate_chunks_num, chunksize }, sh_base.options());
+    tensor_shape = sh_rest.sizes();
+    at::Tensor sh_rest_grad = torch::zeros({ tensor_shape[0],tensor_shape[1], allocate_chunks_num, chunksize }, sh_rest.options());
+
+    switch (sh_degree)
+    {
+    case 0:
+        compact_sh_backward_kernel<0> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_base_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    case 1:
+        compact_sh_backward_kernel<1> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_base_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    case 2:
+        compact_sh_backward_kernel<2> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_base_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    case 3:
+        compact_sh_backward_kernel<3> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_base_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>()
+        );
+        break;
+    default:
+        AT_ERROR("Unsupported sh_degree: ", sh_degree);
+    }
+    CUDA_CHECK_ERRORS;
+    return { sh_base_grad, sh_rest_grad };
+}
