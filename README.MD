@@ -6,23 +6,29 @@ This repository provides a refactored codebase aimed at improving the flexibilit
 
 ## Training 3DGS in about 50 seconds
 
-`python ./scripts/full_eval_fast.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
+`python ./scripts/full_eval_aggressive.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
 
-|scene|primitives|takes(RTX 3090)|takes(RTX 4090)|SSIM_train|PSNR_train|LPIPS_train|SSIM_test|PSNR_test|LPIPS_test|
-|---|---|---|---|---|---|---|---|---|---|
-|bicycle|1360000|68.90290451049805|**41.72691751**|0.7696665|23.9320354|0.2501733|0.7585854|25.1978111|0.2335179|
-|flowers|1220000|78.57123351097107|**47.9060986**|0.7225419|23.1023922|0.2838508|0.6053527|21.7142277|0.3396027|
-|garden|1460000|78.55829739570618|**46.76381636**|0.8845506|28.7087154|0.1193212|0.8556744|27.3950653|0.1323125|
-|stump|1340000|71.96337366104126|**44.23456001**|0.8554742|28.5616417|0.2056226|0.7926696|27.2177505|0.2127895|
-|treehill|1160000|74.03676867485046|**46.34997225**|0.7261154|22.7449684|0.3029707|0.6390569|22.8510647|0.3379321|
-|room|800000|70.27747488|**41.05782461**|0.9351271|33.6474419|0.2011591|0.9221826|31.5905571|0.2149457|
-|counter|800000|89.81700301170349|**51.63395095**|0.9220967|29.9026985|0.1850652|0.9086227|28.8188915|0.2000091|
-|kitchen|1200000|105.24096488952637|**63.1258564**|0.9389035|32.4555969|0.1205899|0.9264742|31.4408417|0.1294753|
-|bonsai|1200000|91.47094392776489|**56.54596996**|0.9501833|32.8006744|0.1922134|0.9444824|31.9543724|0.1964863|
-|truck|680000|61.99935531616211|**40.03852582**|0.8910525|26.4909763|0.1484901|0.8747544|25.3993835|0.1531686|
-|train|720000|69.77397298812866|**46.26339579**|0.8102806|23.553236|0.2373699|0.7795711|21.1193752|0.2538348|
-|drjohnson|1600000|66.38695478439331|**39.18569803**|0.9353783|34.0604973|0.2259799|0.9080961|29.6174507|0.2518271|
-|playroom|980000|56.96188426017761|**32.52357793**|0.9448828|35.7014847|0.2159965|0.9150408|30.9205952|0.2443539|
+| Scene | Primitives | Time_3090(s) | Time_4090(s) | SSIM | PSNR | LPIPS |
+|-------|------------|---------------|---------------|------|------|-------|
+| bicycle | 1,000,000 | 50 | 33 | 0.7467 | 25.10 | 0.2531 |
+| bonsai | 1,000,000 | 71 | 45 | 0.9430 | 32.02 | 0.1986 |
+| counter | 1,000,000 | 84 | 51 | 0.9103 | 28.98 | 0.1952 |
+| drjohnson | 1,000,000 | 47 | 28 | 0.9054 | 29.55 | 0.2596 |
+| flowers | 1,000,000 | 60 | 40 | 0.6011 | 21.75 | 0.3500 |
+| garden | 1,000,000 | 53 | 33 | 0.8471 | 27.23 | 0.1485 |
+| kitchen | 1,000,000 | 82 | 50 | 0.9249 | 31.33 | 0.1321 |
+| playroom | 1,000,000 | 48 | 29 | 0.9123 | 30.82 | 0.2434 |
+| room | 1,000,000 | 64 | 39 | 0.9220 | 31.63 | 0.2130 |
+| stump | 1,000,000 | 53 | 34 | 0.7847 | 27.10 | 0.2278 |
+| train | 1,000,000 | 70 | 47 | 0.7956 | 21.50 | 0.2316 |
+| treehill | 1,000,000 | 57 | 37 | 0.6382 | 23.17 | 0.3479 |
+| truck | 1,000,000 | 63 | 43 | 0.8831 | 25.78 | 0.1368 |
+
+| Dataset | Primitives | Time_3090(s) | Time_4090(s) | SSIM | PSNR | LPIPS |
+|-------|------------|---------------|---------------|------|------|-------|
+| mipnerf360 | 1,000,000 | 64 | 40 | 0.8131 | 27.59 | 0.2296 |
+| tat | 1,000,000 | 67 | 45 | 0.8394 | 23.64 | 0.1842 |
+| db | 1,000,000 | 47 | 29 | 0.9088 | 30.19 | 0.2515 |
 
 ## Background
 Gaussian splatting is a powerful technique used in various computer graphics and vision applications. It involves representing 3D data as Gaussian distributions in space, allowing for efficient and accurate representation of spatial data. However, the original implementation (https://github.com/graphdeco-inria/gaussian-splatting) of Gaussian splatting in PyTorch faced several limitations: 
@@ -89,15 +95,10 @@ Begin training with the following command:
 
 The training results of LiteGS using the Mip-NeRF 360 dataset on an RTX 3090 are presented below. The training and evaluation command used is:
 
-LiteGS-turbo:
-`python ./scripts/full_eval_fast.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
-
 LiteGS:
 `python ./full_eval.py --mipnerf360 SOURCE_PATH1 --tanksandtemples SOURCE_PATH2 --deepblending SOURCE_PATH3`
 
-![image](doc_img/results.png)
-
-![image](doc_img/primitive_vs_psnr.png)
+![image](doc_img/LiteGS_ParamScale.png)
 
 
 
