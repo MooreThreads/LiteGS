@@ -59,12 +59,12 @@ class LearnableViewProj(nn.Module):
             self.proj_optimizer.step()
             self.proj_optimizer.zero_grad()
 
-    def state_dict(self, prefix='', keep_vars=False):
+    def state_dict(self,destination=None , prefix='', keep_vars=False):
         """
         Override state_dict to include optimizer states.
         """
         # Call parent's state_dict for parameters (extrinsics, intrinsics)
-        state = super().state_dict(prefix=prefix, keep_vars=keep_vars)
+        state = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
 
         # Add optimizer states
         state[prefix + 'view_optimizer_state_dict'] = self.view_optimizer.state_dict()

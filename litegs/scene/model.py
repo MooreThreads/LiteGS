@@ -59,7 +59,6 @@ class GaussianSplattingModel(nn.Module):
             norm_radius, dp, mp.cluster_size > 0, init_points_num
         )
 
-        self.start_epoch = 0
         self.active_sh_degree = 0
         self.update_cluster_aabb()
 
@@ -69,16 +68,15 @@ class GaussianSplattingModel(nn.Module):
         """Return all Gaussian parameters."""
         return self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity
 
-    def state_dict(self, prefix='', keep_vars=False):
+    def state_dict(self,destination=None, prefix='', keep_vars=False):
         """
         Override state_dict to include optimizer, scheduler, and other needed states.
         This allows saving/loading like a regular nn.Module.
         """
         # Call parent's state_dict for parameters (xyz, scale, rot, sh_0, sh_rest, opacity)
-        state = super().state_dict(prefix=prefix, keep_vars=keep_vars)
+        state = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
 
-        # Add scalar values
-        state[prefix + 'start_epoch'] = torch.tensor(self.start_epoch)
+        # Add scalar value
         state[prefix + 'active_sh_degree'] = torch.tensor(self.active_sh_degree)
 
         # Add optimizer state
@@ -96,30 +94,18 @@ class GaussianSplattingModel(nn.Module):
         Override load_state_dict to handle optimizer, scheduler, and other needed states.
         This allows loading like a regular nn.Module.
         """
-        # Extract scalar values before loading
-        start_epoch = state_dict.pop('start_epoch').item() if 'start_epoch' in state_dict else 0
+        # Extract scalar value before loading
         active_sh_degree = state_dict.pop('active_sh_degree').item() if 'active_sh_degree' in state_dict else 0
 
         # Extract optimizer and scheduler states
         optimizer_state = state_dict.pop('optimizer_state_dict', None)
         scheduler_state = state_dict.pop('scheduler_state_dict', None)
 
-        # Extract cluster tensors before loading
-        cluster_origin = state_dict.pop('cluster_origin', None)
-        cluster_extend = state_dict.pop('cluster_extend', None)
-
         # Load parameters using parent's load_state_dict
         super().load_state_dict(state_dict, strict=strict)
 
-        # Restore scalar values
-        self.start_epoch = start_epoch
+        # Restore scalar value
         self.active_sh_degree = active_sh_degree
-
-        # Restore cluster tensors
-        if cluster_origin is not None:
-            self.cluster_origin = cluster_origin.cuda()
-        if cluster_extend is not None:
-            self.cluster_extend = cluster_extend.cuda()
 
         # Restore optimizer state
         if optimizer_state is not None and hasattr(self, 'optimizer') and self.optimizer is not None:
@@ -128,6 +114,8 @@ class GaussianSplattingModel(nn.Module):
         # Restore scheduler state
         if scheduler_state is not None and hasattr(self, 'scheduler') and self.scheduler is not None:
             self.scheduler.load_state_dict(scheduler_state)
+
+        self.update_cluster_aabb()
 
         return torch.nn.modules.module._IncompatibleKeys([], [])
 

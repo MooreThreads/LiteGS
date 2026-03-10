@@ -66,17 +66,16 @@ def start(lp: arguments.ModelParams, op: arguments.OptimizationParams, dp: argum
         lp.sh_degree, norm_radius, op, lp, dp,
         init_points_num
     )
+    pipeline = RenderPipeline(lp, model ,trainingset)
+    model=None
     if start_checkpoint is not None:
-        model.load_state_dict(start_checkpoint)
+        pipeline.load_state_dict(start_checkpoint)
 
-    # Create render pipeline
-    pipeline = RenderPipeline(lp, trainingset)
-
-    StatisticsHelperInst.reset(model.xyz.shape[-2], model.xyz.shape[-1], model.density_controller.is_densify_actived)
-    progress_bar = tqdm(range(model.start_epoch, total_epoch), desc="Training progress")
+    StatisticsHelperInst.reset(pipeline.model.xyz.shape[-2], pipeline.model.xyz.shape[-1], pipeline.model.density_controller.is_densify_actived)
+    progress_bar = tqdm(range(pipeline.start_epoch, total_epoch), desc="Training progress")
     progress_bar.update(0)
 
-    for epoch in range(model.start_epoch, total_epoch):
+    for epoch in range(pipeline.start_epoch, total_epoch):
         torch.cuda.synchronize()#sync for feedback buffer. Do not remove it!
         with StatisticsHelperInst.try_start(epoch):
             for view_matrix, proj_matrix, frustumplane, gt_image, idx_tensor in train_loader:
@@ -84,9 +83,8 @@ def start(lp: arguments.ModelParams, op: arguments.OptimizationParams, dp: argum
                 proj_matrix = proj_matrix.cuda()
                 frustumplane = frustumplane.cuda()
                 gt_image = gt_image.cuda() / 255.0
-                idx_tensor = idx_tensor.cuda()
 
-                img, transmitance, _, _ = pipeline.forward(view_matrix, proj_matrix, frustumplane, model, idx_tensor, gt_image.shape[2:],True)
+                img, transmitance, _, _ = pipeline.forward(view_matrix, proj_matrix, frustumplane, idx_tensor, gt_image.shape[2:],True)
 
                 # Compute loss
                 loss = fused_ssim.fused_l1_ssim_loss(img, gt_image)
@@ -98,11 +96,11 @@ def start(lp: arguments.ModelParams, op: arguments.OptimizationParams, dp: argum
                     StatisticsHelperInst.backward_callback()
 
                 # Optimizer step
-                model.optimizer.step()
-                model.optimizer.zero_grad(set_to_none=True)
+                pipeline.model.optimizer.step()
+                pipeline.model.optimizer.zero_grad(set_to_none=True)
                 if pipeline.learnable_viewproj is not None:
                     pipeline.learnable_viewproj.step()
-                model.scheduler.step()
+                pipeline.model.scheduler.step()
 
         # Evaluation
         if epoch in test_epochs:
@@ -112,20 +110,19 @@ def start(lp: arguments.ModelParams, op: arguments.OptimizationParams, dp: argum
                     loaders["Testset"] = test_loader
                 for name, loader in loaders.items():
                     psnr_list = []
-                    for view_matrix, proj_matrix, frustumplane, gt_image, idx in loader:
+                    for view_matrix, proj_matrix, frustumplane, gt_image, idx_tensor in loader:
                         view_matrix = view_matrix.cuda()
                         proj_matrix = proj_matrix.cuda()
                         frustumplane = frustumplane.cuda()
                         gt_image = gt_image.cuda() / 255.0
-                        idx = idx.cuda()
 
-                        img, transmitance, _, _ = pipeline.forward(view_matrix, proj_matrix, frustumplane, model, idx_tensor, gt_image.shape[2:],False)
+                        img, transmitance, _, _ = pipeline.forward(view_matrix, proj_matrix, frustumplane, idx_tensor, gt_image.shape[2:],False)
 
                         psnr_list.append(psnr.PeakSignalNoiseRatio(data_range=(0.0, 1.0)).cuda()(img, gt_image).unsqueeze(0))
                     tqdm.write("\n[EPOCH {}] {} Evaluating: PSNR {}".format(epoch, name, torch.concat(psnr_list, dim=0).mean()))
 
         # Density control step
-        model.step(epoch)
+        pipeline.model.step(epoch)
         progress_bar.update()
 
         # Save
@@ -138,15 +135,15 @@ def start(lp: arguments.ModelParams, op: arguments.OptimizationParams, dp: argum
             else:
                 save_path = os.path.join(lp.model_path, "point_cloud", "iteration_{}".format(epoch))
 
-            model.save_ply(os.path.join(save_path, "point_cloud.ply"))
+            pipeline.model.save_ply(os.path.join(save_path, "point_cloud.ply"))
 
             if pipeline.learnable_viewproj is not None:
                 pipeline.learnable_viewproj.save(os.path.join(save_path, "viewproj.pth"))
 
         if epoch in save_checkpoint:
             os.makedirs(lp.model_path, exist_ok = True) 
-            file_path=os.path.join(lp.model_path,"chkpnt-gsmodel-{0}.pth".format(epoch))
-            torch.save(model.state_dict(),file_path)
+            file_path=os.path.join(lp.model_path,"chkpnt-{0}.pth".format(epoch))
+            torch.save(pipeline.state_dict(),file_path)
             
 
     return
