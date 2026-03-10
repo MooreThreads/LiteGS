@@ -56,8 +56,6 @@ class ParamGroup:
         return group
 
 class ModelParams(ParamGroup): 
-
-    sh_degree = 3
     _source_path = ""
     _model_path = ""
     _images = "images"
@@ -65,15 +63,15 @@ class ModelParams(ParamGroup):
     _white_background = False
     data_device = "cuda"
     eval = False
-
-class PipelineParams(ParamGroup):
-    cluster_size = 128
-    tile_size = (8,16)
-    sparse_grad = True
     device_preload = True
     enable_transmitance=False
     enable_depth=False
+
+    sh_degree = 3
+    cluster_size = 128
+    tile_size = (8,16)
     input_color_type='sh'#'rgb' or 'sh'
+    learnable_viewproj = False
     def __init__(self, parser):
         super().__init__(parser, "Pipeline Parameters")
 
@@ -87,8 +85,7 @@ class OptimizationParams(ParamGroup):
     scaling_lr = 0.005
     rotation_lr = 0.001
     lambda_dssim = 0.2
-    reg_weight = 0.0
-    learnable_viewproj = False
+    sparse_grad = True
     def __init__(self, parser):
         super().__init__(parser, "Optimization Parameters")
 
