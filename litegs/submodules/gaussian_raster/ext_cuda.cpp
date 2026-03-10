@@ -32,6 +32,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 	m.def("cull_compact_activate_nosh", &cull_compact_activate_nosh);
 	m.def("compact_sh_forward", &compact_sh_forward);
 	m.def("compact_sh_backward", &compact_sh_backward);
+	m.def("compact_sh_backward_adam", &compact_sh_backward_adam);
 	m.def("activate_backward", &activate_backward);
 	m.def("activate_backward_nosh", &activate_backward_nosh);
 	m.def("adamUpdate", &adamUpdate);

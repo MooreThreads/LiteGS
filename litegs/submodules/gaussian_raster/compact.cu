@@ -1758,3 +1758,271 @@ std::vector<at::Tensor> compact_sh_backward(
     CUDA_CHECK_ERRORS;
     return { sh_base_grad, sh_rest_grad };
 }
+
+// ============================================================================
+// Fused compact SH backward + Adam update kernel
+// ============================================================================
+template <int degree>
+__global__ void compact_sh_backward_adam_kernel(
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,    //[allocate_size]
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,    //[1]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[views_num,4,4]
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunks_num,chunk_size] (inout)
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunks_num,chunk_size] (inout)
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color_grad,    //[views_num,3,allocate_size,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_base,    //[1,3,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_base,    //[1,3,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_rest,    //[?,3,chunks_num,chunk_size]
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_rest,    //[?,3,chunks_num,chunk_size]
+    const float lr, const float b1, const float b2, const float eps
+)
+{
+    int index = threadIdx.x;
+    int chunk_id = blockIdx.x;
+    int source_chunk_id = visible_chunk_id[blockIdx.x];
+
+    if (chunk_id < visible_chunks_num[0])
+    {
+        // Compute SH backward for each view (with compact)
+        // First, accumulate gradients across all views
+        float3 dL_dsh_base_accum{0.0f, 0.0f, 0.0f};
+        float dL_dsh_rest_accum[45] = {0.0f};  // Max degree 3: (4^2 - 1) = 15 SH coefficients, 3 channels
+
+        for (int view_id = 0; view_id < view_matrix.size(0); view_id++)
+        {
+            // Calculate camera center from view matrix
+            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
+            float3 camera_center;
+            camera_center.x = inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2];
+            camera_center.y = inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2];
+            camera_center.z = inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2];
+
+            // Direction from camera to gaussian (with compact)
+            float3 dir{ position[0][source_chunk_id][index] - camera_center.x,
+                        position[1][source_chunk_id][index] - camera_center.y,
+                        position[2][source_chunk_id][index] - camera_center.z };
+            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
+            dir.x *= norm_recp;
+            dir.y *= norm_recp;
+            dir.z *= norm_recp;
+
+            float3 dL_dRGB{ color_grad[view_id][0][chunk_id][index], color_grad[view_id][1][chunk_id][index], color_grad[view_id][2][chunk_id][index] };
+
+            // Accumulate sh_base gradient
+            float dRGBdsh0 = SH_C0;
+            dL_dsh_base_accum.x += dRGBdsh0 * dL_dRGB.x;
+            dL_dsh_base_accum.y += dRGBdsh0 * dL_dRGB.y;
+            dL_dsh_base_accum.z += dRGBdsh0 * dL_dRGB.z;
+
+            if (degree > 0)
+            {
+                float x = dir.x;
+                float y = dir.y;
+                float z = dir.z;
+
+                float dRGBdsh1 = -SH_C1 * y;
+                float dRGBdsh2 = SH_C1 * z;
+                float dRGBdsh3 = -SH_C1 * x;
+
+                // SH rest indices 0-2 (degree 1)
+                dL_dsh_rest_accum[0] += dRGBdsh1 * dL_dRGB.x;
+                dL_dsh_rest_accum[1] += dRGBdsh2 * dL_dRGB.x;
+                dL_dsh_rest_accum[2] += dRGBdsh3 * dL_dRGB.x;
+                dL_dsh_rest_accum[3] += dRGBdsh1 * dL_dRGB.y;
+                dL_dsh_rest_accum[4] += dRGBdsh2 * dL_dRGB.y;
+                dL_dsh_rest_accum[5] += dRGBdsh3 * dL_dRGB.y;
+                dL_dsh_rest_accum[6] += dRGBdsh1 * dL_dRGB.z;
+                dL_dsh_rest_accum[7] += dRGBdsh2 * dL_dRGB.z;
+                dL_dsh_rest_accum[8] += dRGBdsh3 * dL_dRGB.z;
+
+                if (degree > 1)
+                {
+                    float xx = x * x, yy = y * y, zz = z * z;
+                    float xy = x * y, yz = y * z, xz = x * z;
+
+                    float dRGBdsh4 = SH_C2[0] * xy;
+                    float dRGBdsh5 = SH_C2[1] * yz;
+                    float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
+                    float dRGBdsh7 = SH_C2[3] * xz;
+                    float dRGBdsh8 = SH_C2[4] * (xx - yy);
+
+                    // SH rest indices 3-8 (degree 2)
+                    dL_dsh_rest_accum[9]  += dRGBdsh4 * dL_dRGB.x;
+                    dL_dsh_rest_accum[10] += dRGBdsh5 * dL_dRGB.x;
+                    dL_dsh_rest_accum[11] += dRGBdsh6 * dL_dRGB.x;
+                    dL_dsh_rest_accum[12] += dRGBdsh7 * dL_dRGB.x;
+                    dL_dsh_rest_accum[13] += dRGBdsh8 * dL_dRGB.x;
+                    dL_dsh_rest_accum[14] += dRGBdsh4 * dL_dRGB.y;
+                    dL_dsh_rest_accum[15] += dRGBdsh5 * dL_dRGB.y;
+                    dL_dsh_rest_accum[16] += dRGBdsh6 * dL_dRGB.y;
+                    dL_dsh_rest_accum[17] += dRGBdsh7 * dL_dRGB.y;
+                    dL_dsh_rest_accum[18] += dRGBdsh8 * dL_dRGB.y;
+                    dL_dsh_rest_accum[19] += dRGBdsh4 * dL_dRGB.z;
+                    dL_dsh_rest_accum[20] += dRGBdsh5 * dL_dRGB.z;
+                    dL_dsh_rest_accum[21] += dRGBdsh6 * dL_dRGB.z;
+                    dL_dsh_rest_accum[22] += dRGBdsh7 * dL_dRGB.z;
+                    dL_dsh_rest_accum[23] += dRGBdsh8 * dL_dRGB.z;
+
+                    if (degree > 2)
+                    {
+                        float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
+                        float dRGBdsh10 = SH_C3[1] * xy * z;
+                        float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
+                        float dRGBdsh12 = SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy);
+                        float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
+                        float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
+                        float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
+
+                        // SH rest indices 9-14 (degree 3)
+                        dL_dsh_rest_accum[24] += dRGBdsh9 * dL_dRGB.x;
+                        dL_dsh_rest_accum[25] += dRGBdsh10 * dL_dRGB.x;
+                        dL_dsh_rest_accum[26] += dRGBdsh11 * dL_dRGB.x;
+                        dL_dsh_rest_accum[27] += dRGBdsh12 * dL_dRGB.x;
+                        dL_dsh_rest_accum[28] += dRGBdsh13 * dL_dRGB.x;
+                        dL_dsh_rest_accum[29] += dRGBdsh14 * dL_dRGB.x;
+                        dL_dsh_rest_accum[30] += dRGBdsh15 * dL_dRGB.x;
+                        dL_dsh_rest_accum[31] += dRGBdsh9 * dL_dRGB.y;
+                        dL_dsh_rest_accum[32] += dRGBdsh10 * dL_dRGB.y;
+                        dL_dsh_rest_accum[33] += dRGBdsh11 * dL_dRGB.y;
+                        dL_dsh_rest_accum[34] += dRGBdsh12 * dL_dRGB.y;
+                        dL_dsh_rest_accum[35] += dRGBdsh13 * dL_dRGB.y;
+                        dL_dsh_rest_accum[36] += dRGBdsh14 * dL_dRGB.y;
+                        dL_dsh_rest_accum[37] += dRGBdsh15 * dL_dRGB.y;
+                        dL_dsh_rest_accum[38] += dRGBdsh9 * dL_dRGB.z;
+                        dL_dsh_rest_accum[39] += dRGBdsh10 * dL_dRGB.z;
+                        dL_dsh_rest_accum[40] += dRGBdsh11 * dL_dRGB.z;
+                        dL_dsh_rest_accum[41] += dRGBdsh12 * dL_dRGB.z;
+                        dL_dsh_rest_accum[42] += dRGBdsh13 * dL_dRGB.z;
+                        dL_dsh_rest_accum[43] += dRGBdsh14 * dL_dRGB.z;
+                        dL_dsh_rest_accum[44] += dRGBdsh15 * dL_dRGB.z;
+                    }
+                }
+            }
+        }
+
+        // Now perform Adam update for sh_base (only for RGB channels, sh_idx=0)
+        for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
+        {
+            float grad = (rgb_idx == 0) ? dL_dsh_base_accum.x :
+                         (rgb_idx == 1) ? dL_dsh_base_accum.y : dL_dsh_base_accum.z;
+
+            float& exp_avg = exp_avg_sh_base[0][rgb_idx][source_chunk_id][index];
+            float& exp_avg_sq = exp_avg_sq_sh_base[0][rgb_idx][source_chunk_id][index];
+            float& param = sh_base[0][rgb_idx][source_chunk_id][index];
+
+            exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
+            exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
+            float step = -lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+            param += step;
+        }
+
+        // Perform Adam update for sh_rest
+        int sh_rest_size = sh_rest.size(0);
+        for (int sh_idx = 0; sh_idx < sh_rest_size; sh_idx++)
+        {
+            for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
+            {
+                int accum_idx = sh_idx * 3 + rgb_idx;
+                float grad = dL_dsh_rest_accum[accum_idx];
+
+                float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+
+                exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
+                exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
+                float step = -lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+                param += step;
+            }
+        }
+    }
+}
+
+std::vector<at::Tensor> compact_sh_backward_adam(
+    int sh_degree,
+    at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+    at::Tensor view_matrix,
+    at::Tensor position,
+    at::Tensor sh_base, at::Tensor sh_rest,
+    at::Tensor color_grad,
+    at::Tensor exp_avg_sh_base, at::Tensor exp_avg_sq_sh_base,
+    at::Tensor exp_avg_sh_rest, at::Tensor exp_avg_sq_sh_rest,
+    float lr, float b1, float b2, float eps
+)
+{
+    int chunksize = position.size(2);
+    int allocate_chunks_num = visible_chunk_id.size(0);
+
+    switch (sh_degree)
+    {
+    case 0:
+        compact_sh_backward_adam_kernel<0> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            lr, b1, b2, eps
+        );
+        break;
+    case 1:
+        compact_sh_backward_adam_kernel<1> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            lr, b1, b2, eps
+        );
+        break;
+    case 2:
+        compact_sh_backward_adam_kernel<2> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            lr, b1, b2, eps
+        );
+        break;
+    case 3:
+        compact_sh_backward_adam_kernel<3> <<<allocate_chunks_num, chunksize, 0>>> (
+            visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+            visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
+            view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
+            sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            lr, b1, b2, eps
+        );
+        break;
+    default:
+        AT_ERROR("Unsupported sh_degree: ", sh_degree);
+    }
+    CUDA_CHECK_ERRORS;
+    return { sh_base, sh_rest };
+}

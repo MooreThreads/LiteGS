@@ -45,6 +45,19 @@ std::vector<at::Tensor> compact_sh_backward(
 	at::Tensor color_grad
 );
 
+// Fused compact SH backward + Adam update
+std::vector<at::Tensor> compact_sh_backward_adam(
+	int sh_degree,
+	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
+	at::Tensor view_matrix,
+	at::Tensor position,
+	at::Tensor sh_base, at::Tensor sh_rest,
+	at::Tensor color_grad,
+	at::Tensor exp_avg_sh_base, at::Tensor exp_avg_sq_sh_base,
+	at::Tensor exp_avg_sh_rest, at::Tensor exp_avg_sq_sh_rest,
+	float lr, float b1, float b2, float eps
+);
+
 void adamUpdate(
 	torch::Tensor param, torch::Tensor param_grad,
 	torch::Tensor exp_avg, torch::Tensor exp_avg_sq,
