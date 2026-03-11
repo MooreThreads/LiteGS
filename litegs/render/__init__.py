@@ -71,7 +71,7 @@ def render(
     view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,color:torch.Tensor,opacity:torch.Tensor,
     valid_length:torch.Tensor|None,feedback_binning_allocate_size:torch.Tensor|None,idx_tensor:torch.Tensor|None,
-    output_shape:tuple[int,int],mp:arguments.ModelParams
+    output_shape:tuple[int,int],pp:arguments.PipelineParams
 )->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
     #gs projection
@@ -88,22 +88,22 @@ def render(
     tile_start_index,sorted_pointId,primitive_visible=utils.wrapper.Binning.call_fused(
         ndc_pos,view_depth,inv_cov2d,opacity,
         valid_length,feedback_binning_allocate_size,idx_tensor,
-        output_shape,mp.tile_size
+        output_shape,pp.tile_size
     )
 
     #raster
-    tiles_x=int(math.ceil(output_shape[1]/float(mp.tile_size[1])))
-    tiles_y=int(math.ceil(output_shape[0]/float(mp.tile_size[0])))
+    tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))
+    tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size[0])))
     tiles=None
     try:
         tiles=StatisticsHelperInst.cached_sorted_tile_list[StatisticsHelperInst.cur_sample].unsqueeze(0)
     except:
         pass
     img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,tiles,
-                                            output_shape[0],output_shape[1],mp.tile_size[0],mp.tile_size[1],mp.enable_transmitance,mp.enable_depth)
+                                            output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
     
     if StatisticsHelperInst.bStart:
-        StatisticsHelperInst.update_tile_blend_count(lst_contributor,mp.tile_size[0],mp.tile_size[1])
+        StatisticsHelperInst.update_tile_blend_count(lst_contributor,pp.tile_size[0],pp.tile_size[1])
 
 
     img=img[...,:output_shape[0],:output_shape[1]].clamp(0,1).contiguous()

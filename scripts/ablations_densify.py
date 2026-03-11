@@ -58,7 +58,7 @@ img_config={
 }
 
 
-adc_config=" --densification_interval 1 --opacity_reset_interval 20 --opacity_reset_mode reset --prune_mode threshold"
+adc_config=" --interval 1 --opacity_reset_interval 20 --opacity_reset_mode reset --prune_mode threshold"
 
 ablation_configs_list=[
     "",

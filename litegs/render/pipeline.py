@@ -21,19 +21,19 @@ class RenderPipeline(nn.Module):
 
     def __init__(
         self,
-        mp: arguments.ModelParams,
+        pp: arguments.PipelineParams,
         gs_model:'GaussianSplattingModel',
         training_set: 'data.CameraFrameDataset'
     ):
         super().__init__()
-        self.mp = mp
+        self.pp = pp
         self.frames_buffer = data.FramesBuffer(training_set)
         self.model = gs_model
         self.start_epoch = 0
 
         # Learnable view-projection as sub-module
         self.learnable_viewproj: Optional[LearnableViewProj] = None
-        if mp.learnable_viewproj:
+        if pp.learnable_viewproj:
             self.learnable_viewproj = LearnableViewProj(training_set)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
@@ -67,7 +67,7 @@ class RenderPipeline(nn.Module):
         self,
         view_matrix:torch.Tensor,proj_matrix:torch.Tensor,frustumplane:torch.Tensor,
         idx_tensor:torch.Tensor,
-        output_shape: tuple[int, int],bTraining:bool
+        output_shape: tuple[int, int]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Perform Gaussian rasterization (only render, no culling/activation).
@@ -77,7 +77,7 @@ class RenderPipeline(nn.Module):
         """
         feedback_visible_chunks_num=None
         feedback_binning_allocate_size=None
-        if bTraining:
+        if self.training:
             feedback_visible_chunks_num=self.frames_buffer.feedback_visible_chunks_num
             feedback_binning_allocate_size=self.frames_buffer.feedback_binning_allocate_size
 
@@ -93,10 +93,10 @@ class RenderPipeline(nn.Module):
             view_matrix, proj_matrix,
             xyz, scale, rot, color, opacity,
             valid_length, feedback_binning_allocate_size, idx_tensor,
-            output_shape, self.mp
+            output_shape, self.pp
         )
 
-        if bTraining:
+        if self.training and self.model.is_sparse_grad:
             self.model.optimizer.update_sparse_visibility(visible_chunkid,visible_chunks_num,primitive_visible,valid_length)
 
         return img,transmitance,depth,normal

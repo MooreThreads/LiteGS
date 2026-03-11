@@ -1,0 +1,11 @@
+{
+  "opt":{
+    "iterations":10000,
+    "position_lr_max_steps":10000,
+    "position_lr_final":0.000016
+  },
+  "densify":{
+    "target_primitives":1000000,
+    "interval": 2
+  }
+}

@@ -239,14 +239,14 @@ class DensityControllerOfficial(DensityControllerBase):
     @torch.no_grad()
     def is_densify_actived(self,epoch:int):
 
-        return epoch<self.densify_params.densify_until and epoch>=self.densify_params.densify_from and (
-            epoch%self.densify_params.densification_interval==0)
+        return epoch<self.densify_params.end and epoch>=self.densify_params.start and (
+            epoch%self.densify_params.interval==0)
 
     @torch.no_grad()
     def step(self,optimizer:torch.optim.Optimizer,epoch:int):
-        if epoch<self.densify_params.densify_until and epoch>=self.densify_params.densify_from:
+        if epoch<self.densify_params.end and epoch>=self.densify_params.start:
             bUpdate=False
-            if epoch%self.densify_params.densification_interval==0:
+            if epoch%self.densify_params.interval==0:
                 self.split_and_clone(optimizer,epoch)
                 self.prune(optimizer,epoch)
                 bUpdate=True
@@ -301,7 +301,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
 
         prune_num=self.get_prune_mask(opacity.sigmoid(),scale.exp()).sum()
 
-        cur_target_count = (self.target_points_num - self.init_points_num) / (self.densify_params.densify_until - self.densify_params.densify_from) * (epoch-self.densify_params.densify_from)+self.init_points_num
+        cur_target_count = (self.target_points_num - self.init_points_num) / (self.densify_params.end - self.densify_params.start) * (epoch-self.densify_params.start)+self.init_points_num
         budget=min(max(int(cur_target_count-xyz.shape[-1]),1)+prune_num,xyz.shape[-1])
 
         score=self.get_score(xyz,scale,rot,sh_0,sh_rest,opacity)

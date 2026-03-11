@@ -72,15 +72,8 @@ img_folder={
     "deepblending":"images",
 }
 
-custom_config={
-    "mipnerf360_indoor":" ",
-    "mipnerf360_outdoor":" ",
-    "tanksandtemples":" --iterations 40000 --position_lr_max_steps 40000",#follow 3d student splatting and scooping
-    "deepblending":" ",
-}
-
-training_args_tempalte="-s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} -i {3}"
-eval_args_template="-s {0} -m {1} --sh_degree 3 -i {2} --eval"
+training_args_tempalte="-s {0} -m {1} --dataset.eval --densify.target_primitives {2} -i {3}"
+eval_args_template="--config-path {0}"
 take_time_pattern = r"takes:\s*([+-]?\d+(?:\.\d+)?)"
 eval_pattern = r"(SSIM|PSNR|LPIPS)\s*:\s*([+-]?\d+(?:\.\d+)?)"
 csv_header=["scene","primitives","repeat_i","time","SSIM_train","PSNR_train","LPIPS_train","SSIM_test","PSNR_test","LPIPS_test"]
@@ -114,7 +107,7 @@ for dataset,scenes in datasets.items():
                 if not os.path.exists(scene_output_path): 
                     print("Output path {} does not exist, skipping evaluation for scene {}, primitives {}, repeat {}".format(scene_output_path, scene_name, target_primitives, i))
                     continue
-                eval_args=eval_args_template.format(scene_input_path,scene_output_path,img_folder[dataset])
+                eval_args=eval_args_template.format(os.path.join(scene_output_path,"finish","eval_config.json"))
                 process = subprocess.Popen(["python","example_metrics.py"]+eval_args.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 stdout, stderr = process.communicate()
                 matches = re.findall(eval_pattern, stdout)

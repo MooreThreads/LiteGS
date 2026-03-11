@@ -4,3 +4,5 @@ tqdm
 pillow
 opencv-python
 matplotlib
+tyro
+mashumaro

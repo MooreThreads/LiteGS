@@ -16,19 +16,19 @@ import re
 import csv
 
 scene_primitive = {
-    "bicycle": 1000000,#54275
-    "flowers": 1000000,#38347
-    "garden": 1000000,#138766
-    "stump": 1000000,#32049
-    "treehill": 1000000,#52363
-    "room": 1000000,#112627
-    "counter": 1000000,#155767
-    "kitchen": 1000000,#241367
-    "bonsai": 1000000,#206613
-    "truck": 1000000,#136029
-    "train": 1000000,#182686
-    "drjohnson": 1000000,#80861
-    "playroom": 1000000#37005
+    "bicycle": 1000000,
+    "flowers": 1000000,
+    "garden": 1000000,
+    "stump": 1000000,
+    "treehill": 1000000,
+    "room": 1000000,
+    "counter": 1000000,
+    "kitchen": 1000000,
+    "bonsai": 1000000,
+    "truck": 1000000,
+    "train": 1000000,
+    "drjohnson": 1000000,
+    "playroom": 1000000
 }
 
 images={
@@ -71,10 +71,8 @@ img_folder={
     "deepblending":"images",
 }
 
-fast_config="--iterations 10000 --position_lr_max_steps 10000 --position_lr_final 0.000016 --densification_interval 2"
-
-training_args_tempalte="-s {0} -m {1} --eval --sh_degree 3 --target_primitives {2} -i {3} "+fast_config
-eval_args_template="-s {0} -m {1} --sh_degree 3 -i {2} --eval"
+training_args_tempalte="-s {0} -m {1} --dataset.eval --densify.target_primitives {2} -i {3} --config-path ./litegs/config/aggressive.json"
+eval_args_template="--config-path {0}"
 take_time_pattern = r"takes:\s*([+-]?\d+(?:\.\d+)?)"
 eval_pattern = r"(SSIM|PSNR|LPIPS)\s*:\s*([+-]?\d+(?:\.\d+)?)"
 csv_header=["scene","primitives","repeat_i","time","SSIM_train","PSNR_train","LPIPS_train","SSIM_test","PSNR_test","LPIPS_test"]
@@ -109,7 +107,7 @@ if not args.skip_training:
                 if not os.path.exists(scene_output_path): 
                     print("Output path {} does not exist, skipping evaluation for scene {}, primitives {}, repeat {}".format(scene_output_path, scene_name, target_primitives, i))
                     continue
-                eval_args=eval_args_template.format(scene_input_path,scene_output_path,img_folder[dataset])
+                eval_args=eval_args_template.format(os.path.join(scene_output_path,"finish","eval_config.json"))
                 process = subprocess.Popen(["python","example_metrics.py"]+eval_args.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 stdout, stderr = process.communicate()
                 matches = re.findall(eval_pattern, stdout)

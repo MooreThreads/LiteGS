@@ -18,13 +18,13 @@ def cluster_points(chunksize,*args:torch.Tensor) -> tuple[torch.Tensor, ...]:
             input=torch.concat([input,input[...,-padding_num:]],dim=-1).contiguous()
         chunks_num=int(input.shape[-1]/chunksize)
         output.append(input.view(*input.shape[:-1],chunks_num,chunksize))
-    return *output,
+    return output
 
 def uncluster(*args:torch.Tensor)->tuple[torch.Tensor, ...]:
     output=[]
     for input in args:
         output.append(input.view(*input.shape[:-2],input.shape[-1]*input.shape[-2]))
-    return *output,
+    return output
 
 @torch.no_grad()
 def get_cluster_AABB(clustered_xyz:torch.Tensor,clustered_scale:torch.Tensor,clustered_rot:torch.Tensor)->tuple[torch.Tensor,torch.Tensor]:

@@ -94,14 +94,14 @@ def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
     if optimizer is None:
         #tensor
         if bClustered:
-            args=cluster.uncluster(args)
+            args=cluster.uncluster(*args)
         refined_xyz=xyz[...,indices]
         refined_tensors=[refined_xyz,]
         for tensor in args:
             refined_tensors.append(tensor[...,indices])
         if bClustered:
-            refined_tensors=cluster.cluster_points(chunk_size,refined_tensors)
-        return *refined_tensors,
+            refined_tensors = cluster.cluster_points(chunk_size,*refined_tensors)
+        return refined_tensors
     else:
         #optimizer
         for param_group in optimizer.param_groups:

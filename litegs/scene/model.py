@@ -8,6 +8,8 @@ from .. import io_manager
 from .. import render
 from ..training import optimizer as opt_module
 from ..training import densify
+from .. import utils
+from ..utils.statistic_helper import StatisticsHelperInst
 
 
 class GaussianSplattingModel(nn.Module):
@@ -15,32 +17,71 @@ class GaussianSplattingModel(nn.Module):
     Manages Gaussian splatting parameters, clustering, optimizer and scheduler.
     Inherits nn.Module to provide forward() for culling + activation.
     """
+    @classmethod
+    def from_arrays(
+        cls,
+        init_xyz: torch.Tensor,init_color: torch.Tensor,
+        mp: arguments.ModelParams,
+        norm_radius: float,
+        op: arguments.OptimizationParams,
+        dp: arguments.DensifyParams):
+
+        assert init_xyz.shape[0] == init_color.shape[0]
+        xyz, scale, rot, sh_0, sh_rest, opacity =  scene.create_gaussians(init_xyz, init_color, mp.sh_degree)
+        active_sh_degree=0
+        model=cls(
+            xyz, scale, rot, sh_0, sh_rest, opacity,
+            active_sh_degree,
+            mp,
+            norm_radius,op,dp
+        )
+        return model
+    
+    @classmethod
+    def from_ply(
+        cls,
+        ply_path:str,
+        mp: arguments.ModelParams,
+        norm_radius: None|float,#for training
+        op: None|arguments.OptimizationParams,#for training
+        dp: None|arguments.DensifyParams#for training
+    ):
+        xyz,scale,rot,sh_0,sh_rest,opacity=io_manager.load_ply(ply_path,mp.sh_degree)
+        xyz=torch.Tensor(xyz).cuda()
+        scale=torch.Tensor(scale).cuda()
+        rot=torch.Tensor(rot).cuda()
+        sh_0=torch.Tensor(sh_0).cuda()
+        sh_rest=torch.Tensor(sh_rest).cuda()
+        opacity=torch.Tensor(opacity).cuda()
+
+        active_sh_degree=mp.sh_degree
+        model=cls(
+            xyz, scale, rot, sh_0, sh_rest, opacity,
+            active_sh_degree,
+            mp,
+            norm_radius,op,dp
+        )
+
+        return model
 
     def __init__(
         self,
-        init_xyz: torch.Tensor,
-        init_color: torch.Tensor,
-        sh_degree: int,
-        norm_radius: float,
-        op: arguments.OptimizationParams,
+        xyz, scale, rot, sh_0, sh_rest, opacity,
+        active_sh_degree:int,
         mp: arguments.ModelParams,
-        dp: arguments.DensifyParams,
-        init_points_num: int
+        norm_radius: None|float,#for training
+        op: None|arguments.OptimizationParams,#for training
+        dp: None|arguments.DensifyParams#for training
     ):
         super().__init__()
-        self.mp = mp
-        self.op = op
-        self.init_points_num = init_points_num
+        self.cluster_size = mp.cluster_size
+        self.sh_degree = mp.sh_degree
 
 
-        # Initialize from scratch
-        xyz, scale, rot, sh_0, sh_rest, opacity = \
-            scene.create_gaussians(init_xyz, init_color, sh_degree)
-
-        # Amply clustering if needed
-        if mp.cluster_size > 0:
-            xyz, scale, rot, sh_0, sh_rest, opacity = \
-                scene.cluster.cluster_points(mp.cluster_size, xyz, scale, rot, sh_0, sh_rest, opacity)
+        cur_points_num=xyz.shape[-1]
+        if self.cluster_size > 0:
+            xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.cluster_points(self.cluster_size, xyz, scale, rot, sh_0, sh_rest, opacity)
+            cur_points_num=xyz.shape[-1]*xyz.shape[-2]
 
         # Register as parameters
         self.xyz = nn.Parameter(xyz)
@@ -51,22 +92,28 @@ class GaussianSplattingModel(nn.Module):
         self.opacity = nn.Parameter(opacity)
 
         # Create optimizer, scheduler and density controller
-        self.optimizer, self.scheduler = opt_module.get_optimizer(
-            self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity,
-            norm_radius, op, mp
-        )
-        self.density_controller = densify.DensityControllerTamingGS(
-            norm_radius, dp, mp.cluster_size > 0, init_points_num
-        )
+        if op is not None:
+            self.optimizer, self.scheduler = opt_module.get_optimizer(
+                self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity,
+                norm_radius, op, self.cluster_size>0
+            )
+            self.is_sparse_grad = op.sparse_grad
+        else:
+            self.is_sparse_grad = True
+            self.optimizer=None
+            self.scheduler=None
+        
+        if dp is not None:
+            self.density_controller = densify.DensityControllerTamingGS(
+                norm_radius, dp, self.cluster_size > 0, cur_points_num
+            )
+        else:
+            self.density_controller=None
 
-        self.active_sh_degree = 0
-        self.update_cluster_aabb()
+        self.active_sh_degree = active_sh_degree
+        self.spatial_rearrange()
 
         return
-
-    def get_params(self):
-        """Return all Gaussian parameters."""
-        return self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity
 
     def state_dict(self,destination=None, prefix='', keep_vars=False):
         """
@@ -125,7 +172,7 @@ class GaussianSplattingModel(nn.Module):
 
     def update_cluster_aabb(self) -> None:
         """Update cluster AABB based on current scale and rotation."""
-        if self.mp.cluster_size > 0:
+        if self.cluster_size > 0:
             cluster_origin, cluster_extend = scene.cluster.get_cluster_AABB(
                 self.xyz, self.scale.exp(), nn.functional.normalize(self.rot, dim=0)
             )
@@ -133,26 +180,42 @@ class GaussianSplattingModel(nn.Module):
             self.cluster_extend = cluster_extend
         return
 
+    @torch.no_grad()
     def spatial_rearrange(self) -> None:
-        (self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity) = \
-            scene.spatial_refine(self.mp.cluster_size > 0, self.optimizer, self.xyz)
+        if self.optimizer is None:
+            (
+                self.xyz.data, self.scale.data, self.rot.data, 
+                self.sh_0.data, self.sh_rest.data, 
+                self.opacity.data
+            ) = scene.spatial_refine(
+                self.cluster_size > 0, 
+                None,
+                self.xyz, self.scale, self.rot, 
+                self.sh_0, self.sh_rest, 
+                self.opacity
+            )
+        else:
+            (
+                self.xyz, self.scale, self.rot, 
+                self.sh_0, self.sh_rest, 
+                self.opacity
+            ) = scene.spatial_refine(self.cluster_size > 0, self.optimizer, self.xyz)
+        self.update_cluster_aabb()
         return
 
-    def step(self, epoch: int):
+    def densify_step(self, epoch: int):
         """
         Perform density control step (densify, prune, opacity reset).
         Returns updated parameters.
         """
         
-        self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity = \
-            self.density_controller.step(self.optimizer, epoch)
+        self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity = self.density_controller.step(self.optimizer, epoch)
         
-        if epoch % self.density_controller.densify_params.densification_interval == 0:
+        if epoch % self.density_controller.densify_params.interval == 0:
             self.spatial_rearrange()
-            self.update_cluster_aabb()
 
-        if self.active_sh_degree < self.mp.sh_degree:
-            self.active_sh_degree = min(int(epoch / 5), self.mp.sh_degree)
+        if self.active_sh_degree < self.sh_degree:
+            self.active_sh_degree = min(int(epoch / 5), self.sh_degree)
 
         return
 
@@ -167,31 +230,70 @@ class GaussianSplattingModel(nn.Module):
         Perform culling + activation (render_preprocess).
 
         Returns:
-            visible_chunkid, visible_chunks_num, culled_xyz, culled_scale, culled_rot, color, culled_opacity
+            visible_chunkid, visible_chunks_num,  xyz,  scale,  rot, color,  opacity
         """
-        xyz, scale, rot, sh_0, sh_rest, opacity = self.get_params()
+        
+        visible_chunkid=None
+        visible_chunks_num=None
+        if self.training==False:
+            feedback_visible_chunks_num=None
+        
+        if self.cluster_size>0:
+            visibility,visible_chunks_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb(
+                self.cluster_origin,self.cluster_extend,frustumplane,
+                feedback_visible_chunks_num,idx_tensor
+            )
+            if StatisticsHelperInst.bStart:
+                StatisticsHelperInst.set_compact_mask(visible_chunkid,visible_chunks_num)
 
-        (
-            visible_chunkid, visible_chunks_num,
-            culled_xyz, culled_scale, culled_rot, culled_color, culled_opacity
-        ) = render.render_preprocess(
-            self.cluster_origin, self.cluster_extend, frustumplane, view_matrix,
-            xyz, scale, rot, sh_0, sh_rest, opacity,
-            feedback_visible_chunks_num, idx_tensor,
-            self.mp.cluster_size>0,self.op.sparse_grad, self.active_sh_degree
-        )
+            #  xyz, scale, rot,color, opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
+            #     pp.sparse_grad,actived_sh_degree,
+            #     visible_chunkid,visible_chunks_num,
+            #     view_matrix,
+            #     xyz,scale,rot,sh_0,sh_rest,opacity
+            # )
+
+            # Step 1: Compact + Activate (without SH)
+            xyz, scale, rot, opacity=utils.wrapper.CompactActivateNoSH.apply(
+                self.is_sparse_grad,
+                visible_chunkid,visible_chunks_num,
+                self.xyz,self.scale,self.rot,self.opacity
+            )
+
+            # Step 2: Compact + SH (using activated position for view direction)
+            color=utils.wrapper.CompactSH.apply(
+                self.is_sparse_grad,
+                self.active_sh_degree,
+                visible_chunkid,visible_chunks_num,
+                view_matrix,
+                self.xyz,self.sh_0,self.sh_rest
+            )
+
+            xyz, scale, rot,color, opacity=scene.cluster.uncluster( xyz, scale, rot,color, opacity)  
+        else:
+            pad_one=torch.ones((1,self.xyz.shape[-1]),dtype=self.xyz.dtype,device=self.xyz.device)
+            xyz=torch.concat((self.xyz,pad_one),dim=0)
+            scale=self.scale.exp()
+            rot=torch.nn.functional.normalize(self.rot,dim=0)
+            opacity=self.opacity.sigmoid()
+            with torch.no_grad():
+                camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
+                dirs= xyz[:3]-camera_center.unsqueeze(-1)
+                dirs=torch.nn.functional.normalize(dirs,dim=-2)
+            color=utils.wrapper.SphericalHarmonicToRGB.call_fused(self.active_sh_degree,self.sh_0,self.sh_rest,dirs)
+
 
         if visible_chunks_num is not None:
-            valid_length = visible_chunks_num * self.mp.cluster_size
+            valid_length = visible_chunks_num * self.cluster_size
 
         return (
             visible_chunkid, visible_chunks_num,valid_length,
-            culled_xyz, culled_scale, culled_rot, culled_color, culled_opacity
+            xyz, scale, rot, color, opacity
         )
 
     def save_ply(self, save_path: str):
         """Save Gaussian parameters to PLY file."""
-        if self.mp.cluster_size > 0:
+        if self.cluster_size > 0:
             tensors = scene.cluster.uncluster(
                 self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity
             )
