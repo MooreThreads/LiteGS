@@ -458,8 +458,6 @@ class GaussiansRasterFunc(torch.autograd.Function):
 
         if enable_depth==False:
             depth=None
-        if enable_transmitance==False:
-            transmitance=None
         normal=None
         return img,transmitance,depth,normal,lst_contributor
 
