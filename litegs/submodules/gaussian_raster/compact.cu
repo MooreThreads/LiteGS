@@ -1764,148 +1764,62 @@ std::vector<at::Tensor> compact_sh_backward(
 // ============================================================================
 template <int degree>
 __global__ void compact_sh_backward_adam_kernel(
-    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,    //[allocate_size]
-    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,    //[1]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,    //[views_num,4,4]
-    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,    //[3,chunks_num,chunk_size]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,    //[1,3,chunks_num,chunk_size] (inout)
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,    //[?,3,chunks_num,chunk_size] (inout)
-    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color_grad,    //[views_num,3,allocate_size,chunk_size]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_base,    //[1,3,chunks_num,chunk_size]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_base,    //[1,3,chunks_num,chunk_size]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_rest,    //[?,3,chunks_num,chunk_size]
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_rest,    //[?,3,chunks_num,chunk_size]
-    const float sh_base_lr,const float sh_rest_lr, const float b1, const float b2, const float eps
+    const torch::PackedTensorAccessor32<int64_t, 1, torch::RestrictPtrTraits> visible_chunk_id,
+    const torch::PackedTensorAccessor32<int, 1, torch::RestrictPtrTraits> visible_chunks_num,
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> view_matrix,
+    const torch::PackedTensorAccessor32<float, 3, torch::RestrictPtrTraits> position,
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_base,
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> sh_rest,
+    const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color_grad,
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_base,
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_base,
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_rest,
+    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_rest,
+    const float sh_base_lr, const float sh_rest_lr, const float b1, const float b2, const float eps
 )
 {
     int index = threadIdx.x;
     int chunk_id = blockIdx.x;
-    int source_chunk_id = visible_chunk_id[blockIdx.x];
 
-    if (chunk_id < visible_chunks_num[0])
+    // 【安全修复】：原代码在这里直接取 visible_chunk_id[chunk_id]，如果越界会触发非法内存访问
+    // 必须先做边界检查，再读取！
+    if (chunk_id >= visible_chunks_num[0]) return;
+
+    int source_chunk_id = visible_chunk_id[chunk_id];
+    int views_count = view_matrix.size(0);
+
+    // 【访存优化】：提前把 position 读进寄存器缓存，避免后面各个 degree 循环里重复去 Global Memory 取数据
+    float3 pos = {
+        position[0][source_chunk_id][index],
+        position[1][source_chunk_id][index],
+        position[2][source_chunk_id][index]
+    };
+
+    // ==========================================
+    // Degree 0 (SH Base)
+    // ==========================================
     {
-        // Compute SH backward for each view (with compact)
-        // First, accumulate gradients across all views
-        float3 dL_dsh_base_accum{0.0f, 0.0f, 0.0f};
-        float dL_dsh_rest_accum[45] = {0.0f};  // Max degree 3: (4^2 - 1) = 15 SH coefficients, 3 channels
+        float3 dL_dsh_base_accum{ 0.0f, 0.0f, 0.0f };
+        float dRGBdsh0 = SH_C0;
 
-        for (int view_id = 0; view_id < view_matrix.size(0); view_id++)
+        for (int view_id = 0; view_id < views_count; view_id++)
         {
-            // Calculate camera center from view matrix
-            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
-            float3 camera_center;
-            camera_center.x = inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2];
-            camera_center.y = inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2];
-            camera_center.z = inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2];
+            float3 dL_dRGB{
+                color_grad[view_id][0][chunk_id][index],
+                color_grad[view_id][1][chunk_id][index],
+                color_grad[view_id][2][chunk_id][index]
+            };
 
-            // Direction from camera to gaussian (with compact)
-            float3 dir{ position[0][source_chunk_id][index] - camera_center.x,
-                        position[1][source_chunk_id][index] - camera_center.y,
-                        position[2][source_chunk_id][index] - camera_center.z };
-            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
-            dir.x *= norm_recp;
-            dir.y *= norm_recp;
-            dir.z *= norm_recp;
-
-            float3 dL_dRGB{ color_grad[view_id][0][chunk_id][index], color_grad[view_id][1][chunk_id][index], color_grad[view_id][2][chunk_id][index] };
-
-            // Accumulate sh_base gradient
-            float dRGBdsh0 = SH_C0;
             dL_dsh_base_accum.x += dRGBdsh0 * dL_dRGB.x;
             dL_dsh_base_accum.y += dRGBdsh0 * dL_dRGB.y;
             dL_dsh_base_accum.z += dRGBdsh0 * dL_dRGB.z;
-
-            if (degree > 0)
-            {
-                float x = dir.x;
-                float y = dir.y;
-                float z = dir.z;
-
-                float dRGBdsh1 = -SH_C1 * y;
-                float dRGBdsh2 = SH_C1 * z;
-                float dRGBdsh3 = -SH_C1 * x;
-
-                // SH rest indices 0-2 (degree 1)
-                dL_dsh_rest_accum[0] += dRGBdsh1 * dL_dRGB.x;
-                dL_dsh_rest_accum[1] += dRGBdsh2 * dL_dRGB.x;
-                dL_dsh_rest_accum[2] += dRGBdsh3 * dL_dRGB.x;
-                dL_dsh_rest_accum[3] += dRGBdsh1 * dL_dRGB.y;
-                dL_dsh_rest_accum[4] += dRGBdsh2 * dL_dRGB.y;
-                dL_dsh_rest_accum[5] += dRGBdsh3 * dL_dRGB.y;
-                dL_dsh_rest_accum[6] += dRGBdsh1 * dL_dRGB.z;
-                dL_dsh_rest_accum[7] += dRGBdsh2 * dL_dRGB.z;
-                dL_dsh_rest_accum[8] += dRGBdsh3 * dL_dRGB.z;
-
-                if (degree > 1)
-                {
-                    float xx = x * x, yy = y * y, zz = z * z;
-                    float xy = x * y, yz = y * z, xz = x * z;
-
-                    float dRGBdsh4 = SH_C2[0] * xy;
-                    float dRGBdsh5 = SH_C2[1] * yz;
-                    float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
-                    float dRGBdsh7 = SH_C2[3] * xz;
-                    float dRGBdsh8 = SH_C2[4] * (xx - yy);
-
-                    // SH rest indices 3-8 (degree 2)
-                    dL_dsh_rest_accum[9]  += dRGBdsh4 * dL_dRGB.x;
-                    dL_dsh_rest_accum[10] += dRGBdsh5 * dL_dRGB.x;
-                    dL_dsh_rest_accum[11] += dRGBdsh6 * dL_dRGB.x;
-                    dL_dsh_rest_accum[12] += dRGBdsh7 * dL_dRGB.x;
-                    dL_dsh_rest_accum[13] += dRGBdsh8 * dL_dRGB.x;
-                    dL_dsh_rest_accum[14] += dRGBdsh4 * dL_dRGB.y;
-                    dL_dsh_rest_accum[15] += dRGBdsh5 * dL_dRGB.y;
-                    dL_dsh_rest_accum[16] += dRGBdsh6 * dL_dRGB.y;
-                    dL_dsh_rest_accum[17] += dRGBdsh7 * dL_dRGB.y;
-                    dL_dsh_rest_accum[18] += dRGBdsh8 * dL_dRGB.y;
-                    dL_dsh_rest_accum[19] += dRGBdsh4 * dL_dRGB.z;
-                    dL_dsh_rest_accum[20] += dRGBdsh5 * dL_dRGB.z;
-                    dL_dsh_rest_accum[21] += dRGBdsh6 * dL_dRGB.z;
-                    dL_dsh_rest_accum[22] += dRGBdsh7 * dL_dRGB.z;
-                    dL_dsh_rest_accum[23] += dRGBdsh8 * dL_dRGB.z;
-
-                    if (degree > 2)
-                    {
-                        float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
-                        float dRGBdsh10 = SH_C3[1] * xy * z;
-                        float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
-                        float dRGBdsh12 = SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy);
-                        float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
-                        float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
-                        float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
-
-                        // SH rest indices 9-14 (degree 3)
-                        dL_dsh_rest_accum[24] += dRGBdsh9 * dL_dRGB.x;
-                        dL_dsh_rest_accum[25] += dRGBdsh10 * dL_dRGB.x;
-                        dL_dsh_rest_accum[26] += dRGBdsh11 * dL_dRGB.x;
-                        dL_dsh_rest_accum[27] += dRGBdsh12 * dL_dRGB.x;
-                        dL_dsh_rest_accum[28] += dRGBdsh13 * dL_dRGB.x;
-                        dL_dsh_rest_accum[29] += dRGBdsh14 * dL_dRGB.x;
-                        dL_dsh_rest_accum[30] += dRGBdsh15 * dL_dRGB.x;
-                        dL_dsh_rest_accum[31] += dRGBdsh9 * dL_dRGB.y;
-                        dL_dsh_rest_accum[32] += dRGBdsh10 * dL_dRGB.y;
-                        dL_dsh_rest_accum[33] += dRGBdsh11 * dL_dRGB.y;
-                        dL_dsh_rest_accum[34] += dRGBdsh12 * dL_dRGB.y;
-                        dL_dsh_rest_accum[35] += dRGBdsh13 * dL_dRGB.y;
-                        dL_dsh_rest_accum[36] += dRGBdsh14 * dL_dRGB.y;
-                        dL_dsh_rest_accum[37] += dRGBdsh15 * dL_dRGB.y;
-                        dL_dsh_rest_accum[38] += dRGBdsh9 * dL_dRGB.z;
-                        dL_dsh_rest_accum[39] += dRGBdsh10 * dL_dRGB.z;
-                        dL_dsh_rest_accum[40] += dRGBdsh11 * dL_dRGB.z;
-                        dL_dsh_rest_accum[41] += dRGBdsh12 * dL_dRGB.z;
-                        dL_dsh_rest_accum[42] += dRGBdsh13 * dL_dRGB.z;
-                        dL_dsh_rest_accum[43] += dRGBdsh14 * dL_dRGB.z;
-                        dL_dsh_rest_accum[44] += dRGBdsh15 * dL_dRGB.z;
-                    }
-                }
-            }
         }
 
-        // Now perform Adam update for sh_base (only for RGB channels, sh_idx=0)
+        // 算完马上执行 Adam 并清空逻辑
         for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
         {
             float grad = (rgb_idx == 0) ? dL_dsh_base_accum.x :
-                         (rgb_idx == 1) ? dL_dsh_base_accum.y : dL_dsh_base_accum.z;
+                (rgb_idx == 1) ? dL_dsh_base_accum.y : dL_dsh_base_accum.z;
 
             float& exp_avg = exp_avg_sh_base[0][rgb_idx][source_chunk_id][index];
             float& exp_avg_sq = exp_avg_sq_sh_base[0][rgb_idx][source_chunk_id][index];
@@ -1913,39 +1827,180 @@ __global__ void compact_sh_backward_adam_kernel(
 
             exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
             exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
-            float step = -sh_base_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
-            param += step;
+            param += -sh_base_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+        }
+    } // <-- 离开作用域，dL_dsh_base_accum 占用的寄存器被立即释放！
+
+    // ==========================================
+    // Degree 1 (SH Rest indices 0~2)
+    // ==========================================
+    if (degree > 0)
+    {
+        // 局部累加数组，仅占用 9 个 float 寄存器
+        float dL_dsh_rest_accum[3][3] = { 0.0f };
+
+        for (int view_id = 0; view_id < views_count; view_id++)
+        {
+            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
+            float3 camera_center{
+                inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2],
+                inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2],
+                inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2]
+            };
+
+            float3 dir{ pos.x - camera_center.x, pos.y - camera_center.y, pos.z - camera_center.z };
+            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
+            float x = dir.x * norm_recp;
+            float y = dir.y * norm_recp;
+            float z = dir.z * norm_recp;
+
+            float3 dL_dRGB{
+                color_grad[view_id][0][chunk_id][index],
+                color_grad[view_id][1][chunk_id][index],
+                color_grad[view_id][2][chunk_id][index]
+            };
+
+            float dRGBdsh1 = -SH_C1 * y;
+            float dRGBdsh2 = SH_C1 * z;
+            float dRGBdsh3 = -SH_C1 * x;
+
+            dL_dsh_rest_accum[0][0] += dRGBdsh1 * dL_dRGB.x; dL_dsh_rest_accum[0][1] += dRGBdsh1 * dL_dRGB.y; dL_dsh_rest_accum[0][2] += dRGBdsh1 * dL_dRGB.z;
+            dL_dsh_rest_accum[1][0] += dRGBdsh2 * dL_dRGB.x; dL_dsh_rest_accum[1][1] += dRGBdsh2 * dL_dRGB.y; dL_dsh_rest_accum[1][2] += dRGBdsh2 * dL_dRGB.z;
+            dL_dsh_rest_accum[2][0] += dRGBdsh3 * dL_dRGB.x; dL_dsh_rest_accum[2][1] += dRGBdsh3 * dL_dRGB.y; dL_dsh_rest_accum[2][2] += dRGBdsh3 * dL_dRGB.z;
         }
 
-        // Perform Adam update for sh_rest
-        int sh_rest_size = sh_rest.size(0);
-        for (int sh_idx = 0; sh_idx < sh_rest_size; sh_idx++)
+        // 立即执行 Adam 更新
+        for (int local_idx = 0; local_idx < 3; local_idx++)
         {
+            int sh_idx = 0 + local_idx; // Degree 1 的绝对索引为 0~2
             for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
             {
-                int accum_idx = 0;
-                if (sh_idx < 3) {
-                    // Degree 1 (sh_idx: 0~2) 共 3 项
-                    accum_idx = 0 + rgb_idx * 3 + (sh_idx - 0);
-                }
-                else if (sh_idx < 8) {
-                    // Degree 2 (sh_idx: 3~7) 共 5 项，起始索引为 9
-                    accum_idx = 9 + rgb_idx * 5 + (sh_idx - 3);
-                }
-                else {
-                    // Degree 3 (sh_idx: 8~14) 共 7 项，起始索引为 24
-                    accum_idx = 24 + rgb_idx * 7 + (sh_idx - 8);
-                }
-                float grad = dL_dsh_rest_accum[accum_idx];
-
+                float grad = dL_dsh_rest_accum[local_idx][rgb_idx];
                 float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
                 float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
                 float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
 
                 exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
                 exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
-                float step = -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
-                param += step;
+                param += -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+            }
+        }
+    } // <-- Degree 1 的 9 个寄存器释放
+
+    // ==========================================
+    // Degree 2 (SH Rest indices 3~7)
+    // ==========================================
+    if (degree > 1)
+    {
+        // 局部累加数组，占用 15 个 float 寄存器 (与上面的 Degree 1 物理复用)
+        float dL_dsh_rest_accum[5][3] = { 0.0f };
+
+        for (int view_id = 0; view_id < views_count; view_id++)
+        {
+            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
+            float3 camera_center{
+                inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2],
+                inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2],
+                inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2]
+            };
+
+            float3 dir{ pos.x - camera_center.x, pos.y - camera_center.y, pos.z - camera_center.z };
+            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
+            float x = dir.x * norm_recp, y = dir.y * norm_recp, z = dir.z * norm_recp;
+
+            float3 dL_dRGB{ color_grad[view_id][0][chunk_id][index], color_grad[view_id][1][chunk_id][index], color_grad[view_id][2][chunk_id][index] };
+
+            float xx = x * x, yy = y * y, zz = z * z;
+            float xy = x * y, yz = y * z, xz = x * z;
+
+            float dRGBdsh4 = SH_C2[0] * xy;
+            float dRGBdsh5 = SH_C2[1] * yz;
+            float dRGBdsh6 = SH_C2[2] * (2.f * zz - xx - yy);
+            float dRGBdsh7 = SH_C2[3] * xz;
+            float dRGBdsh8 = SH_C2[4] * (xx - yy);
+
+            dL_dsh_rest_accum[0][0] += dRGBdsh4 * dL_dRGB.x; dL_dsh_rest_accum[0][1] += dRGBdsh4 * dL_dRGB.y; dL_dsh_rest_accum[0][2] += dRGBdsh4 * dL_dRGB.z;
+            dL_dsh_rest_accum[1][0] += dRGBdsh5 * dL_dRGB.x; dL_dsh_rest_accum[1][1] += dRGBdsh5 * dL_dRGB.y; dL_dsh_rest_accum[1][2] += dRGBdsh5 * dL_dRGB.z;
+            dL_dsh_rest_accum[2][0] += dRGBdsh6 * dL_dRGB.x; dL_dsh_rest_accum[2][1] += dRGBdsh6 * dL_dRGB.y; dL_dsh_rest_accum[2][2] += dRGBdsh6 * dL_dRGB.z;
+            dL_dsh_rest_accum[3][0] += dRGBdsh7 * dL_dRGB.x; dL_dsh_rest_accum[3][1] += dRGBdsh7 * dL_dRGB.y; dL_dsh_rest_accum[3][2] += dRGBdsh7 * dL_dRGB.z;
+            dL_dsh_rest_accum[4][0] += dRGBdsh8 * dL_dRGB.x; dL_dsh_rest_accum[4][1] += dRGBdsh8 * dL_dRGB.y; dL_dsh_rest_accum[4][2] += dRGBdsh8 * dL_dRGB.z;
+        }
+
+        // 立即执行 Adam 更新
+        for (int local_idx = 0; local_idx < 5; local_idx++)
+        {
+            int sh_idx = 3 + local_idx; // Degree 2 的绝对索引为 3~7
+            for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
+            {
+                float grad = dL_dsh_rest_accum[local_idx][rgb_idx];
+                float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+
+                exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
+                exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
+                param += -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+            }
+        }
+    } // <-- Degree 2 寄存器释放
+
+    // ==========================================
+    // Degree 3 (SH Rest indices 8~14)
+    // ==========================================
+    if (degree > 2)
+    {
+        // 局部累加数组，占用 21 个 float 寄存器
+        float dL_dsh_rest_accum[7][3] = { 0.0f };
+
+        for (int view_id = 0; view_id < views_count; view_id++)
+        {
+            float3 inv_trans{ -view_matrix[view_id][3][0], -view_matrix[view_id][3][1], -view_matrix[view_id][3][2] };
+            float3 camera_center{
+                inv_trans.x * view_matrix[view_id][0][0] + inv_trans.y * view_matrix[view_id][0][1] + inv_trans.z * view_matrix[view_id][0][2],
+                inv_trans.x * view_matrix[view_id][1][0] + inv_trans.y * view_matrix[view_id][1][1] + inv_trans.z * view_matrix[view_id][1][2],
+                inv_trans.x * view_matrix[view_id][2][0] + inv_trans.y * view_matrix[view_id][2][1] + inv_trans.z * view_matrix[view_id][2][2]
+            };
+
+            float3 dir{ pos.x - camera_center.x, pos.y - camera_center.y, pos.z - camera_center.z };
+            float norm_recp = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + 1e-12f);
+            float x = dir.x * norm_recp, y = dir.y * norm_recp, z = dir.z * norm_recp;
+
+            float3 dL_dRGB{ color_grad[view_id][0][chunk_id][index], color_grad[view_id][1][chunk_id][index], color_grad[view_id][2][chunk_id][index] };
+
+            float xx = x * x, yy = y * y, zz = z * z;
+            float xy = x * y;
+
+            float dRGBdsh9 = SH_C3[0] * y * (3.f * xx - yy);
+            float dRGBdsh10 = SH_C3[1] * xy * z;
+            float dRGBdsh11 = SH_C3[2] * y * (4.f * zz - xx - yy);
+            float dRGBdsh12 = SH_C3[3] * z * (2.f * zz - 3.f * xx - 3.f * yy);
+            float dRGBdsh13 = SH_C3[4] * x * (4.f * zz - xx - yy);
+            float dRGBdsh14 = SH_C3[5] * z * (xx - yy);
+            float dRGBdsh15 = SH_C3[6] * x * (xx - 3.f * yy);
+
+            dL_dsh_rest_accum[0][0] += dRGBdsh9 * dL_dRGB.x; dL_dsh_rest_accum[0][1] += dRGBdsh9 * dL_dRGB.y; dL_dsh_rest_accum[0][2] += dRGBdsh9 * dL_dRGB.z;
+            dL_dsh_rest_accum[1][0] += dRGBdsh10 * dL_dRGB.x; dL_dsh_rest_accum[1][1] += dRGBdsh10 * dL_dRGB.y; dL_dsh_rest_accum[1][2] += dRGBdsh10 * dL_dRGB.z;
+            dL_dsh_rest_accum[2][0] += dRGBdsh11 * dL_dRGB.x; dL_dsh_rest_accum[2][1] += dRGBdsh11 * dL_dRGB.y; dL_dsh_rest_accum[2][2] += dRGBdsh11 * dL_dRGB.z;
+            dL_dsh_rest_accum[3][0] += dRGBdsh12 * dL_dRGB.x; dL_dsh_rest_accum[3][1] += dRGBdsh12 * dL_dRGB.y; dL_dsh_rest_accum[3][2] += dRGBdsh12 * dL_dRGB.z;
+            dL_dsh_rest_accum[4][0] += dRGBdsh13 * dL_dRGB.x; dL_dsh_rest_accum[4][1] += dRGBdsh13 * dL_dRGB.y; dL_dsh_rest_accum[4][2] += dRGBdsh13 * dL_dRGB.z;
+            dL_dsh_rest_accum[5][0] += dRGBdsh14 * dL_dRGB.x; dL_dsh_rest_accum[5][1] += dRGBdsh14 * dL_dRGB.y; dL_dsh_rest_accum[5][2] += dRGBdsh14 * dL_dRGB.z;
+            dL_dsh_rest_accum[6][0] += dRGBdsh15 * dL_dRGB.x; dL_dsh_rest_accum[6][1] += dRGBdsh15 * dL_dRGB.y; dL_dsh_rest_accum[6][2] += dRGBdsh15 * dL_dRGB.z;
+        }
+
+        // 立即执行 Adam 更新
+        for (int local_idx = 0; local_idx < 7; local_idx++)
+        {
+            int sh_idx = 8 + local_idx; // Degree 3 的绝对索引为 8~14
+            for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
+            {
+                float grad = dL_dsh_rest_accum[local_idx][rgb_idx];
+                float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+
+                exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
+                exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
+                param += -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
             }
         }
     }
