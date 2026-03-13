@@ -83,7 +83,7 @@ def get_morton_sorted_indices(xyz:torch.Tensor):
     return indices
 
 @torch.no_grad()
-def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Tensor,*args)->list[torch.Tensor]:
+def spatial_refine(bClustered:bool,optimizer_list:list[torch.optim.Optimizer],xyz:torch.Tensor,*args)->list[torch.Tensor]:
     if bClustered:
         chunk_size=xyz.shape[-1]
         xyz,=cluster.uncluster(xyz)
@@ -91,7 +91,7 @@ def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
     morton_code=_gen_morton_code(xyz)
     _,indices=morton_code.sort(stable=True)
 
-    if optimizer is None:
+    if optimizer_list is None:
         #tensor
         if bClustered:
             args=cluster.uncluster(*args)
@@ -104,47 +104,49 @@ def spatial_refine(bClustered:bool,optimizer:torch.optim.Optimizer,xyz:torch.Ten
         return refined_tensors
     else:
         #optimizer
-        for param_group in optimizer.param_groups:
-            for param in param_group['params']:
-                #parameters
-                if param.data is None:
-                    continue
-                if bClustered:
-                    param_data, = cluster.uncluster(param.data)
-                else:
-                    param_data = param.data
-                refined_data = param_data[..., indices]
-                if bClustered:
-                    refined_data, = cluster.cluster_points(chunk_size,refined_data)
-                param.copy_(refined_data)
-                #grads
-                if param.grad is not None:
-                        if bClustered:
-                            grad_data, = cluster.uncluster(param.grad.data)
-                        else:
-                            grad_data = param.grad.data
-                        refined_grad = grad_data[..., indices]
-                        if bClustered:
-                            refined_grad, = cluster.cluster_points(chunk_size,refined_grad)
-                        param.grad.data=refined_grad
-                #state
-                state_dict = optimizer.state[param]
-                for key, value in state_dict.items():
-                    if isinstance(value, torch.Tensor) and value.shape == param.data.shape:
-                        if bClustered:
-                            unclustered_value, = cluster.uncluster(value)
-                        else:
-                            unclustered_value = value
-                        refined_value = unclustered_value[..., indices]
-                        if bClustered:
-                            refined_value, = cluster.cluster_points(chunk_size,refined_value)
-                        value.data=refined_value
+        for optimizer in optimizer_list:
+            for param_group in optimizer.param_groups:
+                for param in param_group['params']:
+                    #parameters
+                    if param.data is None:
+                        continue
+                    if bClustered:
+                        param_data, = cluster.uncluster(param.data)
+                    else:
+                        param_data = param.data
+                    refined_data = param_data[..., indices]
+                    if bClustered:
+                        refined_data, = cluster.cluster_points(chunk_size,refined_data)
+                    param.copy_(refined_data)
+                    #grads
+                    if param.grad is not None:
+                            if bClustered:
+                                grad_data, = cluster.uncluster(param.grad.data)
+                            else:
+                                grad_data = param.grad.data
+                            refined_grad = grad_data[..., indices]
+                            if bClustered:
+                                refined_grad, = cluster.cluster_points(chunk_size,refined_grad)
+                            param.grad.data=refined_grad
+                    #state
+                    state_dict = optimizer.state[param]
+                    for key, value in state_dict.items():
+                        if isinstance(value, torch.Tensor) and value.shape == param.data.shape:
+                            if bClustered:
+                                unclustered_value, = cluster.uncluster(value)
+                            else:
+                                unclustered_value = value
+                            refined_value = unclustered_value[..., indices]
+                            if bClustered:
+                                refined_value, = cluster.cluster_points(chunk_size,refined_value)
+                            value.data=refined_value
 
         param_dict:dict[str,torch.Tensor]={}
-        for param_group in optimizer.param_groups:
-            name=param_group['name']
-            tensor=param_group['params'][0]
-            param_dict[name]=tensor
+        for optimizer in optimizer_list:
+            for param_group in optimizer.param_groups:
+                name=param_group['name']
+                tensor=param_group['params'][0]
+                param_dict[name]=tensor
         xyz=param_dict["xyz"]
         rot=param_dict["rot"]
         scale=param_dict["scale"]

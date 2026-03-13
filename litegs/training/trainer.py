@@ -98,6 +98,8 @@ def start(cfg:TrainConfig):
                 # Optimizer step
                 pipeline.model.optimizer.step()
                 pipeline.model.optimizer.zero_grad(set_to_none=True)
+                pipeline.model.sh_optimizer.step()
+                pipeline.model.sh_optimizer.zero_grad(set_to_none=True)
                 if pipeline.learnable_viewproj is not None:
                     pipeline.learnable_viewproj.step()
                 pipeline.model.scheduler.step()

@@ -3,7 +3,7 @@ import numpy as np
 from torch.optim.lr_scheduler import _LRScheduler
 
 from .. import arguments
-from ..utils.wrapper import sparse_adam_update
+from ..utils.wrapper import sparse_adam_update,litegs_fused
 from ..utils.CompactedTensor import CompactedTensor
 
 class SparseGaussianAdam(torch.optim.Adam):
@@ -114,20 +114,108 @@ def get_optimizer(xyz:torch.nn.Parameter,scale:torch.nn.Parameter,rot:torch.nn.P
                   spatial_lr_scale:float,
                   opt_setting:arguments.OptimizationParams,bCluster:bool):
     
-    l = [
+    params_geo = [
         {'params': [xyz], 'lr': opt_setting.position_lr_init * spatial_lr_scale, "name": "xyz"},
-        {'params': [sh_0], 'lr': opt_setting.feature_lr, "name": "sh_0"},
-        {'params': [sh_rest], 'lr': opt_setting.feature_lr / 10.0, "name": "sh_rest"},
         {'params': [opacity], 'lr': opt_setting.opacity_lr, "name": "opacity"},
         {'params': [scale], 'lr': opt_setting.scaling_lr, "name": "scale"},
         {'params': [rot], 'lr': opt_setting.rotation_lr, "name": "rot"}
     ]
+    params_sh = [
+        {'params': [sh_0], 'lr': opt_setting.feature_lr, "name": "sh_0"},
+        {'params': [sh_rest], 'lr': opt_setting.feature_lr / 10.0, "name": "sh_rest"},
+    ]
     if opt_setting.sparse_grad:
-        optimizer = SparseGaussianAdam(l, lr=0, eps=1e-15,bCluster=bCluster)
+        optimizer = SparseGaussianAdam(params_geo, lr=0, eps=1e-15,bCluster=bCluster)
+        sh_optimizer = SparseGaussianAdam(params_sh, lr=0, eps=1e-15,bCluster=bCluster)
     else:
-        optimizer = torch.optim.Adam(l, lr=0, eps=1e-15)
+        optimizer = torch.optim.Adam(params_geo, lr=0, eps=1e-15)
+        sh_optimizer = torch.optim.Adam(params_sh, lr=0, eps=1e-15)
+    if bCluster:
+        sh_optimizer=ShFusedAdam(sh_0,sh_rest,opt_setting.feature_lr,opt_setting.feature_lr/10,eps=1e-15)
     scheduler = Scheduler(optimizer,opt_setting.position_lr_init*spatial_lr_scale,
               opt_setting.position_lr_final*spatial_lr_scale,
               max_epochs=opt_setting.position_lr_max_steps)
     
-    return optimizer,scheduler
+    return optimizer,scheduler,sh_optimizer
+
+
+class ShFusedAdam(torch.optim.Adam):
+    def __init__(self, sh_0, sh_rest, lr_0, lr_rest, eps):
+        self._color=None
+        params = [
+            {'params': [sh_0], 'lr': lr_0, "name": "sh_0"},
+            {'params': [sh_rest], 'lr':lr_rest, "name": "sh_rest"},
+        ]
+        super().__init__(params=params, lr=0, eps=eps)
+    
+    def forward(
+        self,
+        sh_degree,
+        visible_chunkid, visible_chunk_num,
+        view_matrix,position
+    ):
+        if self._color is not None:
+            assert(False,"ShFusedAdam do not support multipass backward!")
+        sh_0=self.param_groups[0]['params'][0]
+        sh_rest=self.param_groups[1]['params'][0]
+
+        color:torch.Tensor = litegs_fused.compact_sh_forward(
+            sh_degree,
+            visible_chunkid, visible_chunk_num,
+            view_matrix,
+            position, sh_0, sh_rest
+        )
+
+        self._color=color.detach().requires_grad_()
+        self._color.retain_grad()
+        self._sh_degree=sh_degree
+        self._visible_chunkid=visible_chunkid
+        self._visible_chunk_num=visible_chunk_num
+        self._view_matrix=view_matrix
+        self._position=position
+
+
+        return self._color
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        super(ShFusedAdam,self).zero_grad(set_to_none)
+        self._color=None
+        self._sh_degree=None
+        self._visible_chunkid=None
+        self._visible_chunk_num=None
+        self._position=None
+        self._view_matrix=None
+        return
+    
+    @torch.no_grad()
+    def step(self):
+        
+        if self._color is None or self._color.grad is None:
+            return
+        
+        sh_0=self.param_groups[0]['params'][0]
+        sh_rest=self.param_groups[1]['params'][0]
+        
+        state = self.state[sh_0]
+        if len(state) == 0:
+            state['step'] = torch.tensor(0.0, dtype=torch.float32)
+            state['exp_avg'] = torch.zeros_like(sh_0, memory_format=torch.preserve_format)
+            state['exp_avg_sq'] = torch.zeros_like(sh_0, memory_format=torch.preserve_format)
+        state = self.state[sh_rest]
+        if len(state) == 0:
+            state['step'] = torch.tensor(0.0, dtype=torch.float32)
+            state['exp_avg'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format)
+            state['exp_avg_sq'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format)
+
+        litegs_fused.compact_sh_backward_adam(
+            self._sh_degree,
+            self._visible_chunkid,self._visible_chunk_num,self._view_matrix,self._position,
+            sh_0,sh_rest,
+            self._color.grad,
+            self.state[sh_0]['exp_avg'],self.state[sh_0]['exp_avg_sq'],
+            self.state[sh_rest]['exp_avg'],self.state[sh_rest]['exp_avg_sq'],
+            self.param_groups[0]['lr'],self.param_groups[1]['lr'],0.9,0.99,self.defaults['eps']
+        )
+
+        
+        return

@@ -96,7 +96,9 @@ class RenderPipeline(nn.Module):
             output_shape, self.pp
         )
 
-        if self.training and self.model.is_sparse_grad:
+        if hasattr(self.model.optimizer,"update_sparse_visibility"):
             self.model.optimizer.update_sparse_visibility(visible_chunkid,visible_chunks_num,primitive_visible,valid_length)
+        if hasattr(self.model.sh_optimizer,"update_sparse_visibility"):
+            self.model.sh_optimizer.update_sparse_visibility(visible_chunkid,visible_chunks_num,primitive_visible,valid_length)
 
         return img,transmitance,depth,normal

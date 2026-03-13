@@ -14,16 +14,17 @@ class DensityControllerBase:
         return
     
     @torch.no_grad()
-    def step(self,optimizer:torch.optim.Optimizer,epoch:int):
+    def step(self,optimizer_list:list[torch.optim.Optimizer],epoch:int):
         return
     
     @torch.no_grad()
-    def _get_params_from_optimizer(self,optimizer:torch.optim.Optimizer)->list[torch.Tensor]:
+    def _get_params_from_optimizer(self,optimizer_list:list[torch.optim.Optimizer])->list[torch.Tensor]:
         param_dict:dict[str,torch.Tensor]={}
-        for param_group in optimizer.param_groups:
-            name=param_group['name']
-            tensor=param_group['params'][0]
-            param_dict[name]=tensor
+        for optimizer in optimizer_list:
+            for param_group in optimizer.param_groups:
+                name=param_group['name']
+                tensor=param_group['params'][0]
+                param_dict[name]=tensor
         xyz=param_dict["xyz"]
         rot=param_dict["rot"]
         scale=param_dict["scale"]
@@ -33,68 +34,71 @@ class DensityControllerBase:
         return xyz,scale,rot,sh_0,sh_rest,opacity
 
     @torch.no_grad()
-    def _cat_tensors_to_optimizer(self, tensors_dict:dict,optimizer:torch.optim.Optimizer):
+    def _cat_tensors_to_optimizer(self, tensors_dict:dict,optimizer_list:list[torch.optim.Optimizer]):
         cat_dim=-1
         if self.bCluster:
             cat_dim=-2
-        for group in optimizer.param_groups:
-            assert len(group["params"]) == 1
-            extension_tensor = tensors_dict[group["name"]]
-            stored_state = optimizer.state.get(group['params'][0], None)
-            assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
-            if stored_state is not None:
-                stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
-                stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
-            new_param=torch.cat((group["params"][0], extension_tensor), dim=cat_dim).contiguous()
-            optimizer.state.pop(group['params'][0])#pop param
-            group["params"][0]=torch.nn.Parameter(new_param)
-            optimizer.state[group["params"][0]]=stored_state#assign to new param
-            assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
-        return
-    
-    @torch.no_grad()
-    def _replace_tensor_to_optimizer(self, tensor:torch.Tensor, name:str,optimizer:torch.optim.Optimizer):
-        for group in optimizer.param_groups:
-            if group["name"] in ["appearance_embeddings", "appearance_network"]:
-                continue
-            if group["name"] == name:
+        for optimizer in optimizer_list:
+            for group in optimizer.param_groups:
+                assert len(group["params"]) == 1
+                extension_tensor = tensors_dict[group["name"]]
                 stored_state = optimizer.state.get(group['params'][0], None)
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
-                #stored_state["step"]=0#bugfix
-
-                del optimizer.state[group['params'][0]]
-                group["params"][0] = torch.nn.Parameter(tensor.requires_grad_(True))
-                optimizer.state[group['params'][0]] = stored_state
+                assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
+                if stored_state is not None:
+                    stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+                    stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+                new_param=torch.cat((group["params"][0], extension_tensor), dim=cat_dim).contiguous()
+                optimizer.state.pop(group['params'][0])#pop param
+                group["params"][0]=torch.nn.Parameter(new_param)
+                optimizer.state[group["params"][0]]=stored_state#assign to new param
+                assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
         return
     
     @torch.no_grad()
-    def _prune_optimizer(self,valid_mask:torch.Tensor,optimizer:torch.optim.Optimizer):
-        for group in optimizer.param_groups:
-            stored_state = optimizer.state.get(group['params'][0], None)
-            if stored_state is not None:
+    def _replace_tensor_to_optimizer(self, tensor:torch.Tensor, name:str,optimizer_list:list[torch.optim.Optimizer]):
+        for optimizer in optimizer_list:
+            for group in optimizer.param_groups:
+                if group["name"] in ["appearance_embeddings", "appearance_network"]:
+                    continue
+                if group["name"] == name:
+                    stored_state = optimizer.state.get(group['params'][0], None)
+                    stored_state["exp_avg"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                    #stored_state["step"]=0#bugfix
+
+                    del optimizer.state[group['params'][0]]
+                    group["params"][0] = torch.nn.Parameter(tensor.requires_grad_(True))
+                    optimizer.state[group['params'][0]] = stored_state
+        return
+    
+    @torch.no_grad()
+    def _prune_optimizer(self,valid_mask:torch.Tensor,optimizer_list:list[torch.optim.Optimizer]):
+        for optimizer in optimizer_list:
+            for group in optimizer.param_groups:
+                stored_state = optimizer.state.get(group['params'][0], None)
+                if stored_state is not None:
+                    if self.bCluster:
+                        chunk_size=stored_state["exp_avg"].shape[-1]
+                        uncluster_avg,uncluster_avg_sq=cluster.uncluster(stored_state["exp_avg"],stored_state["exp_avg_sq"])
+                        uncluster_avg=uncluster_avg[...,valid_mask]
+                        uncluster_avg_sq=uncluster_avg_sq[...,valid_mask]
+                        new_avg,new_avg_sq=cluster.cluster_points(chunk_size,uncluster_avg,uncluster_avg_sq)
+                    else:
+                        new_avg=stored_state["exp_avg"][...,valid_mask]
+                        new_avg_sq=stored_state["exp_avg_sq"][...,valid_mask]
+                    stored_state["exp_avg"].data=new_avg
+                    stored_state["exp_avg_sq"].data=new_avg_sq
+                
                 if self.bCluster:
-                    chunk_size=stored_state["exp_avg"].shape[-1]
-                    uncluster_avg,uncluster_avg_sq=cluster.uncluster(stored_state["exp_avg"],stored_state["exp_avg_sq"])
-                    uncluster_avg=uncluster_avg[...,valid_mask]
-                    uncluster_avg_sq=uncluster_avg_sq[...,valid_mask]
-                    new_avg,new_avg_sq=cluster.cluster_points(chunk_size,uncluster_avg,uncluster_avg_sq)
+                    chunk_size=group["params"][0].shape[-1]
+                    uncluster_param,=cluster.uncluster(group["params"][0])
+                    uncluster_param=uncluster_param[...,valid_mask]
+                    new_param,=cluster.cluster_points(chunk_size,uncluster_param)
                 else:
-                    new_avg=stored_state["exp_avg"][...,valid_mask]
-                    new_avg_sq=stored_state["exp_avg_sq"][...,valid_mask]
-                stored_state["exp_avg"].data=new_avg
-                stored_state["exp_avg_sq"].data=new_avg_sq
-            
-            if self.bCluster:
-                chunk_size=group["params"][0].shape[-1]
-                uncluster_param,=cluster.uncluster(group["params"][0])
-                uncluster_param=uncluster_param[...,valid_mask]
-                new_param,=cluster.cluster_points(chunk_size,uncluster_param)
-            else:
-                new_param=group["params"][0][...,valid_mask]
-            optimizer.state.pop(group['params'][0])#pop param
-            group["params"][0]=torch.nn.Parameter(new_param)
-            optimizer.state[group["params"][0]]=stored_state#assign to new param
+                    new_param=group["params"][0][...,valid_mask]
+                optimizer.state.pop(group['params'][0])#pop param
+                group["params"][0]=torch.nn.Parameter(new_param)
+                optimizer.state[group["params"][0]]=stored_state#assign to new param
         return
     
 class DensityControllerOfficial(DensityControllerBase):
@@ -135,9 +139,9 @@ class DensityControllerOfficial(DensityControllerBase):
         return selected_pts_mask
     
     @torch.no_grad()
-    def prune(self,optimizer:torch.optim.Optimizer,epoch:int):
+    def prune(self,optimizer_list:list[torch.optim.Optimizer],epoch:int):
         
-        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer_list)
         if self.bCluster:
             chunk_size=xyz.shape[-1]
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -153,13 +157,13 @@ class DensityControllerOfficial(DensityControllerBase):
             prune_mask=torch.zeros_like(prune_mask)
             prune_mask[del_indices]=True
         #print("\n #prune:{0} #points:{1}".format(prune_mask.sum(),(~prune_mask).sum()))
-        self._prune_optimizer(~prune_mask,optimizer)
+        self._prune_optimizer(~prune_mask,optimizer_list)
         return
 
     @torch.no_grad()
-    def split_and_clone(self,optimizer:torch.optim.Optimizer,epoch:int):
+    def split_and_clone(self,optimizer_list:list[torch.optim.Optimizer],epoch:int):
         
-        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer_list)
         if self.bCluster:
             chunk_size=xyz.shape[-1]
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -217,19 +221,20 @@ class DensityControllerOfficial(DensityControllerBase):
                       "opacity" : append_opacity}
         
         #print("\n#clone:{0} #split:{1} #points:{2}".format(clone_mask.sum().cpu(),split_mask.sum().cpu(),xyz.shape[-1]+append_xyz.shape[-1]*append_xyz.shape[-2]))
-        self._cat_tensors_to_optimizer(dict_clone,optimizer)
+        self._cat_tensors_to_optimizer(dict_clone,optimizer_list)
         return
     
     @torch.no_grad()
-    def reset_opacity(self,optimizer:torch.optim.Optimizer,epoch:int):
-        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+    def reset_opacity(self,optimizer_list:list[torch.optim.Optimizer],epoch:int):
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer_list)
         def inverse_sigmoid(x):
             return torch.log(x/(1-x))
         actived_opacities=opacity.sigmoid()
         if self.densify_params.opacity_reset_mode=='decay':
             decay_rate=0.5
             opacity.data=inverse_sigmoid((actived_opacities*decay_rate).clamp_min(1.0/128))
-            optimizer.state.clear()
+            for optimizer in optimizer_list:
+                optimizer.state.clear()
         elif self.densify_params.opacity_reset_mode=='reset':
             opacity.data=inverse_sigmoid(actived_opacities.clamp_max(0.005))
             self._replace_tensor_to_optimizer(opacity,"opacity",optimizer)
@@ -243,21 +248,21 @@ class DensityControllerOfficial(DensityControllerBase):
             epoch%self.densify_params.interval==0)
 
     @torch.no_grad()
-    def step(self,optimizer:torch.optim.Optimizer,epoch:int):
+    def step(self,optimizer_list:list[torch.optim.Optimizer],epoch:int):
         if epoch<self.densify_params.end and epoch>=self.densify_params.start:
             bUpdate=False
             if epoch%self.densify_params.interval==0:
-                self.split_and_clone(optimizer,epoch)
-                self.prune(optimizer,epoch)
+                self.split_and_clone(optimizer_list,epoch)
+                self.prune(optimizer_list,epoch)
                 bUpdate=True
             if epoch%self.densify_params.opacity_reset_interval==0:
-                self.reset_opacity(optimizer,epoch)
+                self.reset_opacity(optimizer_list,epoch)
                 bUpdate=True
             if bUpdate:
-                xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+                xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer_list)
                 StatisticsHelperInst.reset(xyz.shape[-2],xyz.shape[-1],self.is_densify_actived)
                 torch.cuda.empty_cache()
-        return self._get_params_from_optimizer(optimizer)
+        return self._get_params_from_optimizer(optimizer_list)
     
 
 class DensityControllerTamingGS(DensityControllerOfficial):
@@ -292,9 +297,9 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         return score
     
     @torch.no_grad()
-    def split_and_clone(self,optimizer:torch.optim.Optimizer,epoch:int):
+    def split_and_clone(self,optimizer_list:list[torch.optim.Optimizer],epoch:int):
         
-        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer)
+        xyz,scale,rot,sh_0,sh_rest,opacity=self._get_params_from_optimizer(optimizer_list)
         if self.bCluster:
             chunk_size=xyz.shape[-1]
             xyz,scale,rot,sh_0,sh_rest,opacity=cluster.uncluster(xyz,scale,rot,sh_0,sh_rest,opacity)
@@ -359,6 +364,6 @@ class DensityControllerTamingGS(DensityControllerOfficial):
                       "opacity" : append_opacity}
         
         #print("\n#clone:{0} #split:{1} #points:{2}".format(clone_index.sum().cpu(),split_index.sum().cpu(),xyz.shape[-1]+append_xyz.shape[-1]*append_xyz.shape[-2]))
-        self._cat_tensors_to_optimizer(dict_clone,optimizer)
+        self._cat_tensors_to_optimizer(dict_clone,optimizer_list)
         return
     

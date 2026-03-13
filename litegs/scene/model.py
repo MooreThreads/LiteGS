@@ -92,16 +92,16 @@ class GaussianSplattingModel(nn.Module):
         self.opacity = nn.Parameter(opacity)
 
         # Create optimizer, scheduler and density controller
+        self.optimizer=None
+        self.sh_optimizer=None
+        self.is_sparse_grad=True
         if op is not None:
-            self.optimizer, self.scheduler = opt_module.get_optimizer(
+            self.optimizer, self.scheduler,self.sh_optimizer = opt_module.get_optimizer(
                 self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity,
                 norm_radius, op, self.cluster_size>0
             )
             self.is_sparse_grad = op.sparse_grad
-        else:
-            self.is_sparse_grad = True
-            self.optimizer=None
-            self.scheduler=None
+
         
         if dp is not None:
             self.density_controller = densify.DensityControllerTamingGS(
@@ -129,6 +129,8 @@ class GaussianSplattingModel(nn.Module):
         # Add optimizer state
         if hasattr(self, 'optimizer') and self.optimizer is not None:
             state[prefix + 'optimizer_state_dict'] = self.optimizer.state_dict()
+        if hasattr(self, 'sh_optimizer') and self.sh_optimizer is not None:
+            state[prefix + 'sh_optimizer_state_dict'] = self.sh_optimizer.state_dict()
 
         # Add scheduler state
         if hasattr(self, 'scheduler') and self.scheduler is not None:
@@ -146,6 +148,7 @@ class GaussianSplattingModel(nn.Module):
 
         # Extract optimizer and scheduler states
         optimizer_state = state_dict.pop('optimizer_state_dict', None)
+        sh_optimizer_state = state_dict.pop('sh_optimizer_state_dict', None)
         scheduler_state = state_dict.pop('scheduler_state_dict', None)
 
         # Load parameters using parent's load_state_dict
@@ -155,8 +158,10 @@ class GaussianSplattingModel(nn.Module):
         self.active_sh_degree = active_sh_degree
 
         # Restore optimizer state
-        if optimizer_state is not None and hasattr(self, 'optimizer') and self.optimizer is not None:
+        if optimizer_state is not None and self.optimizer is not None:
             self.optimizer.load_state_dict(optimizer_state)
+        if sh_optimizer_state is not None and self.sh_optimizer is not None:
+            self.sh_optimizer.load_state_dict(sh_optimizer_state)
 
         # Restore scheduler state
         if scheduler_state is not None and hasattr(self, 'scheduler') and self.scheduler is not None:
@@ -199,7 +204,7 @@ class GaussianSplattingModel(nn.Module):
                 self.xyz, self.scale, self.rot, 
                 self.sh_0, self.sh_rest, 
                 self.opacity
-            ) = scene.spatial_refine(self.cluster_size > 0, self.optimizer, self.xyz)
+            ) = scene.spatial_refine(self.cluster_size > 0, [self.optimizer,self.sh_optimizer], self.xyz)
         self.update_cluster_aabb()
         return
 
@@ -209,7 +214,7 @@ class GaussianSplattingModel(nn.Module):
         Returns updated parameters.
         """
         
-        self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity = self.density_controller.step(self.optimizer, epoch)
+        self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity = self.density_controller.step([self.optimizer,self.sh_optimizer], epoch)
         
         if epoch % self.density_controller.densify_params.interval == 0:
             self.spatial_rearrange()
@@ -261,13 +266,16 @@ class GaussianSplattingModel(nn.Module):
             )
 
             # Step 2: Compact + SH (using activated position for view direction)
-            color=utils.wrapper.CompactSH.apply(
-                self.is_sparse_grad,
-                self.active_sh_degree,
-                visible_chunkid,visible_chunks_num,
-                view_matrix,
-                self.xyz,self.sh_0,self.sh_rest
-            )
+            if hasattr(self.sh_optimizer,'forward'):
+                color=self.sh_optimizer.forward(self.active_sh_degree,visible_chunkid,visible_chunks_num,view_matrix,self.xyz)
+            else:
+                color=utils.wrapper.CompactSH.apply(
+                    self.is_sparse_grad,
+                    self.active_sh_degree,
+                    visible_chunkid,visible_chunks_num,
+                    view_matrix,
+                    self.xyz,self.sh_0,self.sh_rest
+                )
 
             xyz, scale, rot,color, opacity=scene.cluster.uncluster( xyz, scale, rot,color, opacity)  
         else:
