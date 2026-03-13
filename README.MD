@@ -89,7 +89,21 @@ Gaussian splatting is a powerful technique used in various computer graphics and
 ### Train
 Begin training with the following command:
 
-`./example_train.py --sh_degree 3 -s DATA_SOURCE -i IMAGE_FOLDER -m OUTPUT_PATH`
+```bash
+python example_train.py --model.sh-degree 3 -s DATA_SOURCE -i IMAGE_FOLDER -m OUTPUT_PATH --dataset.eval --densify.target-primitives 1000000
+```
+
+**Resume from checkpoint:**
+
+```bash
+python example_train.py --config-path OUTPUT_PATH/config.json --resume OUTPUT_PATH/checkpoint.pth
+```
+
+### Evaluation
+
+```bash
+python example_metrics.py --config-path OUTPUT_PATH/finish/eval_config.json --save-image
+```
 
 ## Faster
 

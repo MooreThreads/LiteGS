@@ -106,7 +106,6 @@ class DensifyParams:
     # Target maximum number of Gaussian primitives
     target_primitives: int = 1000000
     
-    # 【修复 2】必须加上类型注解，否则 Dataclass 无法识别它们作为字段！
     # [discard] params for official densification(Adaptive Density Control)
     densify_grad_threshold: float = 0.00015
     # [discard] params for official densification(Adaptive Density Control)

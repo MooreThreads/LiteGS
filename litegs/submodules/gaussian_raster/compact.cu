@@ -1616,7 +1616,7 @@ __global__ void compact_sh_backward_kernel(
     }
 }
 
-std::vector<at::Tensor> compact_sh_forward(
+at::Tensor compact_sh_forward(
     int sh_degree,
     at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
     at::Tensor view_matrix,
@@ -1679,7 +1679,7 @@ std::vector<at::Tensor> compact_sh_forward(
         AT_ERROR("Unsupported sh_degree: ", sh_degree);
     }
     CUDA_CHECK_ERRORS;
-    return { color };
+    return color;
 }
 
 std::vector<at::Tensor> compact_sh_backward(
@@ -1775,7 +1775,7 @@ __global__ void compact_sh_backward_adam_kernel(
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_base,    //[1,3,chunks_num,chunk_size]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_rest,    //[?,3,chunks_num,chunk_size]
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_rest,    //[?,3,chunks_num,chunk_size]
-    const float lr, const float b1, const float b2, const float eps
+    const float sh_base_lr,const float sh_rest_lr, const float b1, const float b2, const float eps
 )
 {
     int index = threadIdx.x;
@@ -1913,7 +1913,7 @@ __global__ void compact_sh_backward_adam_kernel(
 
             exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
             exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
-            float step = -lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+            float step = -sh_base_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
             param += step;
         }
 
@@ -1923,7 +1923,19 @@ __global__ void compact_sh_backward_adam_kernel(
         {
             for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
             {
-                int accum_idx = sh_idx * 3 + rgb_idx;
+                int accum_idx = 0;
+                if (sh_idx < 3) {
+                    // Degree 1 (sh_idx: 0~2) 共 3 项
+                    accum_idx = 0 + rgb_idx * 3 + (sh_idx - 0);
+                }
+                else if (sh_idx < 8) {
+                    // Degree 2 (sh_idx: 3~7) 共 5 项，起始索引为 9
+                    accum_idx = 9 + rgb_idx * 5 + (sh_idx - 3);
+                }
+                else {
+                    // Degree 3 (sh_idx: 8~14) 共 7 项，起始索引为 24
+                    accum_idx = 24 + rgb_idx * 7 + (sh_idx - 8);
+                }
                 float grad = dL_dsh_rest_accum[accum_idx];
 
                 float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
@@ -1932,7 +1944,7 @@ __global__ void compact_sh_backward_adam_kernel(
 
                 exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
                 exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
-                float step = -lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+                float step = -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
                 param += step;
             }
         }
@@ -1948,7 +1960,7 @@ std::vector<at::Tensor> compact_sh_backward_adam(
     at::Tensor color_grad,
     at::Tensor exp_avg_sh_base, at::Tensor exp_avg_sq_sh_base,
     at::Tensor exp_avg_sh_rest, at::Tensor exp_avg_sq_sh_rest,
-    float lr, float b1, float b2, float eps
+    float lr_sh_base,float lr_sh_rest, float b1, float b2, float eps
 )
 {
     int chunksize = position.size(2);
@@ -1969,7 +1981,7 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            lr, b1, b2, eps
+            lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
     case 1:
@@ -1985,7 +1997,7 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            lr, b1, b2, eps
+            lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
     case 2:
@@ -2001,7 +2013,7 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            lr, b1, b2, eps
+            lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
     case 3:
@@ -2017,7 +2029,7 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            lr, b1, b2, eps
+            lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
     default:

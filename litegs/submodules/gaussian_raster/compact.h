@@ -29,7 +29,7 @@ std::vector<at::Tensor> activate_backward_nosh(
 );
 
 // Compact + SH ONLY (no activate, just compact and compute SH to RGB)
-std::vector<at::Tensor> compact_sh_forward(
+at::Tensor compact_sh_forward(
 	int sh_degree,
 	at::Tensor visible_chunk_id, at::Tensor visible_chunks_num,
 	at::Tensor view_matrix,
@@ -55,7 +55,7 @@ std::vector<at::Tensor> compact_sh_backward_adam(
 	at::Tensor color_grad,
 	at::Tensor exp_avg_sh_base, at::Tensor exp_avg_sq_sh_base,
 	at::Tensor exp_avg_sh_rest, at::Tensor exp_avg_sq_sh_rest,
-	float lr, float b1, float b2, float eps
+	float lr_sh_base,float lr_sh_rest, float b1, float b2, float eps
 );
 
 void adamUpdate(
