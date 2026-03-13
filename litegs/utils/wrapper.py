@@ -555,9 +555,9 @@ class SphericalHarmonicToRGB(BaseWrapper):
                 sh_rest_dim=ctx.sh_rest_dim
                 sh_base_grad,sh_reset_grad,dir_grad=litegs_fused.sh2rgb_backward(degree,grad_rgb,sh_rest_dim,dirs,sh_base,sh_rest)
                 return None,sh_base_grad,sh_reset_grad,dir_grad
-        return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs).clamp_min(0)
+        return SphericalHarmonicFunc.apply(deg,sh_base,sh_rest,dirs)
     def __sh2rgb_script(deg:int, sh_base:torch.Tensor,sh_rest:torch.Tensor, dirs:torch.Tensor):
-        return spherical_harmonics.sh_to_rgb(deg,torch.cat((sh_base,sh_rest),dim=0),dirs).clamp_min(0)
+        return spherical_harmonics.sh_to_rgb(deg,torch.cat((sh_base,sh_rest),dim=0),dirs)
     _fused=__sh2rgb_fused
     _script=__sh2rgb_script
     test_inputs=[(3,None,None),
@@ -879,10 +879,7 @@ class CompactSH(torch.autograd.Function):
             visible_chunkid, visible_chunk_num,
             view_matrix,
             position, sh_base, sh_rest
-        )[0]
-
-        # Clamp color to ensure non-negative
-        color = color.clamp_min(0)
+        )
 
         ctx.save_for_backward(visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
 
