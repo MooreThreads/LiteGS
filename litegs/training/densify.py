@@ -45,8 +45,8 @@ class DensityControllerBase:
                 stored_state = optimizer.state.get(group['params'][0], None)
                 assert stored_state["exp_avg"].shape == stored_state["exp_avg_sq"].shape and stored_state["exp_avg"].shape==group["params"][0].shape
                 if stored_state is not None:
-                    stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
-                    stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=cat_dim).contiguous()
+                    stored_state["exp_avg"].data=torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor,dtype=stored_state["exp_avg"].dtype)), dim=cat_dim).contiguous()
+                    stored_state["exp_avg_sq"].data=torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor,dtype=stored_state["exp_avg_sq"].dtype)), dim=cat_dim).contiguous()
                 new_param=torch.cat((group["params"][0], extension_tensor), dim=cat_dim).contiguous()
                 optimizer.state.pop(group['params'][0])#pop param
                 group["params"][0]=torch.nn.Parameter(new_param)
@@ -62,8 +62,8 @@ class DensityControllerBase:
                     continue
                 if group["name"] == name:
                     stored_state = optimizer.state.get(group['params'][0], None)
-                    stored_state["exp_avg"] = torch.zeros_like(tensor)
-                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg"] = torch.zeros_like(tensor,dtype=stored_state["exp_avg"].dtype)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor,dtype=stored_state["exp_avg_sq"].dtype)
                     #stored_state["step"]=0#bugfix
 
                     del optimizer.state[group['params'][0]]

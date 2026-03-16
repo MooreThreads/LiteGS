@@ -1773,8 +1773,8 @@ __global__ void compact_sh_backward_adam_kernel(
     const torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> color_grad,
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_base,
     torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_base,
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sh_rest,
-    torch::PackedTensorAccessor32<float, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_rest,
+    torch::PackedTensorAccessor32<torch::BFloat16, 4, torch::RestrictPtrTraits> exp_avg_sh_rest,
+    torch::PackedTensorAccessor32<torch::BFloat16, 4, torch::RestrictPtrTraits> exp_avg_sq_sh_rest,
     const float sh_base_lr, const float sh_rest_lr, const float b1, const float b2, const float eps
 )
 {
@@ -1876,13 +1876,16 @@ __global__ void compact_sh_backward_adam_kernel(
             for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
             {
                 float grad = dL_dsh_rest_accum[local_idx][rgb_idx];
-                float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
-                float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float exp_avg = static_cast<float>(exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index]);
+                float exp_avg_sq = static_cast<float>(exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index]);
                 float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
 
                 exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
                 exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
                 param += -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+                exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index] = exp_avg;
+                exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index] = exp_avg_sq;
+
             }
         }
     } // <-- Degree 1 的 9 个寄存器释放
@@ -1933,13 +1936,15 @@ __global__ void compact_sh_backward_adam_kernel(
             for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
             {
                 float grad = dL_dsh_rest_accum[local_idx][rgb_idx];
-                float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
-                float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float exp_avg = static_cast<float>(exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index]);
+                float exp_avg_sq = static_cast<float>(exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index]);
                 float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
 
                 exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
                 exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
                 param += -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+                exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index] = exp_avg;
+                exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index] = exp_avg_sq;
             }
         }
     } // <-- Degree 2 寄存器释放
@@ -1994,13 +1999,15 @@ __global__ void compact_sh_backward_adam_kernel(
             for (int rgb_idx = 0; rgb_idx < 3; rgb_idx++)
             {
                 float grad = dL_dsh_rest_accum[local_idx][rgb_idx];
-                float& exp_avg = exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
-                float& exp_avg_sq = exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
+                float exp_avg = static_cast<float>(exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index]);
+                float exp_avg_sq = static_cast<float>(exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index]);
                 float& param = sh_rest[sh_idx][rgb_idx][source_chunk_id][index];
 
                 exp_avg = b1 * exp_avg + (1.0f - b1) * grad;
                 exp_avg_sq = b2 * exp_avg_sq + (1.0f - b2) * grad * grad;
                 param += -sh_rest_lr * exp_avg / (sqrtf(exp_avg_sq) + eps);
+                exp_avg_sh_rest[sh_idx][rgb_idx][source_chunk_id][index] = exp_avg;
+                exp_avg_sq_sh_rest[sh_idx][rgb_idx][source_chunk_id][index] = exp_avg_sq;
             }
         }
     }
@@ -2034,8 +2041,8 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
             lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
@@ -2050,8 +2057,8 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
             lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
@@ -2066,8 +2073,8 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
             lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;
@@ -2082,8 +2089,8 @@ std::vector<at::Tensor> compact_sh_backward_adam(
             color_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
             exp_avg_sq_sh_base.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
-            exp_avg_sq_sh_rest.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
+            exp_avg_sq_sh_rest.packed_accessor32<torch::BFloat16, 4, torch::RestrictPtrTraits>(),
             lr_sh_base, lr_sh_rest, b1, b2, eps
         );
         break;

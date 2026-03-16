@@ -204,8 +204,8 @@ class ShFusedAdam(torch.optim.Adam):
         state = self.state[sh_rest]
         if len(state) == 0:
             state['step'] = torch.tensor(0.0, dtype=torch.float32)
-            state['exp_avg'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format)
-            state['exp_avg_sq'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format)
+            state['exp_avg'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format,dtype=torch.bfloat16)
+            state['exp_avg_sq'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format,dtype=torch.bfloat16)
 
         litegs_fused.compact_sh_backward_adam(
             self._sh_degree,
