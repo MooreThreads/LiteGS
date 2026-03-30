@@ -8,6 +8,7 @@ from .. import io_manager
 from .. import render
 from ..training import optimizer as opt_module
 from ..training import densify
+from ..training import optimizer_adapter
 from .. import utils
 from ..utils.statistic_helper import StatisticsHelperInst
 
@@ -115,6 +116,79 @@ class GaussianSplattingModel(nn.Module):
 
         return
 
+    def get_gaussian_params(self) -> densify.GaussianParams:
+        return densify.GaussianParams(
+            self.xyz, self.scale, self.rot,
+            self.sh_0, self.sh_rest, self.opacity
+        )
+
+    def set_gaussian_params(self, params: densify.GaussianParams) -> None:
+        def _as_parameter(tensor: torch.Tensor | nn.Parameter) -> nn.Parameter:
+            if isinstance(tensor, nn.Parameter):
+                return tensor
+            return nn.Parameter(tensor.requires_grad_(True))
+
+        self.xyz = _as_parameter(params.xyz)
+        self.scale = _as_parameter(params.scale)
+        self.rot = _as_parameter(params.rot)
+        self.sh_0 = _as_parameter(params.sh_0)
+        self.sh_rest = _as_parameter(params.sh_rest)
+        self.opacity = _as_parameter(params.opacity)
+        return
+
+    @torch.no_grad()
+    def apply_densify_edits(self, edits: densify.DensifyEdits) -> None:
+        params = self.get_gaussian_params()
+        if self.cluster_size > 0:
+            xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.uncluster(
+                params.xyz, params.scale, params.rot, params.sh_0, params.sh_rest, params.opacity
+            )
+            params = densify.GaussianParams(xyz, scale, rot, sh_0, sh_rest, opacity)
+
+        if edits.append_params is not None:
+            params = densify.DensityControllerBase._concat_params(params, edits.append_params)
+        if edits.keep_mask is not None:
+            params = densify.DensityControllerBase._slice_params(params, edits.keep_mask)
+        if edits.opacity_override is not None:
+            params = densify.DensityControllerBase._replace_opacity(params, edits.opacity_override)
+
+        if self.cluster_size > 0:
+            xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.cluster_points(
+                self.cluster_size,
+                params.xyz, params.scale, params.rot, params.sh_0, params.sh_rest, params.opacity
+            )
+            params = densify.GaussianParams(xyz, scale, rot, sh_0, sh_rest, opacity)
+
+        self.set_gaussian_params(params)
+        self.update_cluster_aabb()
+        return
+
+    @torch.no_grad()
+    def sync_optimizers_after_densify(self, edits: densify.DensifyEdits) -> None:
+        optimizer_list = [self.optimizer, self.sh_optimizer]
+        if edits.append_params is not None:
+            optimizer_adapter.append_(optimizer_list, edits.append_params, self.cluster_size > 0)
+        if edits.keep_mask is not None:
+            optimizer_adapter.prune_(optimizer_list, edits.keep_mask, self.cluster_size > 0)
+        if edits.opacity_override is not None:
+            optimizer_adapter.replace_(optimizer_list, "opacity", edits.opacity_override, self.cluster_size > 0)
+        if edits.clear_optimizer_state:
+            for optimizer in optimizer_list:
+                if optimizer is not None:
+                    optimizer.state.clear()
+
+        params_dict = optimizer_adapter.collect_named_parameters(optimizer_list)
+        self.set_gaussian_params(densify.GaussianParams(
+            params_dict["xyz"],
+            params_dict["scale"],
+            params_dict["rot"],
+            params_dict["sh_0"],
+            params_dict["sh_rest"],
+            params_dict["opacity"],
+        ))
+        self.update_cluster_aabb()
+        return
+
     def state_dict(self,destination=None, prefix='', keep_vars=False):
         """
         Override state_dict to include optimizer, scheduler, and other needed states.
@@ -213,9 +287,24 @@ class GaussianSplattingModel(nn.Module):
         Perform density control step (densify, prune, opacity reset).
         Returns updated parameters.
         """
-        
-        self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity = self.density_controller.step([self.optimizer,self.sh_optimizer], epoch)
-        
+        if self.density_controller is None:
+            return
+
+        edits = self.density_controller.step(self.get_gaussian_params(), epoch)
+        if edits.changed:
+            if self.optimizer is None and self.sh_optimizer is None:
+                self.apply_densify_edits(edits)
+            else:
+                self.sync_optimizers_after_densify(edits)
+
+            if edits.stats_need_reset:
+                StatisticsHelperInst.reset(
+                    self.xyz.shape[-2],
+                    self.xyz.shape[-1],
+                    self.density_controller.is_densify_actived
+                )
+                torch.cuda.empty_cache()
+
         if epoch % self.density_controller.densify_params.interval == 0:
             self.spatial_rearrange()
 
