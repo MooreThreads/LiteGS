@@ -26,14 +26,14 @@ class OptimizerAdapterTests(unittest.TestCase):
         sh_rest = torch.nn.Parameter(maybe_cluster(torch.randn(15, 3, point_count)))
 
         optimizer = torch.optim.Adam([
-            {'params': [xyz], 'name': 'xyz'},
-            {'params': [opacity], 'name': 'opacity'},
-            {'params': [scale], 'name': 'scale'},
-            {'params': [rot], 'name': 'rot'},
+            {"params": [xyz], "name": "xyz"},
+            {"params": [opacity], "name": "opacity"},
+            {"params": [scale], "name": "scale"},
+            {"params": [rot], "name": "rot"},
         ], lr=1e-3)
         sh_optimizer = torch.optim.Adam([
-            {'params': [sh_0], 'name': 'sh_0'},
-            {'params': [sh_rest], 'name': 'sh_rest'},
+            {"params": [sh_0], "name": "sh_0"},
+            {"params": [sh_rest], "name": "sh_rest"},
         ], lr=1e-3)
 
         for param in [xyz, opacity, scale, rot, sh_0, sh_rest]:
@@ -42,8 +42,15 @@ class OptimizerAdapterTests(unittest.TestCase):
         sh_optimizer.step()
         return optimizer, sh_optimizer
 
-    def test_optimizer_adapter_preserves_state_without_cluster(self):
+    def _named_parameters(self, optimizer, sh_optimizer):
+        named = {}
+        for group in optimizer.param_groups + sh_optimizer.param_groups:
+            named[group["name"]] = group["params"][0]
+        return named
+
+    def test_sync_state_after_densify_rebinds_and_preserves_state(self):
         optimizer, sh_optimizer = self._build_optimizers(clustered=False)
+        params = self._named_parameters(optimizer, sh_optimizer)
 
         append_params = GaussianParams(
             xyz=torch.randn(3, 2),
@@ -53,137 +60,168 @@ class OptimizerAdapterTests(unittest.TestCase):
             sh_rest=torch.randn(15, 3, 2),
             opacity=torch.randn(1, 2),
         )
-
-        optimizer_adapter.append_([optimizer, sh_optimizer], append_params, False)
-        params = optimizer_adapter.collect_named_parameters([optimizer, sh_optimizer])
-        self.assertEqual(params['xyz'].shape[-1], 6)
-        self.assertEqual(optimizer.state[params['xyz']]['exp_avg'].shape, params['xyz'].shape)
-
-        keep_mask = torch.tensor([True, False, True, True, False, True])
-        optimizer_adapter.prune_([optimizer, sh_optimizer], keep_mask, False)
-        params = optimizer_adapter.collect_named_parameters([optimizer, sh_optimizer])
-        self.assertEqual(params['xyz'].shape[-1], 4)
-        self.assertEqual(optimizer.state[params['xyz']]['exp_avg_sq'].shape, params['xyz'].shape)
-
-        old_step = optimizer.state[params['opacity']]['step'].clone()
-        optimizer_adapter.replace_([optimizer, sh_optimizer], 'opacity', torch.randn(1, 4), False)
-        params = optimizer_adapter.collect_named_parameters([optimizer, sh_optimizer])
-        self.assertTrue(torch.equal(optimizer.state[params['opacity']]['step'], old_step))
-        self.assertEqual(torch.count_nonzero(optimizer.state[params['opacity']]['exp_avg']).item(), 0)
-        self.assertEqual(torch.count_nonzero(optimizer.state[params['opacity']]['exp_avg_sq']).item(), 0)
-
-    def test_optimizer_adapter_preserves_state_with_cluster_alignment(self):
-        optimizer, sh_optimizer = self._build_optimizers(clustered=True)
-
-        append_params = GaussianParams(
-            xyz=torch.randn(3, 3),
-            scale=torch.randn(3, 3),
-            rot=torch.randn(4, 3),
-            sh_0=torch.randn(1, 3, 3),
-            sh_rest=torch.randn(15, 3, 3),
-            opacity=torch.randn(1, 3),
+        edits = DensifyEdits(
+            changed=True,
+            prune_index=torch.tensor([1]),
+            append_params=append_params,
         )
 
-        optimizer_adapter.append_([optimizer, sh_optimizer], append_params, True)
-        params = optimizer_adapter.collect_named_parameters([optimizer, sh_optimizer])
-        unclustered_xyz, = cluster.uncluster(params['xyz'])
-        self.assertEqual(unclustered_xyz.shape[-1], 6)
-        self.assertEqual(optimizer.state[params['xyz']]['exp_avg'].shape, params['xyz'].shape)
+        exchange_dict = {}
+        for name, param in params.items():
+            kept_tensor = torch.cat((param.detach()[..., :1], param.detach()[..., 2:]), dim=-1)
+            append_tensor = getattr(append_params, name)
+            exchange_dict[param] = torch.nn.Parameter(torch.cat((kept_tensor, append_tensor), dim=-1))
 
-        keep_mask = torch.tensor([True, False, True, False, True, True])
-        optimizer_adapter.prune_([optimizer, sh_optimizer], keep_mask, True)
-        params = optimizer_adapter.collect_named_parameters([optimizer, sh_optimizer])
-        unclustered_xyz, = cluster.uncluster(params['xyz'])
+        old_xyz = params["xyz"]
+        old_state = optimizer.state[old_xyz]["exp_avg"].clone()
+        optimizer_adapter.sync_state_after_densify(
+            [optimizer, sh_optimizer],
+            edits,
+            exchange_dict,
+            False,
+        )
+
+        new_xyz = optimizer.param_groups[0]["params"][0]
+        self.assertIs(new_xyz, exchange_dict[old_xyz])
+        self.assertNotIn(old_xyz, optimizer.state)
+        self.assertEqual(optimizer.state[new_xyz]["exp_avg"].shape, new_xyz.shape)
+        self.assertTrue(torch.equal(optimizer.state[new_xyz]["exp_avg"][..., :1], old_state[..., :1]))
+        self.assertTrue(torch.equal(optimizer.state[new_xyz]["exp_avg"][..., 1:3], old_state[..., 2:]))
+        self.assertEqual(torch.count_nonzero(optimizer.state[new_xyz]["exp_avg"][..., 3:]).item(), 0)
+
+    def test_sync_state_after_densify_handles_clustered_tensors(self):
+        optimizer, sh_optimizer = self._build_optimizers(clustered=True)
+        params = self._named_parameters(optimizer, sh_optimizer)
+
+        append_params = GaussianParams(
+            xyz=torch.randn(3, 2),
+            scale=torch.randn(3, 2),
+            rot=torch.randn(4, 2),
+            sh_0=torch.randn(1, 3, 2),
+            sh_rest=torch.randn(15, 3, 2),
+            opacity=torch.randn(1, 2),
+        )
+        edits = DensifyEdits(
+            changed=True,
+            prune_index=torch.tensor([1, 3]),
+            append_params=append_params,
+        )
+
+        exchange_dict = {}
+        for name, param in params.items():
+            unclustered_tensor, = cluster.uncluster(param.detach())
+            kept_tensor = unclustered_tensor[..., torch.tensor([0, 2])]
+            clustered_tensor, = cluster.cluster_points(2, torch.cat((kept_tensor, getattr(append_params, name)), dim=-1))
+            exchange_dict[param] = torch.nn.Parameter(clustered_tensor)
+
+        old_xyz = params["xyz"]
+        optimizer_adapter.sync_state_after_densify(
+            [optimizer, sh_optimizer],
+            edits,
+            exchange_dict,
+            True,
+        )
+
+        new_xyz = optimizer.param_groups[0]["params"][0]
+        unclustered_xyz, = cluster.uncluster(new_xyz.detach())
         self.assertEqual(unclustered_xyz.shape[-1], 4)
-        self.assertEqual(optimizer.state[params['xyz']]['exp_avg_sq'].shape, params['xyz'].shape)
+        self.assertEqual(optimizer.state[new_xyz]["exp_avg"].shape, new_xyz.shape)
+        self.assertNotIn(old_xyz, optimizer.state)
 
-        optimizer_adapter.replace_([optimizer, sh_optimizer], 'opacity', torch.randn(1, 4), True)
-        params = optimizer_adapter.collect_named_parameters([optimizer, sh_optimizer])
-        unclustered_opacity, = cluster.uncluster(params['opacity'])
-        self.assertEqual(unclustered_opacity.shape[-1], 4)
+    def test_reorder_states_by_index_reorders_optimizer_state_only(self):
+        optimizer, sh_optimizer = self._build_optimizers(clustered=False)
+        params = self._named_parameters(optimizer, sh_optimizer)
+        xyz = params["xyz"]
+        original_param = xyz.detach().clone()
+        original_state = optimizer.state[xyz]["exp_avg"].clone()
+        indices = torch.tensor([3, 1, 0, 2])
+
+        optimizer_adapter.reorder_states_by_index([optimizer, sh_optimizer], indices, False)
+
+        self.assertTrue(torch.equal(xyz.detach(), original_param))
+        self.assertTrue(torch.equal(optimizer.state[xyz]["exp_avg"], original_state[..., indices]))
 
 
-class ModelDensifyStepTests(unittest.TestCase):
+class ModelTests(unittest.TestCase):
     def _fake_model(self):
         model = GaussianSplattingModel.__new__(GaussianSplattingModel)
         torch.nn.Module.__init__(model)
-        model.optimizer = object()
-        model.sh_optimizer = object()
+        model.optimizer = None
+        model.sh_optimizer = None
+        model.cluster_size = 0
         model.sh_degree = 3
         model.active_sh_degree = 0
-        model.xyz = torch.nn.Parameter(torch.zeros(1, 8))
-        model.scale = torch.nn.Parameter(torch.zeros(1, 8))
-        model.rot = torch.nn.Parameter(torch.zeros(1, 8))
-        model.sh_0 = torch.nn.Parameter(torch.zeros(1, 8))
-        model.sh_rest = torch.nn.Parameter(torch.zeros(1, 8))
-        model.opacity = torch.nn.Parameter(torch.zeros(1, 8))
+        model.xyz = torch.nn.Parameter(torch.tensor([[0.0, 1.0, 2.0, 3.0]]))
+        model.scale = torch.nn.Parameter(torch.tensor([[10.0, 11.0, 12.0, 13.0]]))
+        model.rot = torch.nn.Parameter(torch.tensor([[20.0, 21.0, 22.0, 23.0]]))
+        model.sh_0 = torch.nn.Parameter(torch.tensor([[30.0, 31.0, 32.0, 33.0]]))
+        model.sh_rest = torch.nn.Parameter(torch.tensor([[40.0, 41.0, 42.0, 43.0]]))
+        model.opacity = torch.nn.Parameter(torch.tensor([[50.0, 51.0, 52.0, 53.0]]))
         model.density_controller = mock.Mock()
         model.density_controller.densify_params = DensifyParams(interval=5, start=0, end=10, opacity_reset_interval=5)
         model.density_controller.is_densify_actived = lambda epoch: True
+        model.update_cluster_aabb = mock.Mock()
         return model
 
-    def test_densify_step_syncs_optimizers_and_resets_stats(self):
+    def test_densify_step_applies_edits_and_syncs_state(self):
         model = self._fake_model()
-        edits = DensifyEdits(changed=True, stats_need_reset=True)
+        model.optimizer = object()
+        model.sh_optimizer = object()
+        edits = DensifyEdits(changed=True)
+        exchange_dict = {model.xyz: torch.nn.Parameter(model.xyz.detach().clone())}
         model.density_controller.step.return_value = edits
-        model.get_gaussian_params = mock.Mock(return_value=GaussianParams(
-            model.xyz, model.scale, model.rot, model.sh_0, model.sh_rest, model.opacity
-        ))
-        model.sync_optimizers_after_densify = mock.Mock()
-        model.apply_densify_edits = mock.Mock()
+        model.apply_densify_edits = mock.Mock(return_value=exchange_dict)
         model.spatial_rearrange = mock.Mock()
 
-        with mock.patch('litegs.scene.model.StatisticsHelperInst.reset') as reset_mock, \
-             mock.patch('litegs.scene.model.torch.cuda.empty_cache') as empty_cache_mock:
+        with mock.patch("litegs.scene.model.optimizer_adapter.sync_state_after_densify") as sync_mock, \
+             mock.patch("litegs.scene.model.StatisticsHelperInst.reset") as reset_mock, \
+             mock.patch("litegs.scene.model.torch.cuda.empty_cache") as empty_cache_mock:
             model.densify_step(5)
 
-        model.sync_optimizers_after_densify.assert_called_once_with(edits)
-        model.apply_densify_edits.assert_not_called()
+        model.apply_densify_edits.assert_called_once_with(edits)
+        sync_mock.assert_called_once_with([model.optimizer, model.sh_optimizer], edits, exchange_dict, False)
         model.spatial_rearrange.assert_called_once()
         reset_mock.assert_called_once()
         empty_cache_mock.assert_called_once()
         self.assertEqual(model.active_sh_degree, 1)
 
-    def test_densify_step_uses_direct_apply_without_optimizers(self):
+    def test_spatial_rearrange_reorders_params_and_optimizer_state(self):
         model = self._fake_model()
-        model.optimizer = None
-        model.sh_optimizer = None
-        edits = DensifyEdits(changed=True, stats_need_reset=False)
-        model.density_controller.step.return_value = edits
-        model.get_gaussian_params = mock.Mock(return_value=GaussianParams(
-            model.xyz, model.scale, model.rot, model.sh_0, model.sh_rest, model.opacity
-        ))
-        model.sync_optimizers_after_densify = mock.Mock()
-        model.apply_densify_edits = mock.Mock()
-        model.spatial_rearrange = mock.Mock()
+        model.xyz.grad = torch.tensor([[100.0, 101.0, 102.0, 103.0]])
+        model.scale.grad = torch.tensor([[110.0, 111.0, 112.0, 113.0]])
+        model.rot.grad = torch.tensor([[120.0, 121.0, 122.0, 123.0]])
+        model.sh_0.grad = torch.tensor([[130.0, 131.0, 132.0, 133.0]])
+        model.sh_rest.grad = torch.tensor([[140.0, 141.0, 142.0, 143.0]])
+        model.opacity.grad = torch.tensor([[150.0, 151.0, 152.0, 153.0]])
 
-        with mock.patch('litegs.scene.model.StatisticsHelperInst.reset') as reset_mock, \
-             mock.patch('litegs.scene.model.torch.cuda.empty_cache') as empty_cache_mock:
-            model.densify_step(5)
+        model.optimizer = torch.optim.Adam([
+            {"params": [model.xyz], "name": "xyz"},
+            {"params": [model.scale], "name": "scale"},
+            {"params": [model.rot], "name": "rot"},
+            {"params": [model.opacity], "name": "opacity"},
+        ], lr=1e-3)
+        model.sh_optimizer = torch.optim.Adam([
+            {"params": [model.sh_0], "name": "sh_0"},
+            {"params": [model.sh_rest], "name": "sh_rest"},
+        ], lr=1e-3)
 
-        model.apply_densify_edits.assert_called_once_with(edits)
-        model.sync_optimizers_after_densify.assert_not_called()
-        reset_mock.assert_not_called()
-        empty_cache_mock.assert_not_called()
+        for group in model.optimizer.param_groups + model.sh_optimizer.param_groups:
+            group["params"][0].grad = torch.ones_like(group["params"][0])
+        model.optimizer.step()
+        model.sh_optimizer.step()
+        old_xyz = model.xyz.detach().clone()
+        old_state = model.optimizer.state[model.xyz]["exp_avg"].clone()
 
-    def test_densify_step_skips_work_when_no_changes(self):
-        model = self._fake_model()
-        edits = DensifyEdits(changed=False, stats_need_reset=False)
-        model.density_controller.step.return_value = edits
-        model.get_gaussian_params = mock.Mock(return_value=GaussianParams(
-            model.xyz, model.scale, model.rot, model.sh_0, model.sh_rest, model.opacity
-        ))
-        model.sync_optimizers_after_densify = mock.Mock()
-        model.apply_densify_edits = mock.Mock()
-        model.spatial_rearrange = mock.Mock()
+        indices = torch.tensor([2, 0, 3, 1])
+        with mock.patch("litegs.scene.model.scene.spatial_refine", return_value=indices) as refine_mock:
+            model.spatial_rearrange()
 
-        model.densify_step(4)
-
-        model.sync_optimizers_after_densify.assert_not_called()
-        model.apply_densify_edits.assert_not_called()
-        model.spatial_rearrange.assert_not_called()
+        refine_mock.assert_called_once_with(False, model.xyz)
+        self.assertTrue(torch.equal(model.xyz.detach(), old_xyz[..., indices]))
+        self.assertTrue(torch.equal(model.xyz.grad, torch.ones_like(model.xyz.grad)[..., indices]))
+        self.assertTrue(torch.equal(model.optimizer.state[model.xyz]["exp_avg"], old_state[..., indices]))
+        model.update_cluster_aabb.assert_called()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
-

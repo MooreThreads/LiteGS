@@ -106,7 +106,7 @@ class GaussianSplattingModel(nn.Module):
         
         if dp is not None:
             self.density_controller = densify.DensityControllerTamingGS(
-                norm_radius, dp, self.cluster_size > 0, cur_points_num
+                norm_radius, dp, self.cluster_size, cur_points_num
             )
         else:
             self.density_controller=None
@@ -116,78 +116,71 @@ class GaussianSplattingModel(nn.Module):
 
         return
 
-    def get_gaussian_params(self) -> densify.GaussianParams:
-        return densify.GaussianParams(
-            self.xyz, self.scale, self.rot,
-            self.sh_0, self.sh_rest, self.opacity
-        )
-
-    def set_gaussian_params(self, params: densify.GaussianParams) -> None:
-        def _as_parameter(tensor: torch.Tensor | nn.Parameter) -> nn.Parameter:
-            if isinstance(tensor, nn.Parameter):
-                return tensor
-            return nn.Parameter(tensor.requires_grad_(True))
-
-        self.xyz = _as_parameter(params.xyz)
-        self.scale = _as_parameter(params.scale)
-        self.rot = _as_parameter(params.rot)
-        self.sh_0 = _as_parameter(params.sh_0)
-        self.sh_rest = _as_parameter(params.sh_rest)
-        self.opacity = _as_parameter(params.opacity)
-        return
-
     @torch.no_grad()
     def apply_densify_edits(self, edits: densify.DensifyEdits) -> None:
-        params = self.get_gaussian_params()
         if self.cluster_size > 0:
             xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.uncluster(
-                params.xyz, params.scale, params.rot, params.sh_0, params.sh_rest, params.opacity
+                self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity
             )
-            params = densify.GaussianParams(xyz, scale, rot, sh_0, sh_rest, opacity)
+        else:
+            xyz = self.xyz
+            scale = self.scale
+            rot = self.rot
+            sh_0 = self.sh_0
+            sh_rest = self.sh_rest
+            opacity = self.opacity
+
+        if edits.opacity_override is not None:
+            opacity = edits.opacity_override
+
+        if edits.prune_index is not None:
+            keep_mask=torch.ones(xyz.shape[-1],dtype=torch.bool,device=xyz.device)
+            keep_mask[edits.prune_index]=False
+            xyz = xyz[..., keep_mask]
+            scale = scale[..., keep_mask]
+            rot = rot[..., keep_mask]
+            sh_0 = sh_0[..., keep_mask]
+            sh_rest = sh_rest[..., keep_mask]
+            opacity = opacity[..., keep_mask]
 
         if edits.append_params is not None:
-            params = densify.DensityControllerBase._concat_params(params, edits.append_params)
-        if edits.keep_mask is not None:
-            params = densify.DensityControllerBase._slice_params(params, edits.keep_mask)
-        if edits.opacity_override is not None:
-            params = densify.DensityControllerBase._replace_opacity(params, edits.opacity_override)
+            xyz = torch.cat((xyz, edits.append_params.xyz), dim=-1)
+            scale = torch.cat((scale, edits.append_params.scale), dim=-1)
+            rot = torch.cat((rot, edits.append_params.rot), dim=-1)
+            sh_0 = torch.cat((sh_0, edits.append_params.sh_0), dim=-1)
+            sh_rest = torch.cat((sh_rest, edits.append_params.sh_rest), dim=-1)
+            opacity = torch.cat((opacity, edits.append_params.opacity), dim=-1)
+
 
         if self.cluster_size > 0:
             xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.cluster_points(
                 self.cluster_size,
-                params.xyz, params.scale, params.rot, params.sh_0, params.sh_rest, params.opacity
+                xyz, scale, rot, sh_0, sh_rest, opacity
             )
-            params = densify.GaussianParams(xyz, scale, rot, sh_0, sh_rest, opacity)
 
-        self.set_gaussian_params(params)
+        #p.s. Create new nn.Parameter instead of assigning to .data. We change the shape of nn.Parameter so we need a new nn.Parameter to create new autograd graph!
+        exchange_dict={}
+        new_param = nn.Parameter(xyz)
+        exchange_dict[self.xyz]=new_param
+        self.xyz = new_param
+        new_param = nn.Parameter(scale)
+        exchange_dict[self.scale]=new_param
+        self.scale = new_param
+        new_param = nn.Parameter(rot)
+        exchange_dict[self.rot]=new_param
+        self.rot = new_param
+        new_param = nn.Parameter(sh_0)
+        exchange_dict[self.sh_0]=new_param
+        self.sh_0 = new_param
+        new_param = nn.Parameter(sh_rest)
+        exchange_dict[self.sh_rest]=new_param
+        self.sh_rest = new_param
+        new_param = nn.Parameter(opacity)
+        exchange_dict[self.opacity]=new_param
+        self.opacity = new_param
         self.update_cluster_aabb()
-        return
+        return exchange_dict
 
-    @torch.no_grad()
-    def sync_optimizers_after_densify(self, edits: densify.DensifyEdits) -> None:
-        optimizer_list = [self.optimizer, self.sh_optimizer]
-        if edits.append_params is not None:
-            optimizer_adapter.append_(optimizer_list, edits.append_params, self.cluster_size > 0)
-        if edits.keep_mask is not None:
-            optimizer_adapter.prune_(optimizer_list, edits.keep_mask, self.cluster_size > 0)
-        if edits.opacity_override is not None:
-            optimizer_adapter.replace_(optimizer_list, "opacity", edits.opacity_override, self.cluster_size > 0)
-        if edits.clear_optimizer_state:
-            for optimizer in optimizer_list:
-                if optimizer is not None:
-                    optimizer.state.clear()
-
-        params_dict = optimizer_adapter.collect_named_parameters(optimizer_list)
-        self.set_gaussian_params(densify.GaussianParams(
-            params_dict["xyz"],
-            params_dict["scale"],
-            params_dict["rot"],
-            params_dict["sh_0"],
-            params_dict["sh_rest"],
-            params_dict["opacity"],
-        ))
-        self.update_cluster_aabb()
-        return
 
     def state_dict(self,destination=None, prefix='', keep_vars=False):
         """
@@ -251,34 +244,55 @@ class GaussianSplattingModel(nn.Module):
 
     def update_cluster_aabb(self) -> None:
         """Update cluster AABB based on current scale and rotation."""
-        if self.cluster_size > 0:
-            cluster_origin, cluster_extend = scene.cluster.get_cluster_AABB(
-                self.xyz, self.scale.exp(), nn.functional.normalize(self.rot, dim=0)
-            )
-            self.cluster_origin = cluster_origin
-            self.cluster_extend = cluster_extend
+        assert(self.cluster_size > 0)
+        cluster_origin, cluster_extend = scene.cluster.get_cluster_AABB(
+            self.xyz, self.scale.exp(), nn.functional.normalize(self.rot, dim=0)
+        )
+        self.cluster_origin = cluster_origin
+        self.cluster_extend = cluster_extend
         return
 
     @torch.no_grad()
     def spatial_rearrange(self) -> None:
-        if self.optimizer is None:
-            (
-                self.xyz.data, self.scale.data, self.rot.data, 
-                self.sh_0.data, self.sh_rest.data, 
-                self.opacity.data
-            ) = scene.spatial_refine(
-                self.cluster_size > 0, 
-                None,
-                self.xyz, self.scale, self.rot, 
-                self.sh_0, self.sh_rest, 
-                self.opacity
+
+        assert(self.xyz.grad is None)
+
+        indices = scene.spatial_refine(self.cluster_size > 0, self.xyz)
+
+        if self.cluster_size > 0:
+            xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.uncluster(
+                self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity
+            )
+            xyz = xyz[..., indices]
+            scale = scale[..., indices]
+            rot = rot[..., indices]
+            sh_0 = sh_0[..., indices]
+            sh_rest = sh_rest[..., indices]
+            opacity = opacity[..., indices]
+            xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.cluster_points(
+                self.cluster_size, xyz, scale, rot, sh_0, sh_rest, opacity
             )
         else:
-            (
-                self.xyz, self.scale, self.rot, 
-                self.sh_0, self.sh_rest, 
-                self.opacity
-            ) = scene.spatial_refine(self.cluster_size > 0, [self.optimizer,self.sh_optimizer], self.xyz)
+            xyz = self.xyz.data[..., indices].contiguous()
+            scale = self.scale.data[..., indices].contiguous()
+            rot = self.rot.data[..., indices].contiguous()
+            sh_0 = self.sh_0.data[..., indices].contiguous()
+            sh_rest = self.sh_rest.data[..., indices].contiguous()
+            opacity = self.opacity.data[..., indices].contiguous()
+
+        self.xyz.data = xyz
+        self.scale.data = scale
+        self.rot.data = rot
+        self.sh_0.data = sh_0
+        self.sh_rest.data = sh_rest
+        self.opacity.data = opacity
+
+        if self.optimizer is not None or self.sh_optimizer is not None:
+            optimizer_adapter.reorder_states_by_index(
+                [self.optimizer, self.sh_optimizer],
+                indices,
+                self.cluster_size > 0
+            )
         self.update_cluster_aabb()
         return
 
@@ -289,21 +303,18 @@ class GaussianSplattingModel(nn.Module):
         """
         if self.density_controller is None:
             return
+        
+        if self.cluster_size > 0:
+            xyz, scale, rot, sh_0, sh_rest, opacity=scene.cluster.uncluster(self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity)  
+        else:
+            xyz, scale, rot, sh_0, sh_rest, opacity=(self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity)  
 
-        edits = self.density_controller.step(self.get_gaussian_params(), epoch)
+        edits = self.density_controller.step(densify.GaussianParams(xyz, scale, rot, sh_0, sh_rest, opacity),epoch)
         if edits.changed:
-            if self.optimizer is None and self.sh_optimizer is None:
-                self.apply_densify_edits(edits)
-            else:
-                self.sync_optimizers_after_densify(edits)
-
-            if edits.stats_need_reset:
-                StatisticsHelperInst.reset(
-                    self.xyz.shape[-2],
-                    self.xyz.shape[-1],
-                    self.density_controller.is_densify_actived
-                )
-                torch.cuda.empty_cache()
+            exchange_dict = self.apply_densify_edits(edits)
+            optimizer_adapter.sync_state_after_densify([self.optimizer, self.sh_optimizer],edits,exchange_dict,self.cluster_size > 0)
+            
+        StatisticsHelperInst.reset(self.xyz.shape[-2], self.xyz.shape[-1],self.density_controller.is_densify_actived)
 
         if epoch % self.density_controller.densify_params.interval == 0:
             self.spatial_rearrange()
@@ -311,6 +322,7 @@ class GaussianSplattingModel(nn.Module):
         if self.active_sh_degree < self.sh_degree:
             self.active_sh_degree = min(int(epoch / 5), self.sh_degree)
 
+        torch.cuda.empty_cache()
         return
 
     def forward(
@@ -339,13 +351,6 @@ class GaussianSplattingModel(nn.Module):
             )
             if StatisticsHelperInst.bStart:
                 StatisticsHelperInst.set_compact_mask(visible_chunkid,visible_chunks_num)
-
-            #  xyz, scale, rot,color, opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
-            #     pp.sparse_grad,actived_sh_degree,
-            #     visible_chunkid,visible_chunks_num,
-            #     view_matrix,
-            #     xyz,scale,rot,sh_0,sh_rest,opacity
-            # )
 
             # Step 1: Compact + Activate (without SH)
             xyz, scale, rot, opacity=utils.wrapper.CompactActivateNoSH.apply(
