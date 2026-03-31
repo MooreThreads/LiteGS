@@ -214,7 +214,7 @@ class ShFusedAdam(torch.optim.Adam):
             self._color.grad,
             self.state[sh_0]['exp_avg'],self.state[sh_0]['exp_avg_sq'],
             self.state[sh_rest]['exp_avg'],self.state[sh_rest]['exp_avg_sq'],
-            self.param_groups[0]['lr'],self.param_groups[1]['lr'],0.9,0.99,self.defaults['eps']
+            self.param_groups[0]['lr'],self.param_groups[1]['lr'],0.9,0.999,self.defaults['eps']
         )
 
         
