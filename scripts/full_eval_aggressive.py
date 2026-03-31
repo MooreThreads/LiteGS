@@ -58,15 +58,15 @@ args, _ = parser.parse_known_args()
 
 
 datasets={
-    "mipnerf360_indoor":["bicycle", "flowers", "garden", "stump", "treehill"],
-    "mipnerf360_outdoor":["room", "counter", "kitchen", "bonsai"],
+    "mipnerf360_outdoor":["bicycle", "flowers", "garden", "stump", "treehill"],
+    "mipnerf360_indoor":["room", "counter", "kitchen", "bonsai"],
     "tanksandtemples":["truck", "train"],
     "deepblending":["drjohnson", "playroom"],
 }
 
 img_folder={
-    "mipnerf360_indoor":"images_4",
-    "mipnerf360_outdoor":"images_2",
+    "mipnerf360_outdoor":"images_4",
+    "mipnerf360_indoor":"images_2",
     "tanksandtemples":"images",
     "deepblending":"images",
 }
