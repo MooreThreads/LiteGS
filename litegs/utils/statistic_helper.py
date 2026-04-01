@@ -13,11 +13,6 @@ class MeanStdData:
 
 class StatisticsHelper:
     def __init__(self,chunk_num:int,chunk_size:int):
-        self.cached_tiles_blend_count:dict[str,torch.Tensor]={}
-        self.cached_complex_tile:dict[str,torch.Tensor]={}
-        self.cached_sorted_tile_list:dict[str,torch.Tensor]={}
-        self.cur_sample:Optional[str]=None
-    
         self.reset(chunk_num,chunk_size,lambda epoch:False)
         return
     
@@ -62,20 +57,6 @@ class StatisticsHelper:
     def set_compact_mask(self,compact_mask:torch.Tensor,valid_length:Optional[torch.Tensor]=None):
         self.compact_mask=compact_mask
         self.valid_length=valid_length
-        return
-    
-    @torch.no_grad()
-    def update_tile_blend_count(self,piexel_blend_count:torch.Tensor,tilesize_h:int,tilesize_w:int):
-        N,_,H,W=piexel_blend_count.shape
-        assert(N==1,"expecting batch size of 1 for blend count")
-        tiles_num_h=int((H+tilesize_h-1)/tilesize_h)
-        tiles_num_w=int((W+tilesize_w-1)/tilesize_w)
-        piexel_blend_count=piexel_blend_count.detach().reshape(N,tiles_num_h,tilesize_h,tiles_num_w,tilesize_w).permute(1,3,0,2,4).reshape(tiles_num_h*tiles_num_w,-1)
-        tiles_blend_count=piexel_blend_count.max(dim=1).values
-        if self.cur_sample is not None:
-            self.cached_tiles_blend_count[self.cur_sample]=tiles_blend_count
-            self.cached_sorted_tile_list[self.cur_sample]=tiles_blend_count.sort(descending=True)[1].int()+1
-            #self.cached_complex_tile[self.cur_sample]=(self.cached_tiles_blend_count[self.cur_sample]>1024).nonzero()[:,0]+1
         return
     
     @torch.no_grad()

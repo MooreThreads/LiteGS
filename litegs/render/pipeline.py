@@ -27,7 +27,7 @@ class RenderPipeline(nn.Module):
     ):
         super().__init__()
         self.pp = pp
-        self.frames_buffer = data.FramesBuffer(training_set)
+        self.training_frames_buffer = data.FramesBuffer(training_set)
         self.model = gs_model
         self.start_epoch = 0
 
@@ -75,11 +75,9 @@ class RenderPipeline(nn.Module):
         Returns:
             img, transmitance, depth, normal, primitive_visible
         """
-        feedback_visible_chunks_num=None
-        feedback_binning_allocate_size=None
+        training_frame_buffer=None
         if self.training:
-            feedback_visible_chunks_num=self.frames_buffer.feedback_visible_chunks_num
-            feedback_binning_allocate_size=self.frames_buffer.feedback_binning_allocate_size
+            training_frame_buffer=self.training_frames_buffer
 
         if self.learnable_viewproj is not None:
             view_matrix, proj_matrix,viewproj_matrix,frustumplane=self.learnable_viewproj(idx_tensor.cuda(),output_shape[0],output_shape[1])
@@ -87,12 +85,12 @@ class RenderPipeline(nn.Module):
         (
             visible_chunkid, visible_chunks_num,valid_length,
             xyz, scale, rot, color, opacity
-        ) = self.model(view_matrix, frustumplane, idx_tensor, feedback_visible_chunks_num)
+        ) = self.model(view_matrix, frustumplane, idx_tensor, training_frame_buffer)
 
         img,transmitance,depth,normal,primitive_visible=render.render(
             view_matrix, proj_matrix,
             xyz, scale, rot, color, opacity,
-            valid_length, feedback_binning_allocate_size, idx_tensor,
+            valid_length, training_frame_buffer, idx_tensor,
             output_shape, self.pp
         )
 

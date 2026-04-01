@@ -24,7 +24,6 @@ class DensifyEdits:
     opacity_override: torch.Tensor | None = None
     clear_optimizer_state: bool = False
     changed: bool = False
-    stats_need_reset: bool = False
 
 
 class DensityControllerBase:

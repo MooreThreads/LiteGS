@@ -11,6 +11,7 @@ from ..training import densify
 from ..training import optimizer_adapter
 from .. import utils
 from ..utils.statistic_helper import StatisticsHelperInst
+from ..data import FramesBuffer
 
 
 class GaussianSplattingModel(nn.Module):
@@ -330,7 +331,7 @@ class GaussianSplattingModel(nn.Module):
         view_matrix: torch.Tensor,
         frustumplane: torch.Tensor,
         idx_tensor: torch.Tensor,
-        feedback_visible_chunks_num:torch.Tensor
+        training_frame_buffer:FramesBuffer|None
     ):
         """
         Perform culling + activation (render_preprocess).
@@ -341,8 +342,10 @@ class GaussianSplattingModel(nn.Module):
         
         visible_chunkid=None
         visible_chunks_num=None
-        if self.training==False:
-            feedback_visible_chunks_num=None
+        feedback_visible_chunks_num=None
+        if self.training:
+            feedback_visible_chunks_num=training_frame_buffer.feedback_visible_chunks_num
+            
         
         if self.cluster_size>0:
             visibility,visible_chunks_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb(

@@ -7,6 +7,7 @@ from .. import utils
 from ..utils.statistic_helper import StatisticsHelperInst,StatisticsHelper
 from .. import arguments
 from .. import scene
+from ..data import FramesBuffer
 
 def render_preprocess(
     cluster_origin:torch.Tensor|None,cluster_extend:torch.Tensor|None,frustumplane:torch.Tensor,view_matrix:torch.Tensor,
@@ -70,7 +71,7 @@ def render_preprocess(
 def render(
     view_matrix:torch.Tensor,proj_matrix:torch.Tensor,
     xyz:torch.Tensor,scale:torch.Tensor,rot:torch.Tensor,color:torch.Tensor,opacity:torch.Tensor,
-    valid_length:torch.Tensor|None,feedback_binning_allocate_size:torch.Tensor|None,idx_tensor:torch.Tensor|None,
+    valid_length:torch.Tensor|None,training_frame_buffer:FramesBuffer|None,idx_tensor:torch.Tensor|None,
     output_shape:tuple[int,int],pp:arguments.PipelineParams
 )->tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]:
 
@@ -85,6 +86,9 @@ def render(
     nvtx.range_pop()
     
     #visibility table
+    feedback_binning_allocate_size = None
+    if training_frame_buffer is not None:
+        feedback_binning_allocate_size=training_frame_buffer.feedback_binning_allocate_size
     tile_start_index,sorted_pointId,primitive_visible=utils.wrapper.Binning.call_fused(
         ndc_pos,view_depth,inv_cov2d,opacity,
         valid_length,feedback_binning_allocate_size,idx_tensor,
@@ -92,18 +96,27 @@ def render(
     )
 
     #raster
-    tiles_x=int(math.ceil(output_shape[1]/float(pp.tile_size[1])))
-    tiles_y=int(math.ceil(output_shape[0]/float(pp.tile_size[0])))
     tiles=None
-    try:
-        tiles=StatisticsHelperInst.cached_sorted_tile_list[StatisticsHelperInst.cur_sample].unsqueeze(0)
-    except:
-        pass
-    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(sorted_pointId,tile_start_index,ndc_pos,inv_cov2d,color,opacity,tiles,
-                                            output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],pp.enable_transmitance,pp.enable_depth)
+    if training_frame_buffer is not None:
+        views_num=idx_tensor.shape[0]
+        temp_list=[]
+        try:
+            for view_i in range(views_num):
+                temp_list.append(training_frame_buffer.cache_sorted_tile_list[int(idx_tensor[view_i])].unsqueeze(0))
+            tiles=torch.cat(temp_list,dim=0)
+        except:
+            pass
+
+    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(
+        sorted_pointId,tile_start_index,
+        ndc_pos,inv_cov2d,color,opacity,
+        tiles,
+        output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],
+        pp.enable_transmitance,pp.enable_depth
+    )
     
-    if StatisticsHelperInst.bStart:
-        StatisticsHelperInst.update_tile_blend_count(lst_contributor,pp.tile_size[0],pp.tile_size[1])
+    if StatisticsHelperInst.bStart and training_frame_buffer is not None:
+        training_frame_buffer.update_tile_blend_count(lst_contributor,idx_tensor,pp.tile_size[0],pp.tile_size[1])
 
 
     img=img[...,:output_shape[0],:output_shape[1]].clamp(0,1).contiguous()

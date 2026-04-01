@@ -245,12 +245,14 @@ class FramesBuffer:
         return
     
     @torch.no_grad()
-    def update_tile_blend_count(self,piexel_blend_count:torch.Tensor,idx_tesnor:torch.Tensor):
+    def update_tile_blend_count(self,piexel_blend_count:torch.Tensor,idx_tesnor:torch.Tensor,tilesize_h:int,tilesize_w:int):
         N,T,H,W=piexel_blend_count.shape
-        tiles_blend_count=piexel_blend_count.detach().reshape(N,T,H*W).max(dim=2).values
+        tiles_num_h=int((H+tilesize_h-1)/tilesize_h)
+        tiles_num_w=int((W+tilesize_w-1)/tilesize_w)
+        piexel_blend_count=piexel_blend_count.detach().reshape(N,tiles_num_h,tilesize_h,tiles_num_w,tilesize_w).permute(0,1,3,2,4).reshape(-1,tiles_num_h*tiles_num_w,tilesize_h*tilesize_w)
+        tiles_blend_count=piexel_blend_count.max(dim=2).values
         for i in range(N):
             idx=idx_tesnor[i].item()
-            assert(idx<len(self.frames) and idx>=0)
-            self.cached_tiles_blend_count[idx]=tiles_blend_count[i]
-            self.cached_sorted_tile_list[idx]=tiles_blend_count[i].sort(descending=True)[1].int()+1
+            self.cache_tiles_blend_count[idx]=tiles_blend_count[i]
+            self.cache_sorted_tile_list[idx]=tiles_blend_count[i].sort(descending=True)[1].int()+1
         return
