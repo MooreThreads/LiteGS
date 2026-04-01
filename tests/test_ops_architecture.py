@@ -73,6 +73,66 @@ class OpsArchitectureTests(unittest.TestCase):
         self.assertTrue(torch.allclose(script_output, expected, atol=1e-6, rtol=1e-6))
         self.assertTrue(torch.allclose(cuda_output, expected, atol=1e-6, rtol=1e-6))
 
+    def test_mvp_transform_matches_expected_formula_for_script_and_cuda(self):
+        position = torch.tensor(
+            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [1.0, 1.0]],
+            device="cuda",
+        )
+        view_matrix = torch.tensor(
+            [[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [10.0, 20.0, 30.0, 1.0]]],
+            device="cuda",
+        )
+        proj_matrix = torch.tensor(
+            [[[2.0, 0.0, 0.0, 0.0], [0.0, 4.0, 0.0, 0.0], [0.0, 0.0, 8.0, 1.0], [0.0, 0.0, 0.0, 2.0]]],
+            device="cuda",
+        )
+
+        expected_view = torch.tensor(
+            [[[11.0, 12.0], [23.0, 24.0], [35.0, 36.0], [1.0, 1.0]]],
+            device="cuda",
+        )
+        expected_ndc = torch.tensor(
+            [[[0.5945946, 0.6315789], [2.4864864, 2.5263157], [7.5675673, 7.5789471], [1.0, 1.0]]],
+            device="cuda",
+        )
+
+        script_view, script_ndc = ops.mvp_transform_script(position, view_matrix, proj_matrix)
+        cuda_view, cuda_ndc = ops.mvp_transform_cuda(position, view_matrix, proj_matrix)
+
+        self.assertTrue(torch.equal(script_view, expected_view))
+        self.assertTrue(torch.allclose(script_ndc, expected_ndc, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.equal(cuda_view, expected_view))
+        self.assertTrue(torch.allclose(cuda_ndc, expected_ndc, atol=1e-6, rtol=1e-6))
+
+    def test_mvp_transform_backward_matches_script_autograd_for_cuda(self):
+        view_matrix = torch.tensor(
+            [[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [10.0, 20.0, 30.0, 1.0]]],
+            device="cuda",
+        )
+        proj_matrix = torch.tensor(
+            [[[2.0, 0.0, 0.0, 0.0], [0.0, 4.0, 0.0, 0.0], [0.0, 0.0, 8.0, 1.0], [0.0, 0.0, 0.0, 2.0]]],
+            device="cuda",
+        )
+
+        script_position = torch.tensor(
+            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [1.0, 1.0]],
+            device="cuda",
+            requires_grad=True,
+        )
+        script_view, script_ndc = ops.mvp_transform_script(script_position, view_matrix, proj_matrix)
+        (script_view.sum() + script_ndc.sum()).backward()
+        expected_grad = script_position.grad.detach().clone()
+
+        cuda_position = torch.tensor(
+            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [1.0, 1.0]],
+            device="cuda",
+            requires_grad=True,
+        )
+        cuda_view, cuda_ndc = ops.mvp_transform_cuda(cuda_position, view_matrix, proj_matrix)
+        (cuda_view.sum() + cuda_ndc.sum()).backward()
+
+        self.assertTrue(torch.allclose(cuda_position.grad, expected_grad, atol=1e-6, rtol=1e-6))
+
     def test_backend_priority_between_default_context_and_explicit_argument(self):
         backend_module.set_default_backend(backend_module.Backend.SCRIPT)
         self.assertEqual(

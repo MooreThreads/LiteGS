@@ -24,6 +24,39 @@ class _CreateTransformMatrixCuda(torch.autograd.Function):
         return grad_scale, grad_rot, None
 
 
+class _MvpTransformCuda(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, position: torch.Tensor, view_matrix: torch.Tensor, proj_matrix: torch.Tensor, valid_length: torch.Tensor | None = None):
+        litegs_fused = load_fused_backend()
+        saved_valid_length = valid_length
+        if saved_valid_length is None:
+            saved_valid_length = torch.tensor([], device=position.device, dtype=torch.int32)
+        view_pos, ndc_pos = litegs_fused.mvp_transform_forward(
+            position,
+            view_matrix,
+            proj_matrix,
+            None if saved_valid_length.numel() == 0 else saved_valid_length,
+        )
+        ctx.save_for_backward(view_pos, view_matrix, proj_matrix, saved_valid_length)
+        return view_pos, ndc_pos
+
+    @staticmethod
+    def backward(ctx, grad_view_pos: torch.Tensor, grad_ndc_pos: torch.Tensor):
+        litegs_fused = load_fused_backend()
+        grad_view_pos = grad_view_pos.contiguous()
+        grad_ndc_pos = grad_ndc_pos.contiguous()
+        view_pos, view_matrix, proj_matrix, saved_valid_length = ctx.saved_tensors
+        grad_position = litegs_fused.mvp_transform_backward(
+            grad_ndc_pos,
+            grad_view_pos,
+            view_matrix,
+            proj_matrix,
+            view_pos,
+            None if saved_valid_length.numel() == 0 else saved_valid_length,
+        )
+        return grad_position, None, None, None
+
+
 def create_transform_matrix_script(
     scale: torch.Tensor,
     rot: torch.Tensor,
@@ -155,3 +188,61 @@ def create_rayspace_transform_matrix(
     if selected_backend == Backend.SCRIPT:
         return create_rayspace_transform_matrix_script(view_pos, proj_matrix, output_shape, valid_length)
     return create_rayspace_transform_matrix_cuda(view_pos, proj_matrix, output_shape, valid_length)
+
+
+def mvp_transform_script(
+    position: torch.Tensor,
+    view_matrix: torch.Tensor,
+    proj_matrix: torch.Tensor,
+    valid_length: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    view_pos = torch.einsum("jn,bji->bin", position, view_matrix)
+    hom_pos = torch.einsum("bjn,bji->bin", view_pos, proj_matrix)
+    inv_w = torch.where(hom_pos[:, 3].abs() > 1e-12, 1.0 / hom_pos[:, 3], torch.zeros_like(hom_pos[:, 3]))
+    ndc_pos = torch.empty_like(hom_pos)
+    ndc_pos[:, 0] = hom_pos[:, 0] * inv_w
+    ndc_pos[:, 1] = hom_pos[:, 1] * inv_w
+    ndc_pos[:, 2] = hom_pos[:, 2] * inv_w
+    ndc_pos[:, 3] = 1.0
+    return view_pos, ndc_pos
+
+
+def mvp_transform_cuda(
+    position: torch.Tensor,
+    view_matrix: torch.Tensor,
+    proj_matrix: torch.Tensor,
+    valid_length: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return _MvpTransformCuda.apply(position, view_matrix, proj_matrix, valid_length)
+
+
+def mvp_transform(
+    position: torch.Tensor,
+    view_matrix: torch.Tensor,
+    proj_matrix: torch.Tensor,
+    valid_length: torch.Tensor | None = None,
+    *,
+    backend=None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Transform world-space homogeneous positions to view space and NDC.
+
+    Args:
+        position: World-space homogeneous positions with shape ``[4, P]``.
+            The first dimension stores ``[x, y, z, w]``, and the last dimension
+            indexes primitives.
+        view_matrix: View matrices with shape ``[B, 4, 4]``.
+        proj_matrix: Projection matrices with shape ``[B, 4, 4]``.
+        valid_length: Optional active primitive count tensor. This parameter is
+            only used by the CUDA backend and is ignored by the script backend.
+        backend: Backend selection. ``None`` means using the current default
+            backend from ``ops.backend``.
+
+    Returns:
+        A tuple ``(view_pos, ndc_pos)``.
+        Both tensors have shape ``[B, 4, P]`` with layout ``[batch, component, primitive]``.
+    """
+    selected_backend = normalize_backend(backend)
+    if selected_backend == Backend.SCRIPT:
+        return mvp_transform_script(position, view_matrix, proj_matrix, valid_length)
+    return mvp_transform_cuda(position, view_matrix, proj_matrix, valid_length)
