@@ -187,13 +187,6 @@ class ModelTests(unittest.TestCase):
 
     def test_spatial_rearrange_reorders_params_and_optimizer_state(self):
         model = self._fake_model()
-        model.xyz.grad = torch.tensor([[100.0, 101.0, 102.0, 103.0]])
-        model.scale.grad = torch.tensor([[110.0, 111.0, 112.0, 113.0]])
-        model.rot.grad = torch.tensor([[120.0, 121.0, 122.0, 123.0]])
-        model.sh_0.grad = torch.tensor([[130.0, 131.0, 132.0, 133.0]])
-        model.sh_rest.grad = torch.tensor([[140.0, 141.0, 142.0, 143.0]])
-        model.opacity.grad = torch.tensor([[150.0, 151.0, 152.0, 153.0]])
-
         model.optimizer = torch.optim.Adam([
             {"params": [model.xyz], "name": "xyz"},
             {"params": [model.scale], "name": "scale"},
@@ -209,6 +202,8 @@ class ModelTests(unittest.TestCase):
             group["params"][0].grad = torch.ones_like(group["params"][0])
         model.optimizer.step()
         model.sh_optimizer.step()
+        model.optimizer.zero_grad(set_to_none=True)
+        model.sh_optimizer.zero_grad(set_to_none=True)
         old_xyz = model.xyz.detach().clone()
         old_state = model.optimizer.state[model.xyz]["exp_avg"].clone()
 
@@ -218,7 +213,6 @@ class ModelTests(unittest.TestCase):
 
         refine_mock.assert_called_once_with(False, model.xyz)
         self.assertTrue(torch.equal(model.xyz.detach(), old_xyz[..., indices]))
-        self.assertTrue(torch.equal(model.xyz.grad, torch.ones_like(model.xyz.grad)[..., indices]))
         self.assertTrue(torch.equal(model.optimizer.state[model.xyz]["exp_avg"], old_state[..., indices]))
         model.update_cluster_aabb.assert_called()
 

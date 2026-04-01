@@ -2,6 +2,7 @@ import numpy as np
 import math
 import torch
 from .spherical_harmonics import sh0_to_rgb,sh_to_rgb,rgb_to_sh0
+from . import ops
 from . import wrapper
 
 def qvec2rotmat(qvec):
@@ -155,4 +156,3 @@ def tiles2img_torch(tile_img:torch.Tensor,tilesNumX,tilesNumY)->torch.Tensor:
     translated_tile_img=tile_img.reshape(N,C,tilesNumY,tilesNumX,tile_H,tile_W).transpose(-2,-3)
     img=translated_tile_img.reshape((N,C,tilesNumY*tile_H,tilesNumX*tile_W))
     return img
-
