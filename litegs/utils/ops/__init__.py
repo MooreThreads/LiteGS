@@ -1,5 +1,8 @@
 from .backend import Backend, get_default_backend, normalize_backend, set_default_backend, use_backend
 from .transform import (
+    create_cov2d_directly,
+    create_cov2d_directly_cuda,
+    create_cov2d_directly_script,
     create_rayspace_transform_matrix,
     create_rayspace_transform_matrix_cuda,
     create_rayspace_transform_matrix_script,
@@ -26,4 +29,7 @@ __all__ = [
     "mvp_transform",
     "mvp_transform_cuda",
     "mvp_transform_script",
+    "create_cov2d_directly",
+    "create_cov2d_directly_cuda",
+    "create_cov2d_directly_script",
 ]

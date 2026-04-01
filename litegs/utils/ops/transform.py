@@ -53,6 +53,37 @@ class _MvpTransformCuda(torch.autograd.Function):
         return grad_position, None, None, None
 
 
+class _CreateCov2dDirectlyCuda(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        J: torch.Tensor,
+        view_matrix: torch.Tensor,
+        transform_matrix: torch.Tensor,
+        valid_length: torch.Tensor | None = None,
+    ):
+        saved_valid_length = valid_length
+        if saved_valid_length is None:
+            saved_valid_length = torch.tensor([], device=transform_matrix.device, dtype=torch.int32)
+        runtime_valid_length = None if saved_valid_length.numel() == 0 else saved_valid_length
+        ctx.save_for_backward(J, view_matrix, transform_matrix, saved_valid_length)
+        return fused.createCov2dDirectly_forward(J, view_matrix, transform_matrix, runtime_valid_length)
+
+    @staticmethod
+    def backward(ctx, grad_cov2d: torch.Tensor):
+        grad_cov2d = grad_cov2d.contiguous()
+        J, view_matrix, transform_matrix, saved_valid_length = ctx.saved_tensors
+        runtime_valid_length = None if saved_valid_length.numel() == 0 else saved_valid_length
+        transform_matrix_grad = fused.createCov2dDirectly_backward(
+            grad_cov2d,
+            J,
+            view_matrix,
+            transform_matrix,
+            runtime_valid_length,
+        )
+        return None, None, transform_matrix_grad, None
+
+
 def create_transform_matrix_script(
     scale: torch.Tensor,
     rot: torch.Tensor,
@@ -241,3 +272,62 @@ def mvp_transform(
     if selected_backend == Backend.SCRIPT:
         return mvp_transform_script(position, view_matrix, proj_matrix, valid_length)
     return mvp_transform_cuda(position, view_matrix, proj_matrix, valid_length)
+
+
+def create_cov2d_directly_script(
+    J: torch.Tensor,
+    view_matrix: torch.Tensor,
+    transform_matrix: torch.Tensor,
+    valid_length: torch.Tensor | None = None,
+) -> torch.Tensor:
+    view3 = view_matrix[:, :3, :3].detach()
+    rayspace = J[:, :, :2, :].permute(0, 3, 1, 2).detach()
+    world_transform = transform_matrix.permute(2, 0, 1)
+    temp0 = torch.einsum("pij,bjk->bpik", world_transform, view3)
+    temp1 = torch.matmul(temp0, rayspace)
+    cov2d = torch.matmul(temp1.transpose(-1, -2), temp1)
+    cov2d[:, :, 0, 0] += 0.3
+    cov2d[:, :, 1, 1] += 0.3
+    return cov2d.permute(0, 2, 3, 1).contiguous()
+
+
+def create_cov2d_directly_cuda(
+    J: torch.Tensor,
+    view_matrix: torch.Tensor,
+    transform_matrix: torch.Tensor,
+    valid_length: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return _CreateCov2dDirectlyCuda.apply(J, view_matrix, transform_matrix, valid_length)
+
+
+def create_cov2d_directly(
+    J: torch.Tensor,
+    view_matrix: torch.Tensor,
+    transform_matrix: torch.Tensor,
+    valid_length: torch.Tensor | None = None,
+    *,
+    backend=None,
+) -> torch.Tensor:
+    """
+    Build 2D covariance matrices directly from ray-space Jacobians and world transforms.
+
+    Args:
+        J: Ray-space Jacobians with shape ``[N, 3, 3, P]``.
+            Only the first two columns are used when projecting to screen space.
+        view_matrix: View matrices with shape ``[N, 4, 4]``.
+            Only the top-left ``3x3`` rotation block is used.
+        transform_matrix: World transform matrices with shape ``[3, 3, P]``.
+            The layout is ``[row, col, primitive]``.
+        valid_length: Optional active primitive count tensor. This parameter is
+            only used by the CUDA backend and is ignored by the script backend.
+        backend: Backend selection. ``None`` means using the current default
+            backend from ``ops.backend``.
+
+    Returns:
+        Screen-space covariance matrices with shape ``[N, 2, 2, P]``.
+        The layout is ``[view, row, col, primitive]``.
+    """
+    selected_backend = normalize_backend(backend)
+    if selected_backend == Backend.SCRIPT:
+        return create_cov2d_directly_script(J, view_matrix, transform_matrix, valid_length)
+    return create_cov2d_directly_cuda(J, view_matrix, transform_matrix, valid_length)

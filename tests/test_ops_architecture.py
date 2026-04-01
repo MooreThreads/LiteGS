@@ -133,6 +133,72 @@ class OpsArchitectureTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(cuda_position.grad, expected_grad, atol=1e-6, rtol=1e-6))
 
+    def test_create_cov2d_directly_matches_expected_formula_for_script_and_cuda(self):
+        J = torch.tensor(
+            [[
+                [[1.0], [0.0], [0.0]],
+                [[0.0], [1.0], [0.0]],
+                [[0.0], [0.0], [0.0]],
+            ]],
+            device="cuda",
+        )
+        view_matrix = torch.tensor(
+            [[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]],
+            device="cuda",
+        )
+        transform_matrix = torch.tensor(
+            [[[2.0], [0.0], [0.0]], [[0.0], [3.0], [0.0]], [[0.0], [0.0], [4.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        expected = torch.tensor(
+            [[[[4.3], [0.0]], [[0.0], [9.3]]]],
+            device="cuda",
+        )
+
+        script_output = ops.create_cov2d_directly_script(J, view_matrix, transform_matrix)
+        cuda_output = ops.create_cov2d_directly_cuda(J, view_matrix, transform_matrix)
+
+        self.assertTrue(torch.allclose(script_output, expected, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_output, expected, atol=1e-6, rtol=1e-6))
+
+    def test_create_cov2d_directly_backward_matches_expected_for_script_and_cuda(self):
+        J = torch.tensor(
+            [[
+                [[1.0], [0.0], [0.0]],
+                [[0.0], [1.0], [0.0]],
+                [[0.0], [0.0], [0.0]],
+            ]],
+            device="cuda",
+        )
+        view_matrix = torch.tensor(
+            [[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]],
+            device="cuda",
+        )
+        expected_grad = torch.tensor(
+            [[[4.0], [4.0], [0.0]], [[6.0], [6.0], [0.0]], [[0.0], [0.0], [0.0]]],
+            device="cuda",
+        )
+
+        script_transform = torch.tensor(
+            [[[2.0], [0.0], [0.0]], [[0.0], [3.0], [0.0]], [[0.0], [0.0], [4.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        script_output = ops.create_cov2d_directly_script(J, view_matrix, script_transform)
+        script_output.sum().backward()
+
+        cuda_transform = torch.tensor(
+            [[[2.0], [0.0], [0.0]], [[0.0], [3.0], [0.0]], [[0.0], [0.0], [4.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        cuda_output = ops.create_cov2d_directly_cuda(J, view_matrix, cuda_transform)
+        cuda_output.sum().backward()
+
+        self.assertTrue(torch.allclose(script_transform.grad, expected_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_transform.grad, expected_grad, atol=1e-6, rtol=1e-6))
+
     def test_backend_priority_between_default_context_and_explicit_argument(self):
         backend_module.set_default_backend(backend_module.Backend.SCRIPT)
         self.assertEqual(
