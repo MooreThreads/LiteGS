@@ -270,6 +270,15 @@ class CreateRaySpaceTransformMatrix(BaseWrapper):
 class MVPTransform(torch.autograd.Function):
     @staticmethod
     def forward(ctx,position:torch.Tensor,view_matrix:torch.Tensor,proj_matrix:torch.Tensor,valid_length:torch.Tensor|None=None):
+        '''
+        Args:
+            position:world pos [4,N]
+            view_matrix: [B,4,4]
+            proj_matrix: [B,4,4]
+        Returns:
+            view_pos: view space position [B,4,N]
+            ndc_pos: NDC position [B,4,N]
+        '''
         view_pos,ndc_pos=litegs_fused.mvp_transform_forward(position,view_matrix,proj_matrix,valid_length)
         ctx.save_for_backward(view_pos,view_matrix,proj_matrix,valid_length)
         return view_pos,ndc_pos
@@ -284,30 +293,6 @@ class MVPTransform(torch.autograd.Function):
         )
         return (position_grad,None,None,None)
 
-class World2NdcFunc(torch.autograd.Function):
-    '''
-    A custom autograd function for transforming world coordinates to normalized device coordinates (NDC).
-
-    This implementation overrides the backward computation to address potential floating-point precision issues 
-    that may arise in the standard autograd process for `world2ndc` transformations.
-
-    Args:
-        position (torch.Tensor): Input tensor representing world coordinates with shape [4, num_points].
-        view_project_matrix (torch.Tensor): View-projection matrix with shape [num_views, 4, 4].
-    Returns:
-        torch.Tensor: Normalized device coordinates (NDC) with shape [num_views, 4, num_points].
-    '''
-    @staticmethod
-    def forward(ctx,position:torch.Tensor,view_project_matrix:torch.Tensor):
-        ndc_pos,repc_hom_w=litegs_fused.world2ndc_forward(position,view_project_matrix)
-        ctx.save_for_backward(view_project_matrix,ndc_pos,repc_hom_w)
-        return ndc_pos
-    
-    @staticmethod
-    def backward(ctx,grad_ndc_pos:torch.Tensor):
-        (view_project_matrix,ndc_pos,repc_hom_w)=ctx.saved_tensors
-        position_grad=litegs_fused.world2ndc_backword(view_project_matrix,ndc_pos,repc_hom_w,grad_ndc_pos)
-        return (position_grad,None)
 
 class CreateCovarianceMatrixFunc(torch.autograd.Function):
     '''

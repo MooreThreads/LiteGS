@@ -1,37 +1,34 @@
 import torch
 
-from ..fused_backend import load_fused_backend
+from ..fused_backend import fused
 from .backend import Backend, normalize_backend
 
 
 class _CreateTransformMatrixCuda(torch.autograd.Function):
     @staticmethod
     def forward(ctx, scale: torch.Tensor, rot: torch.Tensor, valid_length: torch.Tensor | None = None):
-        litegs_fused = load_fused_backend()
         saved_valid_length = valid_length
         if saved_valid_length is None:
             saved_valid_length = torch.tensor([], device=scale.device, dtype=torch.int32)
         ctx.save_for_backward(scale, rot, saved_valid_length)
         runtime_valid_length = None if saved_valid_length.numel() == 0 else saved_valid_length
-        return litegs_fused.createTransformMatrix_forward(rot, scale, runtime_valid_length)
+        return fused.createTransformMatrix_forward(rot, scale, runtime_valid_length)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
-        litegs_fused = load_fused_backend()
         scale, rot, saved_valid_length = ctx.saved_tensors
         runtime_valid_length = None if saved_valid_length.numel() == 0 else saved_valid_length
-        grad_rot, grad_scale = litegs_fused.createTransformMatrix_backward(grad_output, rot, scale, runtime_valid_length)
+        grad_rot, grad_scale = fused.createTransformMatrix_backward(grad_output, rot, scale, runtime_valid_length)
         return grad_scale, grad_rot, None
 
 
 class _MvpTransformCuda(torch.autograd.Function):
     @staticmethod
     def forward(ctx, position: torch.Tensor, view_matrix: torch.Tensor, proj_matrix: torch.Tensor, valid_length: torch.Tensor | None = None):
-        litegs_fused = load_fused_backend()
         saved_valid_length = valid_length
         if saved_valid_length is None:
             saved_valid_length = torch.tensor([], device=position.device, dtype=torch.int32)
-        view_pos, ndc_pos = litegs_fused.mvp_transform_forward(
+        view_pos, ndc_pos = fused.mvp_transform_forward(
             position,
             view_matrix,
             proj_matrix,
@@ -42,11 +39,10 @@ class _MvpTransformCuda(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_view_pos: torch.Tensor, grad_ndc_pos: torch.Tensor):
-        litegs_fused = load_fused_backend()
         grad_view_pos = grad_view_pos.contiguous()
         grad_ndc_pos = grad_ndc_pos.contiguous()
         view_pos, view_matrix, proj_matrix, saved_valid_length = ctx.saved_tensors
-        grad_position = litegs_fused.mvp_transform_backward(
+        grad_position = fused.mvp_transform_backward(
             grad_ndc_pos,
             grad_view_pos,
             view_matrix,
@@ -154,8 +150,7 @@ def create_rayspace_transform_matrix_cuda(
     output_shape: tuple[int, int],
     valid_length: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    litegs_fused = load_fused_backend()
-    return litegs_fused.jacobianRayspace(view_pos, proj_matrix, output_shape[0], output_shape[1], valid_length)
+    return fused.jacobianRayspace(view_pos, proj_matrix, output_shape[0], output_shape[1], valid_length)
 
 
 def create_rayspace_transform_matrix(
