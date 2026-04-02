@@ -342,6 +342,35 @@ class OpsArchitectureTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(script_cov2d.grad, expected_grad, atol=1e-6, rtol=1e-6))
         self.assertTrue(torch.allclose(cuda_cov2d.grad, expected_grad, atol=1e-6, rtol=1e-6))
+    
+    def test_binning_cuda_matches_expected_single_point_layout(self):
+        ndc = torch.tensor(
+            [[[0.0], [0.0], [0.5], [1.0]]],
+            device="cuda",
+        )
+        view_depth = torch.tensor([[1.0]], device="cuda")
+        inv_cov2d = torch.tensor(
+            [[[[10.0], [0.0]], [[0.0], [10.0]]]],
+            device="cuda",
+        )
+        opacity = torch.tensor([[0.9]], device="cuda")
+
+        tile_start_index, sorted_point_id, primitive_visible = ops.binning_cuda(
+            ndc,
+            view_depth,
+            inv_cov2d,
+            opacity,
+            None,
+            None,
+            None,
+            (16, 16),
+            (8, 8),
+        )
+
+        self.assertTrue(torch.equal(tile_start_index, torch.tensor([[-1, 0, -1, -1, -1, 1]], device="cuda", dtype=torch.int32)))
+        self.assertTrue(torch.equal(sorted_point_id, torch.tensor([[0]], device="cuda", dtype=torch.int32)))
+        self.assertTrue(torch.equal(primitive_visible, torch.tensor([1], device="cuda")))
+
     def test_backend_priority_between_default_context_and_explicit_argument(self):
         backend_module.set_default_backend(backend_module.Backend.SCRIPT)
         self.assertEqual(
@@ -371,4 +400,5 @@ class OpsArchitectureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
