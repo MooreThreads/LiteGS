@@ -199,6 +199,149 @@ class OpsArchitectureTests(unittest.TestCase):
         self.assertTrue(torch.allclose(script_transform.grad, expected_grad, atol=1e-6, rtol=1e-6))
         self.assertTrue(torch.allclose(cuda_transform.grad, expected_grad, atol=1e-6, rtol=1e-6))
 
+    def test_spherical_harmonic_to_rgb_matches_expected_formula_for_script_and_cuda(self):
+        sh_base = torch.tensor(
+            [[[1.0], [2.0], [3.0]]],
+            device="cuda",
+        )
+        sh_rest = torch.tensor(
+            [
+                [[7.0], [8.0], [9.0]],
+                [[10.0], [11.0], [12.0]],
+                [[4.0], [5.0], [6.0]],
+            ],
+            device="cuda",
+        )
+        dirs = torch.tensor(
+            [[[1.0], [0.0], [0.0]]],
+            device="cuda",
+        )
+        expected = torch.tensor(
+            [[[-1.1723152558], [-1.3788229760], [-1.5853306961]]],
+            device="cuda",
+        )
+
+        script_output = ops.spherical_harmonic_to_rgb_script(1, sh_base, sh_rest, dirs)
+        cuda_output = ops.spherical_harmonic_to_rgb_cuda(1, sh_base, sh_rest, dirs)
+
+        self.assertTrue(torch.allclose(script_output, expected, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_output, expected, atol=1e-6, rtol=1e-6))
+
+    def test_spherical_harmonic_to_rgb_backward_matches_expected_sh_grads_for_script_and_cuda(self):
+        expected_sh_base_grad = torch.tensor(
+            [[[0.2820947918], [0.2820947918], [0.2820947918]]],
+            device="cuda",
+        )
+        expected_sh_rest_grad = torch.tensor(
+            [
+                [[0.0], [0.0], [0.0]],
+                [[0.0], [0.0], [0.0]],
+                [[-0.4886025119], [-0.4886025119], [-0.4886025119]],
+            ],
+            device="cuda",
+        )
+
+        script_sh_base = torch.tensor(
+            [[[1.0], [2.0], [3.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        script_sh_rest = torch.tensor(
+            [
+                [[7.0], [8.0], [9.0]],
+                [[10.0], [11.0], [12.0]],
+                [[4.0], [5.0], [6.0]],
+            ],
+            device="cuda",
+            requires_grad=True,
+        )
+        script_dirs = torch.tensor(
+            [[[1.0], [0.0], [0.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        script_output = ops.spherical_harmonic_to_rgb_script(1, script_sh_base, script_sh_rest, script_dirs)
+        script_output.sum().backward()
+
+        cuda_sh_base = torch.tensor(
+            [[[1.0], [2.0], [3.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        cuda_sh_rest = torch.tensor(
+            [
+                [[7.0], [8.0], [9.0]],
+                [[10.0], [11.0], [12.0]],
+                [[4.0], [5.0], [6.0]],
+            ],
+            device="cuda",
+            requires_grad=True,
+        )
+        cuda_dirs = torch.tensor(
+            [[[1.0], [0.0], [0.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        cuda_output = ops.spherical_harmonic_to_rgb_cuda(1, cuda_sh_base, cuda_sh_rest, cuda_dirs)
+        cuda_output.sum().backward()
+
+        self.assertTrue(torch.allclose(script_sh_base.grad, expected_sh_base_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_sh_rest.grad, expected_sh_rest_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_sh_base.grad, expected_sh_base_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_sh_rest.grad, expected_sh_rest_grad, atol=1e-6, rtol=1e-6))
+
+    def test_eigh_and_inverse_2x2_matrix_matches_expected_formula_for_script_and_cuda(self):
+        cov2d = torch.tensor(
+            [[[[4.0], [1.0]], [[1.0], [9.0]]]],
+            device="cuda",
+        )
+        expected_val = torch.tensor(
+            [[[3.8074176], [9.1925821]]],
+            device="cuda",
+        )
+        expected_vec = torch.tensor(
+            [[[[0.9819564], [0.1891075]], [[-0.1891075], [0.9819564]]]],
+            device="cuda",
+        )
+        expected_inv = torch.tensor(
+            [[[[0.2571429], [-0.0285714]], [[-0.0285714], [0.1142857]]]],
+            device="cuda",
+        )
+
+        script_val, script_vec, script_inv = ops.eigh_and_inverse_2x2_matrix_script(cov2d)
+        cuda_val, cuda_vec, cuda_inv = ops.eigh_and_inverse_2x2_matrix_cuda(cov2d)
+
+        self.assertTrue(torch.allclose(script_val, expected_val, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_val, expected_val, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_vec, expected_vec, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_vec, expected_vec, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_inv, expected_inv, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_inv, expected_inv, atol=1e-6, rtol=1e-6))
+
+    def test_eigh_and_inverse_2x2_matrix_backward_matches_expected_for_script_and_cuda(self):
+        expected_grad = torch.tensor(
+            [[[[-0.0522449], [-0.0195918]], [[-0.0195918], [-0.0073469]]]],
+            device="cuda",
+        )
+
+        script_cov2d = torch.tensor(
+            [[[[4.0], [1.0]], [[1.0], [9.0]]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        _, _, script_inv = ops.eigh_and_inverse_2x2_matrix_script(script_cov2d)
+        script_inv.sum().backward()
+
+        cuda_cov2d = torch.tensor(
+            [[[[4.0], [1.0]], [[1.0], [9.0]]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        _, _, cuda_inv = ops.eigh_and_inverse_2x2_matrix_cuda(cuda_cov2d)
+        cuda_inv.sum().backward()
+
+        self.assertTrue(torch.allclose(script_cov2d.grad, expected_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_cov2d.grad, expected_grad, atol=1e-6, rtol=1e-6))
     def test_backend_priority_between_default_context_and_explicit_argument(self):
         backend_module.set_default_backend(backend_module.Backend.SCRIPT)
         self.assertEqual(
@@ -228,3 +371,4 @@ class OpsArchitectureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

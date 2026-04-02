@@ -1,4 +1,14 @@
 from .backend import Backend, get_default_backend, normalize_backend, set_default_backend, use_backend
+from .matrix import (
+    eigh_and_inverse_2x2_matrix,
+    eigh_and_inverse_2x2_matrix_cuda,
+    eigh_and_inverse_2x2_matrix_script,
+)
+from .sh import (
+    spherical_harmonic_to_rgb,
+    spherical_harmonic_to_rgb_cuda,
+    spherical_harmonic_to_rgb_script,
+)
 from .transform import (
     create_cov2d_directly,
     create_cov2d_directly_cuda,
@@ -32,4 +42,10 @@ __all__ = [
     "create_cov2d_directly",
     "create_cov2d_directly_cuda",
     "create_cov2d_directly_script",
+    "spherical_harmonic_to_rgb",
+    "spherical_harmonic_to_rgb_cuda",
+    "spherical_harmonic_to_rgb_script",
+    "eigh_and_inverse_2x2_matrix",
+    "eigh_and_inverse_2x2_matrix_cuda",
+    "eigh_and_inverse_2x2_matrix_script",
 ]
