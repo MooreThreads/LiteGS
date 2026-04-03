@@ -10,6 +10,161 @@ class OpsArchitectureTests(unittest.TestCase):
     def tearDown(self):
         backend_module.set_default_backend(backend_module.Backend.AUTO)
 
+    def test_compact_activate_nosh_matches_expected_formula_for_script_and_cuda(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        valid_chunk_num = int(visible_chunk_num.cpu().item())
+
+        script_xyz = torch.arange(18, device="cuda", dtype=torch.float32).view(3, 3, 2).requires_grad_()
+        script_scale = torch.zeros((3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        script_rot = torch.zeros((4, 3, 2), device="cuda", dtype=torch.float32)
+        script_rot[0] = 1.0
+        script_rot.requires_grad_()
+        script_opacity = torch.zeros((1, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+
+        cuda_xyz = script_xyz.detach().clone().requires_grad_()
+        cuda_scale = script_scale.detach().clone().requires_grad_()
+        cuda_rot = script_rot.detach().clone().requires_grad_()
+        cuda_opacity = script_opacity.detach().clone().requires_grad_()
+
+        script_outputs = ops.compact_activate_nosh_script(False, visible_chunkid, visible_chunk_num, script_xyz, script_scale, script_rot, script_opacity)
+        cuda_outputs = ops.compact_activate_nosh_cuda(False, visible_chunkid, visible_chunk_num, cuda_xyz, cuda_scale, cuda_rot, cuda_opacity)
+
+        expected_position = torch.tensor(
+            [[[2.0, 3.0], [0.0, 1.0], [0.0, 0.0]], [[8.0, 9.0], [6.0, 7.0], [0.0, 0.0]], [[14.0, 15.0], [12.0, 13.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_scale = torch.tensor(
+            [[[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_rot = torch.tensor(
+            [[[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_opacity = torch.tensor(
+            [[[0.5, 0.5], [0.5, 0.5], [0.0, 0.0]]],
+            device="cuda",
+        )
+
+        self.assertTrue(torch.equal(script_outputs[0][:, :valid_chunk_num, :], expected_position[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(cuda_outputs[0][:, :valid_chunk_num, :], expected_position[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(script_outputs[1][:, :valid_chunk_num, :], expected_scale[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(cuda_outputs[1][:, :valid_chunk_num, :], expected_scale[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(script_outputs[2][:, :valid_chunk_num, :], expected_rot[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(cuda_outputs[2][:, :valid_chunk_num, :], expected_rot[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(script_outputs[3][:, :valid_chunk_num, :], expected_opacity[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(cuda_outputs[3][:, :valid_chunk_num, :], expected_opacity[:, :valid_chunk_num, :]))
+
+    def test_compact_activate_nosh_script_backward_matches_expected(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        xyz = torch.arange(18, device="cuda", dtype=torch.float32).view(3, 3, 2).requires_grad_()
+        scale = torch.zeros((3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        rot = torch.zeros((4, 3, 2), device="cuda", dtype=torch.float32)
+        rot[0] = 1.0
+        rot.requires_grad_()
+        opacity = torch.zeros((1, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+
+        outputs = ops.compact_activate_nosh_script(False, visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity)
+        sum(t.sum() for t in outputs).backward()
+
+        expected_xyz_grad = torch.tensor(
+            [[[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_scale_grad = expected_xyz_grad.clone()
+        expected_rot_grad = torch.tensor(
+            [[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_opacity_grad = torch.tensor(
+            [[[0.25, 0.25], [0.25, 0.25], [0.0, 0.0]]],
+            device="cuda",
+        )
+
+        self.assertTrue(torch.equal(xyz.grad, expected_xyz_grad))
+        self.assertTrue(torch.equal(scale.grad, expected_scale_grad))
+        self.assertTrue(torch.equal(rot.grad, expected_rot_grad))
+        self.assertTrue(torch.equal(opacity.grad, expected_opacity_grad))
+
+    def test_compact_activate_nosh_cuda_backward_matches_expected(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        xyz = torch.arange(18, device="cuda", dtype=torch.float32).view(3, 3, 2).requires_grad_()
+        scale = torch.zeros((3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        rot = torch.zeros((4, 3, 2), device="cuda", dtype=torch.float32)
+        rot[0] = 1.0
+        rot.requires_grad_()
+        opacity = torch.zeros((1, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+
+        outputs = ops.compact_activate_nosh_cuda(False, visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity)
+        sum(t.sum() for t in outputs).backward()
+
+        expected_xyz_grad = torch.tensor(
+            [[[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_scale_grad = expected_xyz_grad.clone()
+        expected_rot_grad = torch.tensor(
+            [[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_opacity_grad = torch.tensor(
+            [[[0.5, 0.5], [0.5, 0.5], [0.0, 0.0]]],
+            device="cuda",
+        )
+
+        self.assertTrue(torch.equal(xyz.grad, expected_xyz_grad))
+        self.assertTrue(torch.equal(scale.grad, expected_scale_grad))
+        self.assertTrue(torch.equal(rot.grad, expected_rot_grad))
+        self.assertTrue(torch.equal(opacity.grad, expected_opacity_grad))
+
+    def test_compact_activate_nosh_cuda_backward_sparse_matches_expected(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        valid_chunk_num = int(visible_chunk_num.cpu().item())
+        xyz = torch.arange(18, device="cuda", dtype=torch.float32).view(3, 3, 2).requires_grad_()
+        scale = torch.zeros((3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        rot = torch.zeros((4, 3, 2), device="cuda", dtype=torch.float32)
+        rot[0] = 1.0
+        rot.requires_grad_()
+        opacity = torch.zeros((1, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+
+        outputs = ops.compact_activate_nosh_cuda(True, visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity)
+        sum(t.sum() for t in outputs).backward()
+
+        expected_xyz_grad_full = torch.tensor(
+            [[[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_scale_grad_full = expected_xyz_grad_full.clone()
+        expected_rot_grad_full = torch.tensor(
+            [[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]], [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_opacity_grad_full = torch.tensor(
+            [[[0.5, 0.5], [0.5, 0.5], [0.0, 0.0]]],
+            device="cuda",
+        )
+        expected_xyz_grad = expected_xyz_grad_full[:, visible_chunkid[:valid_chunk_num], :]
+        expected_scale_grad = expected_scale_grad_full[:, visible_chunkid[:valid_chunk_num], :]
+        expected_rot_grad = expected_rot_grad_full[:, visible_chunkid[:valid_chunk_num], :]
+        expected_opacity_grad = expected_opacity_grad_full[:, visible_chunkid[:valid_chunk_num], :]
+
+        self.assertEqual(type(xyz.grad).__name__, "CompactedTensor")
+        self.assertEqual(type(scale.grad).__name__, "CompactedTensor")
+        self.assertEqual(type(rot.grad).__name__, "CompactedTensor")
+        self.assertEqual(type(opacity.grad).__name__, "CompactedTensor")
+        self.assertEqual(tuple(xyz.grad.chunk_ids.tolist()), (1, 0, 2))
+        self.assertEqual(tuple(scale.grad.chunk_ids.tolist()), (1, 0, 2))
+        self.assertEqual(tuple(rot.grad.chunk_ids.tolist()), (1, 0, 2))
+        self.assertEqual(tuple(opacity.grad.chunk_ids.tolist()), (1, 0, 2))
+        self.assertTrue(torch.equal(xyz.grad.compacted_values[:, :valid_chunk_num, :], expected_xyz_grad))
+        self.assertTrue(torch.equal(scale.grad.compacted_values[:, :valid_chunk_num, :], expected_scale_grad))
+        self.assertTrue(torch.equal(rot.grad.compacted_values[:, :valid_chunk_num, :], expected_rot_grad))
+        self.assertTrue(torch.equal(opacity.grad.compacted_values[:, :valid_chunk_num, :], expected_opacity_grad))
+
     def test_create_viewproj_matches_expected_formula_for_script_and_cuda(self):
         view_params = torch.tensor(
             [[1.0, 0.0, 0.0, 0.0, 10.0, 20.0, 30.0]],
@@ -436,6 +591,91 @@ class OpsArchitectureTests(unittest.TestCase):
         self.assertTrue(torch.equal(sorted_point_id, torch.tensor([[0]], device="cuda", dtype=torch.int32)))
         self.assertTrue(torch.equal(primitive_visible, torch.tensor([1], device="cuda")))
 
+    def test_rasterize_gaussians_cuda_smoke(self):
+        sorted_point_id = torch.tensor([[0]], device="cuda", dtype=torch.int32)
+        tile_start_index = torch.tensor([[-1, 0, -1, -1, -1, 1]], device="cuda", dtype=torch.int32)
+        ndc = torch.tensor(
+            [[[0.0], [0.0], [0.5], [1.0]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        cov2d_inv = torch.tensor(
+            [[[[10.0], [0.0]], [[0.0], [10.0]]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        color = torch.tensor(
+            [[[1.0], [0.5], [0.25]]],
+            device="cuda",
+            requires_grad=True,
+        )
+        opacity = torch.tensor([[0.9]], device="cuda", requires_grad=True)
+
+        img, transmitance, depth, normal, last_contributor = ops.rasterize_gaussians_cuda(
+            sorted_point_id,
+            tile_start_index,
+            ndc,
+            cov2d_inv,
+            color,
+            opacity,
+            None,
+            16,
+            16,
+            8,
+            8,
+            True,
+            True,
+        )
+
+        self.assertEqual(img.shape, (1, 3, 16, 16))
+        self.assertEqual(transmitance.shape, (1, 1, 16, 16))
+        self.assertEqual(depth.shape, (1, 1, 16, 16))
+        self.assertIsNone(normal)
+        self.assertEqual(last_contributor.shape, (1, 1, 16, 16))
+        self.assertTrue(torch.all(transmitance == 1))
+        self.assertTrue(torch.all(last_contributor == 0))
+
+        (img.sum() + transmitance.sum() + depth.sum()).backward()
+
+        self.assertTrue(torch.isfinite(ndc.grad).all())
+        self.assertTrue(torch.isfinite(cov2d_inv.grad).all())
+        self.assertTrue(torch.isfinite(color.grad).all())
+        self.assertTrue(torch.isfinite(opacity.grad).all())
+
+    def test_rasterize_gaussians_rejects_script_backend(self):
+        sorted_point_id = torch.tensor([[0]], device="cuda", dtype=torch.int32)
+        tile_start_index = torch.tensor([[-1, 0, -1, -1, -1, 1]], device="cuda", dtype=torch.int32)
+        ndc = torch.tensor(
+            [[[0.0], [0.0], [0.5], [1.0]]],
+            device="cuda",
+        )
+        cov2d_inv = torch.tensor(
+            [[[[10.0], [0.0]], [[0.0], [10.0]]]],
+            device="cuda",
+        )
+        color = torch.tensor(
+            [[[1.0], [0.5], [0.25]]],
+            device="cuda",
+        )
+        opacity = torch.tensor([[0.9]], device="cuda")
+
+        with self.assertRaises(NotImplementedError):
+            ops.rasterize_gaussians(
+                sorted_point_id,
+                tile_start_index,
+                ndc,
+                cov2d_inv,
+                color,
+                opacity,
+                None,
+                16,
+                16,
+                8,
+                8,
+                True,
+                True,
+                backend=ops.Backend.SCRIPT,
+            )
     def test_backend_priority_between_default_context_and_explicit_argument(self):
         backend_module.set_default_backend(backend_module.Backend.SCRIPT)
         self.assertEqual(
@@ -465,6 +705,12 @@ class OpsArchitectureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+
+
+
 
 
 
