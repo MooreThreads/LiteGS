@@ -10,6 +10,71 @@ class OpsArchitectureTests(unittest.TestCase):
     def tearDown(self):
         backend_module.set_default_backend(backend_module.Backend.AUTO)
 
+    def test_create_viewproj_matches_expected_formula_for_script_and_cuda(self):
+        view_params = torch.tensor(
+            [[1.0, 0.0, 0.0, 0.0, 10.0, 20.0, 30.0]],
+            device="cuda",
+        )
+        proj_params = torch.tensor([2.0], device="cuda")
+
+        expected_view = torch.tensor(
+            [[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [10.0, 20.0, 30.0, 1.0]]],
+            device="cuda",
+        )
+        expected_proj = torch.tensor(
+            [[[2.0, 0.0, 0.0, 0.0], [0.0, 4.0, 0.0, 0.0], [0.0, 0.0, 1.1, 1.0], [0.0, 0.0, -1.1, 0.0]]],
+            device="cuda",
+        )
+        expected_viewproj = torch.tensor(
+            [[[2.0, 0.0, 0.0, 0.0], [0.0, 4.0, 0.0, 0.0], [0.0, 0.0, 1.1, 1.0], [20.0, 80.0, 31.9, 30.0]]],
+            device="cuda",
+        )
+        expected_frustum = torch.tensor(
+            [[[2.0, 0.0, 1.0, 50.0], [-2.0, 0.0, 1.0, 10.0], [0.0, 4.0, 1.0, 110.0], [0.0, -4.0, 1.0, -50.0], [0.0, 0.0, 1.1, 31.9], [0.0, 0.0, -0.1, -1.9]]],
+            device="cuda",
+        )
+
+        script_view, script_proj, script_viewproj, script_frustum = ops.create_viewproj_script(view_params, proj_params, 10, 20, 1.0, 11.0)
+        cuda_view, cuda_proj, cuda_viewproj, cuda_frustum = ops.create_viewproj_cuda(view_params, proj_params, 10, 20, 1.0, 11.0)
+
+        self.assertTrue(torch.allclose(script_view, expected_view, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_view, expected_view, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_proj, expected_proj, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_proj, expected_proj, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_viewproj, expected_viewproj, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_viewproj, expected_viewproj, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_frustum, expected_frustum, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_frustum, expected_frustum, atol=1e-6, rtol=1e-6))
+
+    def test_create_viewproj_backward_matches_expected_for_script_and_cuda(self):
+        expected_view_params_grad = torch.tensor(
+            [[0.0, -3.8, -0.2, 4.0, 3.0, 5.0, 3.1]],
+            device="cuda",
+        )
+        expected_proj_params_grad = torch.tensor([56.0], device="cuda")
+
+        script_view_params = torch.tensor(
+            [[1.0, 0.0, 0.0, 0.0, 10.0, 20.0, 30.0]],
+            device="cuda",
+            requires_grad=True,
+        )
+        script_proj_params = torch.tensor([2.0], device="cuda", requires_grad=True)
+        script_view, script_proj, script_viewproj, _ = ops.create_viewproj_script(script_view_params, script_proj_params, 10, 20, 1.0, 11.0)
+        (script_view.sum() + script_proj.sum() + script_viewproj.sum()).backward()
+
+        cuda_view_params = torch.tensor(
+            [[1.0, 0.0, 0.0, 0.0, 10.0, 20.0, 30.0]],
+            device="cuda",
+            requires_grad=True,
+        )
+        cuda_proj_params = torch.tensor([2.0], device="cuda", requires_grad=True)
+        cuda_view, cuda_proj, cuda_viewproj, _ = ops.create_viewproj_cuda(cuda_view_params, cuda_proj_params, 10, 20, 1.0, 11.0)
+        (cuda_view.sum() + cuda_proj.sum() + cuda_viewproj.sum()).backward()
+
+        self.assertTrue(torch.allclose(script_view_params.grad, expected_view_params_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_view_params.grad, expected_view_params_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(script_proj_params.grad, expected_proj_params_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_proj_params.grad, expected_proj_params_grad, atol=1e-6, rtol=1e-6))
     def test_create_transform_matrix_matches_expected_formula_for_script_and_cuda(self):
         scale = torch.tensor([[2.0], [3.0], [4.0]], device="cuda", requires_grad=True)
         rot = torch.tensor([[0.5], [0.5], [0.5], [0.5]], device="cuda", requires_grad=True)
@@ -400,5 +465,6 @@ class OpsArchitectureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

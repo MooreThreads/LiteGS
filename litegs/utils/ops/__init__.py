@@ -1,5 +1,6 @@
 from .backend import Backend, get_default_backend, normalize_backend, set_default_backend, use_backend
 from .binning import binning, binning_cuda
+from .camera import create_viewproj, create_viewproj_cuda, create_viewproj_script
 from .matrix import (
     eigh_and_inverse_2x2_matrix,
     eigh_and_inverse_2x2_matrix_cuda,
@@ -33,6 +34,9 @@ __all__ = [
     "use_backend",
     "binning",
     "binning_cuda",
+    "create_viewproj",
+    "create_viewproj_cuda",
+    "create_viewproj_script",
     "create_transform_matrix",
     "create_transform_matrix_cuda",
     "create_transform_matrix_script",
