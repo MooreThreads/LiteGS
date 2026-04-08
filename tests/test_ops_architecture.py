@@ -165,6 +165,190 @@ class OpsArchitectureTests(unittest.TestCase):
         self.assertTrue(torch.equal(rot.grad.compacted_values[:, :valid_chunk_num, :], expected_rot_grad))
         self.assertTrue(torch.equal(opacity.grad.compacted_values[:, :valid_chunk_num, :], expected_opacity_grad))
 
+    def test_compact_sh_matches_expected_formula_for_script_and_cuda(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        valid_chunk_num = int(visible_chunk_num.cpu().item())
+        view_matrix = torch.eye(4, device="cuda", dtype=torch.float32).unsqueeze(0)
+        position = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            ],
+            device="cuda",
+        )
+        sh_base = torch.tensor(
+            [[
+                [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]],
+                [[2.0, 2.0], [2.0, 2.0], [0.0, 0.0]],
+                [[3.0, 3.0], [3.0, 3.0], [0.0, 0.0]],
+            ]],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_rest = torch.zeros((3, 3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        sh_rest.data[2, 0, :2, :] = 4.0
+        sh_rest.data[2, 1, :2, :] = 5.0
+        sh_rest.data[2, 2, :2, :] = 6.0
+
+        script_color = ops.compact_sh_script(False, 1, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+        cuda_color = ops.compact_sh_cuda(False, 1, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base.detach().clone(), sh_rest.detach().clone())
+
+        expected_color = torch.tensor(
+            [[
+                [[-1.1723152558, -1.1723152558], [-1.1723152558, -1.1723152558]],
+                [[-1.3788229760, -1.3788229760], [-1.3788229760, -1.3788229760]],
+                [[-1.5853306961, -1.5853306961], [-1.5853306961, -1.5853306961]],
+            ]],
+            device="cuda",
+        )
+
+        self.assertTrue(torch.allclose(script_color[:, :, :valid_chunk_num, :], expected_color, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(cuda_color[:, :, :valid_chunk_num, :], expected_color, atol=1e-6, rtol=1e-6))
+
+    def test_compact_sh_script_backward_matches_expected(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        view_matrix = torch.eye(4, device="cuda", dtype=torch.float32).unsqueeze(0)
+        position = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            ],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_base = torch.tensor(
+            [[
+                [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]],
+                [[2.0, 2.0], [2.0, 2.0], [0.0, 0.0]],
+                [[3.0, 3.0], [3.0, 3.0], [0.0, 0.0]],
+            ]],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_rest = torch.zeros((3, 3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        sh_rest.data[2, 0, :2, :] = 4.0
+        sh_rest.data[2, 1, :2, :] = 5.0
+        sh_rest.data[2, 2, :2, :] = 6.0
+
+        color = ops.compact_sh_script(False, 1, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+        color.sum().backward()
+
+        expected_sh_base_grad = torch.tensor(
+            [[
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+            ]],
+            device="cuda",
+        )
+        expected_sh_rest_grad = torch.zeros((3, 3, 3, 2), device="cuda")
+        expected_sh_rest_grad[2, :, :2, :] = -0.4886025119
+
+        self.assertIsNone(position.grad)
+        self.assertTrue(torch.allclose(sh_base.grad, expected_sh_base_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(sh_rest.grad, expected_sh_rest_grad, atol=1e-6, rtol=1e-6))
+
+    def test_compact_sh_cuda_backward_matches_expected(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        view_matrix = torch.eye(4, device="cuda", dtype=torch.float32).unsqueeze(0)
+        position = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            ],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_base = torch.tensor(
+            [[
+                [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]],
+                [[2.0, 2.0], [2.0, 2.0], [0.0, 0.0]],
+                [[3.0, 3.0], [3.0, 3.0], [0.0, 0.0]],
+            ]],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_rest = torch.zeros((3, 3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        sh_rest.data[2, 0, :2, :] = 4.0
+        sh_rest.data[2, 1, :2, :] = 5.0
+        sh_rest.data[2, 2, :2, :] = 6.0
+
+        color = ops.compact_sh_cuda(False, 1, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+        color.sum().backward()
+
+        expected_sh_base_grad = torch.tensor(
+            [[
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+            ]],
+            device="cuda",
+        )
+        expected_sh_rest_grad = torch.zeros((3, 3, 3, 2), device="cuda")
+        expected_sh_rest_grad[2, :, :2, :] = -0.4886025119
+
+        self.assertIsNone(position.grad)
+        self.assertTrue(torch.allclose(sh_base.grad, expected_sh_base_grad, atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(sh_rest.grad, expected_sh_rest_grad, atol=1e-6, rtol=1e-6))
+
+    def test_compact_sh_cuda_backward_sparse_matches_expected(self):
+        visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
+        visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
+        valid_chunk_num = int(visible_chunk_num.cpu().item())
+        view_matrix = torch.eye(4, device="cuda", dtype=torch.float32).unsqueeze(0)
+        position = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            ],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_base = torch.tensor(
+            [[
+                [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0]],
+                [[2.0, 2.0], [2.0, 2.0], [0.0, 0.0]],
+                [[3.0, 3.0], [3.0, 3.0], [0.0, 0.0]],
+            ]],
+            device="cuda",
+            requires_grad=True,
+        )
+        sh_rest = torch.zeros((3, 3, 3, 2), device="cuda", dtype=torch.float32, requires_grad=True)
+        sh_rest.data[2, 0, :2, :] = 4.0
+        sh_rest.data[2, 1, :2, :] = 5.0
+        sh_rest.data[2, 2, :2, :] = 6.0
+
+        color = ops.compact_sh_cuda(True, 1, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+        color.sum().backward()
+
+        expected_sh_base_grad_full = torch.tensor(
+            [[
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+                [[0.2820947918, 0.2820947918], [0.2820947918, 0.2820947918], [0.0, 0.0]],
+            ]],
+            device="cuda",
+        )
+        expected_sh_rest_grad_full = torch.zeros((3, 3, 3, 2), device="cuda")
+        expected_sh_rest_grad_full[2, :, :2, :] = -0.4886025119
+        expected_sh_base_grad = expected_sh_base_grad_full[:, :, visible_chunkid[:valid_chunk_num], :]
+        expected_sh_rest_grad = expected_sh_rest_grad_full[:, :, visible_chunkid[:valid_chunk_num], :]
+
+        self.assertIsNone(position.grad)
+        self.assertEqual(type(sh_base.grad).__name__, "CompactedTensor")
+        self.assertEqual(type(sh_rest.grad).__name__, "CompactedTensor")
+        self.assertEqual(tuple(sh_base.grad.chunk_ids.tolist()), (1, 0, 2))
+        self.assertEqual(tuple(sh_rest.grad.chunk_ids.tolist()), (1, 0, 2))
+        self.assertTrue(torch.allclose(sh_base.grad.compacted_values[:, :valid_chunk_num, :], expected_sh_base_grad.reshape(-1, valid_chunk_num, 2), atol=1e-6, rtol=1e-6))
+        self.assertTrue(torch.allclose(sh_rest.grad.compacted_values[:, :valid_chunk_num, :], expected_sh_rest_grad.reshape(-1, valid_chunk_num, 2), atol=1e-6, rtol=1e-6))
+
     def test_create_viewproj_matches_expected_formula_for_script_and_cuda(self):
         view_params = torch.tensor(
             [[1.0, 0.0, 0.0, 0.0, 10.0, 20.0, 30.0]],

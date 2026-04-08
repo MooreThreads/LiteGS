@@ -1,7 +1,14 @@
 from .backend import Backend, get_default_backend, normalize_backend, set_default_backend, use_backend
 from .binning import binning, binning_cuda
 from .camera import create_viewproj, create_viewproj_cuda, create_viewproj_script
-from .compact import compact_activate_nosh, compact_activate_nosh_cuda, compact_activate_nosh_script
+from .compact import (
+    compact_activate_nosh,
+    compact_activate_nosh_cuda,
+    compact_activate_nosh_script,
+    compact_sh,
+    compact_sh_cuda,
+    compact_sh_script,
+)
 from .matrix import (
     eigh_and_inverse_2x2_matrix,
     eigh_and_inverse_2x2_matrix_cuda,
@@ -42,6 +49,9 @@ __all__ = [
     "compact_activate_nosh",
     "compact_activate_nosh_cuda",
     "compact_activate_nosh_script",
+    "compact_sh",
+    "compact_sh_cuda",
+    "compact_sh_script",
     "create_transform_matrix",
     "create_transform_matrix_cuda",
     "create_transform_matrix_script",

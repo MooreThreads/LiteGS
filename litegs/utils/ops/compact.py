@@ -2,6 +2,7 @@ import torch
 
 from ..CompactedTensor import CompactedTensor
 from ..fused_backend import fused
+from .. import spherical_harmonics
 from .backend import Backend, normalize_backend
 
 
@@ -64,6 +65,75 @@ class _CompactActivateNoSHCuda(torch.autograd.Function):
                 grads.append(grad)
 
         return None, None, None, *grads
+
+
+class _CompactSHCuda(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, b_sparse_grad, sh_degree, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest):
+        ctx.sh_degree = sh_degree
+        ctx.chunk_num = sh_base.shape[-2]
+        ctx.chunk_size = sh_base.shape[-1]
+        ctx.b_sparse_grad = b_sparse_grad
+        color = fused.compact_sh_forward(
+            sh_degree,
+            visible_chunkid,
+            visible_chunk_num,
+            view_matrix,
+            position,
+            sh_base,
+            sh_rest,
+        )
+        ctx.save_for_backward(visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+        return color
+
+    @staticmethod
+    def backward(ctx, color_grad):
+        sh_degree = ctx.sh_degree
+        chunk_num = ctx.chunk_num
+        chunk_size = ctx.chunk_size
+        b_sparse_grad = ctx.b_sparse_grad
+        visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest = ctx.saved_tensors
+        sh_base_grad, sh_rest_grad = fused.compact_sh_backward(
+            sh_degree,
+            visible_chunkid,
+            visible_chunk_num,
+            view_matrix,
+            position,
+            sh_base,
+            sh_rest,
+            color_grad.contiguous(),
+        )
+
+        if b_sparse_grad:
+            allocate_chunk_num = visible_chunkid.shape[0]
+            sh_base_grad = CompactedTensor(
+                (*sh_base_grad.shape[:-2], chunk_num, chunk_size),
+                visible_chunkid,
+                sh_base_grad.reshape(-1, allocate_chunk_num, chunk_size),
+            )
+            sh_rest_grad = CompactedTensor(
+                (*sh_rest_grad.shape[:-2], chunk_num, chunk_size),
+                visible_chunkid,
+                sh_rest_grad.reshape(-1, allocate_chunk_num, chunk_size),
+            )
+        else:
+            dense_sh_base_grad = torch.zeros(
+                (*sh_base_grad.shape[:-2], chunk_num, chunk_size),
+                device=sh_base_grad.device,
+                dtype=sh_base_grad.dtype,
+            )
+            dense_sh_base_grad[..., visible_chunkid, :] = sh_base_grad
+            sh_base_grad = dense_sh_base_grad
+
+            dense_sh_rest_grad = torch.zeros(
+                (*sh_rest_grad.shape[:-2], chunk_num, chunk_size),
+                device=sh_rest_grad.device,
+                dtype=sh_rest_grad.dtype,
+            )
+            dense_sh_rest_grad[..., visible_chunkid, :] = sh_rest_grad
+            sh_rest_grad = dense_sh_rest_grad
+
+        return None, None, None, None, None, None, sh_base_grad, sh_rest_grad
 
 
 def _compact_activate_nosh_script_forward(
@@ -154,3 +224,95 @@ def compact_activate_nosh(
     if selected_backend == Backend.SCRIPT:
         return compact_activate_nosh_script(b_sparse_grad, visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity)
     return compact_activate_nosh_cuda(b_sparse_grad, visible_chunkid, visible_chunk_num, xyz, scale, rot, opacity)
+
+
+def _compact_sh_script_forward(
+    sh_degree: int,
+    visible_chunkid: torch.Tensor,
+    visible_chunk_num: torch.Tensor | None,
+    view_matrix: torch.Tensor,
+    position: torch.Tensor,
+    sh_base: torch.Tensor,
+    sh_rest: torch.Tensor,
+):
+    valid_chunk_num = _valid_chunk_count(visible_chunkid, visible_chunk_num)
+    allocate_chunk_num = int(visible_chunkid.shape[0])
+    views_num = int(view_matrix.shape[0])
+    chunk_size = int(position.shape[-1])
+    active_chunkid = visible_chunkid[:valid_chunk_num]
+
+    color = torch.zeros((views_num, 3, allocate_chunk_num, chunk_size), device=sh_base.device, dtype=sh_base.dtype)
+
+    if valid_chunk_num > 0:
+        with torch.no_grad():
+            camera_center = (-view_matrix[..., 3:4, :3] @ view_matrix[..., :3, :3].transpose(-1, -2)).squeeze(1)
+            dirs = position.detach()[..., active_chunkid, :].unsqueeze(0) - camera_center.unsqueeze(-1).unsqueeze(-1)
+            dirs = torch.nn.functional.normalize(dirs, dim=1)
+        sh = torch.cat((sh_base[..., active_chunkid, :], sh_rest[..., active_chunkid, :]), dim=0)
+        color[:, :, :valid_chunk_num, :] = spherical_harmonics.sh_to_rgb(sh_degree, sh, dirs)
+
+    return color
+
+
+def compact_sh_script(
+    b_sparse_grad: bool,
+    sh_degree: int,
+    visible_chunkid: torch.Tensor,
+    visible_chunk_num: torch.Tensor,
+    view_matrix: torch.Tensor,
+    position: torch.Tensor,
+    sh_base: torch.Tensor,
+    sh_rest: torch.Tensor,
+):
+    if b_sparse_grad:
+        raise NotImplementedError("compact_sh_script does not implement sparse gradients")
+    return _compact_sh_script_forward(sh_degree, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+
+
+def compact_sh_cuda(
+    b_sparse_grad: bool,
+    sh_degree: int,
+    visible_chunkid: torch.Tensor,
+    visible_chunk_num: torch.Tensor,
+    view_matrix: torch.Tensor,
+    position: torch.Tensor,
+    sh_base: torch.Tensor,
+    sh_rest: torch.Tensor,
+):
+    return _CompactSHCuda.apply(b_sparse_grad, sh_degree, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+
+
+def compact_sh(
+    b_sparse_grad: bool,
+    sh_degree: int,
+    visible_chunkid: torch.Tensor,
+    visible_chunk_num: torch.Tensor,
+    view_matrix: torch.Tensor,
+    position: torch.Tensor,
+    sh_base: torch.Tensor,
+    sh_rest: torch.Tensor,
+    *,
+    backend=None,
+):
+    """
+    Compact visible clustered spherical harmonics and evaluate RGB colors.
+
+    Args:
+        b_sparse_grad: Whether CUDA backward should return ``CompactedTensor`` gradients.
+        sh_degree: Active spherical harmonic degree.
+        visible_chunkid: Allocated visible chunk id buffer with shape ``[A]``.
+        visible_chunk_num: Device tensor storing the valid prefix length inside ``visible_chunkid``.
+        view_matrix: View matrices with shape ``[V, 4, 4]``.
+        position: Clustered positions with shape ``[3, C, K]``.
+        sh_base: Base SH coefficients with shape ``[1, 3, C, K]``.
+        sh_rest: Remaining SH coefficients with shape ``[(degree + 1)^2 - 1, 3, C, K]``.
+        backend: Backend selection. ``None`` means using the current default backend.
+
+    Returns:
+        RGB colors with shape ``[V, 3, A, K]`` in compacted chunk order.
+        Only the valid prefix ``:visible_chunk_num`` is defined.
+    """
+    selected_backend = normalize_backend(backend)
+    if selected_backend == Backend.SCRIPT:
+        return compact_sh_script(b_sparse_grad, sh_degree, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
+    return compact_sh_cuda(b_sparse_grad, sh_degree, visible_chunkid, visible_chunk_num, view_matrix, position, sh_base, sh_rest)
