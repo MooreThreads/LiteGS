@@ -3,8 +3,25 @@ import numpy as np
 from torch.optim.lr_scheduler import _LRScheduler
 
 from .. import arguments
-from ..utils.wrapper import sparse_adam_update,litegs_fused
 from ..utils.CompactedTensor import CompactedTensor
+from ..utils.fused_backend import fused
+
+
+def sparse_adam_update(
+    param: torch.Tensor,
+    grad: torch.Tensor,
+    exp_avg: torch.Tensor,
+    exp_avg_sq: torch.Tensor,
+    visible_index: torch.Tensor,
+    valid_length: torch.Tensor | None,
+    lr: float,
+    b1: float,
+    b2: float,
+    eps: float,
+):
+    if param.shape[0] != 0:
+        fused.adamUpdate(param, grad, exp_avg, exp_avg_sq, visible_index, valid_length, lr, b1, b2, eps)
+    return
 
 class SparseGaussianAdam(torch.optim.Adam):
     def __init__(self, params, lr, eps, bCluster):
@@ -159,7 +176,7 @@ class ShFusedAdam(torch.optim.Adam):
         sh_0=self.param_groups[0]['params'][0]
         sh_rest=self.param_groups[1]['params'][0]
 
-        color:torch.Tensor = litegs_fused.compact_sh_forward(
+        color:torch.Tensor = fused.compact_sh_forward(
             sh_degree,
             visible_chunkid, visible_chunk_num,
             view_matrix,
@@ -207,7 +224,7 @@ class ShFusedAdam(torch.optim.Adam):
             state['exp_avg'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format,dtype=torch.bfloat16)
             state['exp_avg_sq'] = torch.zeros_like(sh_rest, memory_format=torch.preserve_format,dtype=torch.bfloat16)
 
-        litegs_fused.compact_sh_backward_adam(
+        fused.compact_sh_backward_adam(
             self._sh_degree,
             self._visible_chunkid,self._visible_chunk_num,self._view_matrix,self._position,
             sh_0,sh_rest,

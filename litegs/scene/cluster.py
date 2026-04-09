@@ -33,7 +33,7 @@ def get_cluster_AABB(clustered_xyz:torch.Tensor,clustered_scale:torch.Tensor,clu
     chunk_size=clustered_xyz.shape[-1]
     chunks_num=clustered_xyz.shape[-2]
     xyz,scale,rot=uncluster(clustered_xyz,clustered_scale,clustered_rot)
-    transform_matrix=utils.wrapper.CreateTransformMatrix.call(scale,rot)   
+    transform_matrix=utils.ops.create_transform_matrix(scale,rot)   
     coefficient=2*math.log(255)
     extend_axis=transform_matrix*math.sqrt(coefficient)# == (coefficient*eigen_val).sqrt()*eigen_vec
     point_extend=extend_axis.abs().sum(dim=0)

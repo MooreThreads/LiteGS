@@ -2,7 +2,7 @@ import torch
 import typing
 from typing import Optional, Callable
 from ..scene import cluster
-from ..utils.wrapper import litegs_fused
+from ..utils.fused_backend import fused
 
 class MeanStdData:
     def __init__(self,data_shape:list,cluster_shape:list,device):
@@ -70,7 +70,7 @@ class StatisticsHelper:
                 #gpu driven pipeline: the tail of visible_mask is dirty, so we must ignore it!
                 visible_count_ref=self.visible_count.view(1,-1,self.chunk_size)
                 compacted_visible_mask=visible_mask.sum(0,dtype=torch.int32).reshape(1,-1,self.chunk_size)
-                litegs_fused.gpu_driven_pipeline_sparse_op(visible_count_ref,compacted_visible_mask,self.compact_mask,self.valid_length,"add")
+                fused.gpu_driven_pipeline_sparse_op(visible_count_ref,compacted_visible_mask,self.compact_mask,self.valid_length,"add")
         return
     
 
@@ -110,19 +110,19 @@ class StatisticsHelper:
                 #gpu driven pipeline: the tail of visible_mask is dirty, so we must ignore it!
                 chunks_num=data.sum.shape[-2]
                 allocated_chunks_num=tensor_sum.shape[-2]
-                litegs_fused.gpu_driven_pipeline_sparse_op(
+                fused.gpu_driven_pipeline_sparse_op(
                     data.sum.view(-1,chunks_num,self.chunk_size),
                     tensor_sum.view(-1,allocated_chunks_num,self.chunk_size),
                     self.compact_mask,self.valid_length,
                     "add"
                 )
-                litegs_fused.gpu_driven_pipeline_sparse_op(
+                fused.gpu_driven_pipeline_sparse_op(
                     data.square_sum.view(-1,chunks_num,self.chunk_size),
                     square_sum.view(-1,allocated_chunks_num,self.chunk_size),
                     self.compact_mask,self.valid_length,
                     "add"
                 )
-                litegs_fused.gpu_driven_pipeline_sparse_op(
+                fused.gpu_driven_pipeline_sparse_op(
                     data.count.view(-1,chunks_num,self.chunk_size),
                     count.view(-1,allocated_chunks_num,self.chunk_size),
                     self.compact_mask,self.valid_length,

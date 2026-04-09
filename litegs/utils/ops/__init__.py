@@ -9,6 +9,7 @@ from .compact import (
     compact_sh_cuda,
     compact_sh_script,
 )
+from .frustum import frustum_culling_aabb, frustum_culling_aabb_cuda, frustum_culling_aabb_script
 from .matrix import (
     eigh_and_inverse_2x2_matrix,
     eigh_and_inverse_2x2_matrix_cuda,
@@ -46,6 +47,9 @@ __all__ = [
     "create_viewproj",
     "create_viewproj_cuda",
     "create_viewproj_script",
+    "frustum_culling_aabb",
+    "frustum_culling_aabb_cuda",
+    "frustum_culling_aabb_script",
     "compact_activate_nosh",
     "compact_activate_nosh_cuda",
     "compact_activate_nosh_script",

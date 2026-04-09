@@ -48,7 +48,7 @@ class LearnableViewProj(nn.Module):
         """
         extr = self.extrinsics(idx)
         intr = self.intrinsics
-        view_matrix, proj_matrix, viewproj_matrix, frustumplane=utils.wrapper.CreateViewProj.apply(extr, intr, img_h, img_w, 0.01, 5000)
+        view_matrix, proj_matrix, viewproj_matrix, frustumplane=utils.ops.create_viewproj(extr, intr, img_h, img_w, 0.01, 5000)
         return view_matrix, proj_matrix, viewproj_matrix, frustumplane
 
     def step(self):

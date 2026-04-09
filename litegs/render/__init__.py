@@ -23,26 +23,19 @@ def render_preprocess(
         if cluster_origin is None or cluster_extend is None:
             cluster_origin,cluster_extend=scene.cluster.get_cluster_AABB(xyz,scale.exp(),torch.nn.functional.normalize(rot,dim=0))
 
-        visibility,visible_chunks_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb(cluster_origin,cluster_extend,frustumplane,feedback_buffer,idx_tensor)
+        visibility,visible_chunks_num,visible_chunkid=utils.ops.frustum_culling_aabb(cluster_origin,cluster_extend,frustumplane,feedback_buffer,idx_tensor)
         if StatisticsHelperInst.bStart:
             StatisticsHelperInst.set_compact_mask(visible_chunkid,visible_chunks_num)
 
-        # culled_xyz,culled_scale,culled_rot,color,culled_opacity=utils.wrapper.CullCompactActivateWithSparseGrad.apply(
-        #     pp.sparse_grad,actived_sh_degree,
-        #     visible_chunkid,visible_chunks_num,
-        #     view_matrix,
-        #     xyz,scale,rot,sh_0,sh_rest,opacity
-        # )
-
         # Step 1: Compact + Activate (without SH)
-        culled_xyz,culled_scale,culled_rot,culled_opacity=utils.wrapper.CompactActivateNoSH.apply(
+        culled_xyz,culled_scale,culled_rot,culled_opacity=utils.ops.compact_activate_nosh(
             bSparseGrad,
             visible_chunkid,visible_chunks_num,
             xyz,scale,rot,opacity
         )
 
         # Step 2: Compact + SH (using activated position for view direction)
-        color=utils.wrapper.CompactSH.apply(
+        color=utils.ops.compact_sh(
             bSparseGrad,
             actived_sh_degree,
             visible_chunkid,visible_chunks_num,
@@ -62,7 +55,7 @@ def render_preprocess(
             camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
             dirs=culled_xyz[:3]-camera_center.unsqueeze(-1)
             dirs=torch.nn.functional.normalize(dirs,dim=-2)
-        color=utils.wrapper.SphericalHarmonicToRGB.call_fused(actived_sh_degree,sh_0,sh_rest,dirs)
+        color=utils.ops.spherical_harmonic_to_rgb(actived_sh_degree,sh_0,sh_rest,dirs)
         nvtx.range_pop()
 
 
@@ -77,11 +70,11 @@ def render(
 
     #gs projection
     nvtx.range_push("Proj")
-    view_pos,ndc_pos=utils.wrapper.MVPTransform.apply(xyz,view_matrix,proj_matrix,valid_length)
-    transform_matrix=utils.wrapper.CreateTransformMatrix.call_fused(scale,rot,valid_length)
-    J=utils.wrapper.CreateRaySpaceTransformMatrix.call_fused(view_pos,proj_matrix,output_shape,valid_length)
-    cov2d=utils.wrapper.CreateCov2dDirectly.call_fused(J,view_matrix,transform_matrix,valid_length)
-    eigen_val,eigen_vec,inv_cov2d=utils.wrapper.EighAndInverse2x2Matrix.call_fused(cov2d,valid_length)
+    view_pos,ndc_pos=utils.ops.mvp_transform(xyz,view_matrix,proj_matrix,valid_length)
+    transform_matrix=utils.ops.create_transform_matrix(scale,rot,valid_length=valid_length)
+    J=utils.ops.create_rayspace_transform_matrix(view_pos,proj_matrix,output_shape,valid_length=valid_length)
+    cov2d=utils.ops.create_cov2d_directly(J,view_matrix,transform_matrix,valid_length)
+    eigen_val,eigen_vec,inv_cov2d=utils.ops.eigh_and_inverse_2x2_matrix(cov2d,valid_length)
     view_depth=view_pos[:,2,:]
     nvtx.range_pop()
     
@@ -89,7 +82,7 @@ def render(
     feedback_binning_allocate_size = None
     if training_frame_buffer is not None:
         feedback_binning_allocate_size=training_frame_buffer.feedback_binning_allocate_size
-    tile_start_index,sorted_pointId,primitive_visible=utils.wrapper.Binning.call_fused(
+    tile_start_index,sorted_pointId,primitive_visible=utils.ops.binning(
         ndc_pos,view_depth,inv_cov2d,opacity,
         valid_length,feedback_binning_allocate_size,idx_tensor,
         output_shape,pp.tile_size
@@ -107,7 +100,7 @@ def render(
         except:
             pass
 
-    img,transmitance,depth,normal,lst_contributor=utils.wrapper.GaussiansRasterFunc.apply(
+    img,transmitance,depth,normal,lst_contributor=utils.ops.rasterize_gaussians(
         sorted_pointId,tile_start_index,
         ndc_pos,inv_cov2d,color,opacity,
         tiles,

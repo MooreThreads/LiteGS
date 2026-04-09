@@ -348,7 +348,7 @@ class GaussianSplattingModel(nn.Module):
             
         
         if self.cluster_size>0:
-            visibility,visible_chunks_num,visible_chunkid=utils.wrapper.litegs_fused.frustum_culling_aabb(
+            visibility,visible_chunks_num,visible_chunkid=utils.ops.frustum_culling_aabb(
                 self.cluster_origin,self.cluster_extend,frustumplane,
                 feedback_visible_chunks_num,idx_tensor
             )
@@ -356,7 +356,7 @@ class GaussianSplattingModel(nn.Module):
                 StatisticsHelperInst.set_compact_mask(visible_chunkid,visible_chunks_num)
 
             # Step 1: Compact + Activate (without SH)
-            xyz, scale, rot, opacity=utils.wrapper.CompactActivateNoSH.apply(
+            xyz, scale, rot, opacity=utils.ops.compact_activate_nosh(
                 self.is_sparse_grad,
                 visible_chunkid,visible_chunks_num,
                 self.xyz,self.scale,self.rot,self.opacity
@@ -366,7 +366,7 @@ class GaussianSplattingModel(nn.Module):
             if hasattr(self.sh_optimizer,'forward'):
                 color=self.sh_optimizer.forward(self.active_sh_degree,visible_chunkid,visible_chunks_num,view_matrix,self.xyz)
             else:
-                color=utils.wrapper.CompactSH.apply(
+                color=utils.ops.compact_sh(
                     self.is_sparse_grad,
                     self.active_sh_degree,
                     visible_chunkid,visible_chunks_num,
@@ -385,7 +385,7 @@ class GaussianSplattingModel(nn.Module):
                 camera_center=(-view_matrix[...,3:4,:3]@(view_matrix[...,:3,:3].transpose(-1,-2))).squeeze(1)
                 dirs= xyz[:3]-camera_center.unsqueeze(-1)
                 dirs=torch.nn.functional.normalize(dirs,dim=-2)
-            color=utils.wrapper.SphericalHarmonicToRGB.call_fused(self.active_sh_degree,self.sh_0,self.sh_rest,dirs)
+            color=utils.ops.spherical_harmonic_to_rgb(self.active_sh_degree,self.sh_0,self.sh_rest,dirs)
 
 
         if visible_chunks_num is not None:

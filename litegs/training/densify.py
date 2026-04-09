@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from ..arguments import DensifyParams
 from ..utils.statistic_helper import StatisticsHelperInst
 from ..scene import cluster
-from ..utils import wrapper
+from .. import utils
 
 
 @dataclass
@@ -99,7 +99,7 @@ class DensityControllerOfficial(DensityControllerBase):
         stds = params.scale[..., split_mask].exp()
         means = torch.zeros((3, stds.size(-1)), device=params.xyz.device)
         samples = torch.normal(mean=means, std=stds).unsqueeze(0)
-        transform_matrix = wrapper.CreateTransformMatrix.call_fused(
+        transform_matrix = utils.ops.create_transform_matrix(
             torch.ones_like(params.scale[..., split_mask].exp()),
             torch.nn.functional.normalize(params.rot[..., split_mask], dim=0)
         )
@@ -232,7 +232,7 @@ class DensityControllerTamingGS(DensityControllerOfficial):
         stds = params.scale[..., split_index].exp()
         means = torch.zeros((3, stds.size(-1)), device=params.xyz.device)
         samples = torch.normal(mean=means, std=stds).unsqueeze(0)
-        transform_matrix = wrapper.CreateTransformMatrix.call_fused(
+        transform_matrix = utils.ops.create_transform_matrix(
             torch.ones_like(params.scale[..., split_index]),
             torch.nn.functional.normalize(params.rot[..., split_index], dim=0)
         )
