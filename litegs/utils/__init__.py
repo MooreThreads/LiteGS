@@ -3,7 +3,6 @@ import math
 import torch
 from .spherical_harmonics import sh0_to_rgb,sh_to_rgb,rgb_to_sh0
 from . import ops
-from . import wrapper
 
 def qvec2rotmat(qvec):
     return np.array([

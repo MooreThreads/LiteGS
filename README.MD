@@ -144,13 +144,40 @@ LiteGS makes slight adjustments to density control to accommodate its clustering
 
 ## Flexible
 
-The gaussian_splatting/wrapper.py file contains two sets of APIs, offering flexibility in choosing between Python-based and CUDA-based implementations. The Python-based API is invoked using call_script(), while the CUDA-based API is available via call_fused(). While the CUDA-based API delivers significant performance improvements, it lacks the flexibility. The choice between these implementations depends on the specific use case:
+LiteGS now exposes modular operators under [`litegs/utils/ops`](litegs/utils/ops). Each operator provides:
 
-* python-based api: Provides greater flexibility, making it ideal for rapid prototyping and development where training speed is less critical.
+* a unified entry such as `ops.create_transform_matrix(...)`
+* a Python reference implementation such as `ops.create_transform_matrix_script(...)` when a script backend exists
+* a CUDA implementation such as `ops.create_transform_matrix_cuda(...)`
 
-* cuda-based api: Offers the highest performance and is recommended for production environments where training speed is a priority.
+The recommended usage is to call the unified `ops.xxx(...)` entry in normal code and select the backend explicitly when needed.
 
-Additionally, an interface validate() and the accompanying check_wrapper.py script are provided to verify that both APIs produce consistent gradients.
+```python
+from litegs.utils import ops
+
+transform = ops.create_transform_matrix(scale, rot)
+transform = ops.create_transform_matrix(scale, rot, backend=ops.Backend.SCRIPT)
+transform = ops.create_transform_matrix(scale, rot, backend=ops.Backend.CUDA)
+```
+
+You can also switch the default backend globally or temporarily:
+
+```python
+from litegs.utils import ops
+
+ops.set_default_backend(ops.Backend.CUDA)
+
+with ops.use_backend(ops.Backend.SCRIPT):
+    transform = ops.create_transform_matrix(scale, rot)
+```
+
+For CUDA-only operators such as binning and rasterization, the unified `ops.xxx(...)` entry is still used, but `Backend.SCRIPT` will raise `NotImplementedError`.
+
+In practice:
+
+* python-based api: Provides greater flexibility, making it ideal for rapid prototyping and algorithm changes.
+
+* cuda-based api: Offers the highest performance and is recommended for training and production workloads.
 
 Here is an example that demonstrates the flexibility of LiteGS. In this instance, our goal is to create a more precise bounding box for a 2D Gaussian when generating visibility tables. In the original 3DGS implementation, the bounding box is determined as three times the length of the major axis of the Gaussian. However, incorporating opacity can allow for a smaller bounding box.
 
