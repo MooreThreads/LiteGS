@@ -10,6 +10,41 @@ class OpsArchitectureTests(unittest.TestCase):
     def tearDown(self):
         backend_module.set_default_backend(backend_module.Backend.AUTO)
 
+    def test_frustum_culling_aabb_matches_expected_for_script_and_cuda(self):
+        frustumplane = torch.tensor(
+            [[
+                [1.0, 0.0, 0.0, 1.0],
+                [-1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [0.0, -1.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [0.0, 0.0, -1.0, 1.0],
+            ]],
+            device="cuda",
+        )
+        aabb_origin = torch.tensor(
+            [[0.0, 3.0], [0.0, 0.0], [0.0, 0.0]],
+            device="cuda",
+        )
+        aabb_ext = torch.tensor(
+            [[0.1, 0.1], [0.1, 0.1], [0.1, 0.1]],
+            device="cuda",
+        )
+
+        script_visibility, script_visible_chunk_num, script_visible_chunkid = ops.frustum_culling_aabb_script(aabb_origin, aabb_ext, frustumplane)
+        cuda_visibility, cuda_visible_chunk_num, cuda_visible_chunkid = ops.frustum_culling_aabb_cuda(aabb_origin, aabb_ext, frustumplane)
+
+        expected_visibility = torch.tensor([True, False], device="cuda")
+        expected_visible_chunk_num = torch.tensor([1], device="cuda", dtype=torch.int32)
+        expected_visible_chunkid = torch.tensor([0], device="cuda", dtype=torch.int64)
+
+        self.assertTrue(torch.equal(script_visibility, expected_visibility))
+        self.assertTrue(torch.equal(cuda_visibility, expected_visibility))
+        self.assertTrue(torch.equal(script_visible_chunk_num, expected_visible_chunk_num))
+        self.assertTrue(torch.equal(cuda_visible_chunk_num, expected_visible_chunk_num))
+        self.assertTrue(torch.equal(script_visible_chunkid, expected_visible_chunkid))
+        self.assertTrue(torch.equal(cuda_visible_chunkid[:cuda_visible_chunk_num.item()], expected_visible_chunkid))
+
     def test_compact_activate_nosh_matches_expected_formula_for_script_and_cuda(self):
         visible_chunkid = torch.tensor([1, 0, 2], device="cuda", dtype=torch.int64)
         visible_chunk_num = torch.tensor([2], device="cuda", dtype=torch.int32)
