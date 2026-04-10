@@ -231,7 +231,7 @@ class CameraFrameDataset(Dataset):
         center, diagonal = get_center_and_diag(cam_centers)
         radius = diagonal * 1.1
         translate = -center
-        return translate,radius
+        return translate,radius.item()
     
 class FramesBuffer:
     def __init__(self,dataset:CameraFrameDataset):

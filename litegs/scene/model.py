@@ -192,7 +192,7 @@ class GaussianSplattingModel(nn.Module):
         state = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
 
         # Add scalar value
-        state[prefix + 'active_sh_degree'] = torch.tensor(self.active_sh_degree)
+        state[prefix + 'active_sh_degree'] = self.active_sh_degree
 
         # Add optimizer state
         if hasattr(self, 'optimizer') and self.optimizer is not None:
@@ -208,36 +208,60 @@ class GaussianSplattingModel(nn.Module):
 
     def load_state_dict(self, state_dict, strict: bool = True):
         """
-        Override load_state_dict to handle optimizer, scheduler, and other needed states.
-        This allows loading like a regular nn.Module.
+        Override load_state_dict so explicit loads share the same recursive logic
+        as loads performed through a parent nn.Module.
         """
-        # Extract scalar value before loading
-        active_sh_degree = state_dict.pop('active_sh_degree').item() if 'active_sh_degree' in state_dict else 0
+        return super().load_state_dict(state_dict, strict=strict)
 
-        # Extract optimizer and scheduler states
-        optimizer_state = state_dict.pop('optimizer_state_dict', None)
-        sh_optimizer_state = state_dict.pop('sh_optimizer_state_dict', None)
-        scheduler_state = state_dict.pop('scheduler_state_dict', None)
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        active_sh_degree = state_dict.pop(prefix + 'active_sh_degree', None)
+        optimizer_state = state_dict.pop(prefix + 'optimizer_state_dict', None)
+        sh_optimizer_state = state_dict.pop(prefix + 'sh_optimizer_state_dict', None)
+        scheduler_state = state_dict.pop(prefix + 'scheduler_state_dict', None)
 
-        # Load parameters using parent's load_state_dict
-        super().load_state_dict(state_dict, strict=strict)
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
-        # Restore scalar value
-        self.active_sh_degree = active_sh_degree
+        if active_sh_degree is not None:
+            self.active_sh_degree = active_sh_degree
 
-        # Restore optimizer state
         if optimizer_state is not None and self.optimizer is not None:
-            self.optimizer.load_state_dict(optimizer_state)
+            try:
+                self.optimizer.load_state_dict(optimizer_state)
+            except Exception as exc:
+                error_msgs.append(f"Error(s) in loading optimizer_state_dict for {prefix or 'model'}: {exc}")
+
         if sh_optimizer_state is not None and self.sh_optimizer is not None:
-            self.sh_optimizer.load_state_dict(sh_optimizer_state)
+            try:
+                self.sh_optimizer.load_state_dict(sh_optimizer_state)
+            except Exception as exc:
+                error_msgs.append(f"Error(s) in loading sh_optimizer_state_dict for {prefix or 'model'}: {exc}")
 
-        # Restore scheduler state
         if scheduler_state is not None and hasattr(self, 'scheduler') and self.scheduler is not None:
-            self.scheduler.load_state_dict(scheduler_state)
+            try:
+                self.scheduler.load_state_dict(scheduler_state)
+            except Exception as exc:
+                error_msgs.append(f"Error(s) in loading scheduler_state_dict for {prefix or 'model'}: {exc}")
 
-        self.update_cluster_aabb()
-
-        return torch.nn.modules.module._IncompatibleKeys([], [])
+        if self.cluster_size > 0:
+            self.update_cluster_aabb()
+        return
 
     def get_cluster_aabb(self):
         """Return cluster AABB (origin, extend)."""

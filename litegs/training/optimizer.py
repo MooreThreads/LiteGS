@@ -113,7 +113,7 @@ class Scheduler(_LRScheduler):
         delay_rate = 1.0
         t = np.clip(self.last_epoch / self.max_epochs, 0, 1)
         log_lerp = np.exp(np.log(self.lr_init) * (1 - t) + np.log(self.lr_final) * t)
-        return delay_rate * log_lerp
+        return delay_rate * (log_lerp.item())
 
     def get_lr(self):
         lr_list=[]

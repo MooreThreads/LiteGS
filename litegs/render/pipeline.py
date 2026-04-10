@@ -29,39 +29,11 @@ class RenderPipeline(nn.Module):
         self.pp = pp
         self.training_frames_buffer = data.FramesBuffer(training_set)
         self.model = gs_model
-        self.start_epoch = 0
 
         # Learnable view-projection as sub-module
         self.learnable_viewproj: Optional[LearnableViewProj] = None
         if pp.learnable_viewproj:
             self.learnable_viewproj = LearnableViewProj(training_set)
-
-    def state_dict(self, destination=None, prefix='', keep_vars=False):
-        """
-        Override state_dict to include start_epoch and model states.
-        """
-        # Call parent's state_dict for sub-modules (learnable_viewproj)
-        state = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
-
-        # Add start_epoch
-        state[prefix + 'start_epoch'] = torch.tensor(self.start_epoch)
-
-        return state
-
-    def load_state_dict(self, state_dict, strict: bool = True):
-        """
-        Override load_state_dict to handle start_epoch and model states.
-        """
-        # Extract start_epoch
-        start_epoch = state_dict.pop('start_epoch').item() if 'start_epoch' in state_dict else 0
-
-        # Load sub-module states
-        super().load_state_dict(state_dict, strict=strict)
-
-        # Restore start_epoch
-        self.start_epoch = start_epoch
-
-        return torch.nn.modules.module._IncompatibleKeys([], [])
 
     def forward(
         self,

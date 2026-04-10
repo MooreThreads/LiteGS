@@ -21,6 +21,73 @@ def __l1_loss(network_output: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     return torch.abs((network_output - gt)).mean()
 
 
+def _get_resume_primitive_num(state_dict: dict, cluster_size: int) -> int:
+    checkpoint_xyz = state_dict.get("model.xyz", None)
+    if checkpoint_xyz is None:
+        raise KeyError("Checkpoint is missing 'model.xyz', cannot infer primitive count for resume.")
+
+    if cluster_size > 0:
+        if checkpoint_xyz.ndim != 3:
+            raise ValueError(
+                f"Expected clustered checkpoint tensor 'model.xyz' to have 3 dims, got shape {tuple(checkpoint_xyz.shape)}."
+            )
+        if checkpoint_xyz.shape[-1] != cluster_size:
+            raise ValueError(
+                f"Checkpoint cluster size {checkpoint_xyz.shape[-1]} does not match config cluster_size {cluster_size}."
+            )
+        primitive_num = int(checkpoint_xyz.shape[-2] * checkpoint_xyz.shape[-1])
+    else:
+        if checkpoint_xyz.ndim != 2:
+            raise ValueError(
+                f"Expected unclustered checkpoint tensor 'model.xyz' to have 2 dims, got shape {tuple(checkpoint_xyz.shape)}."
+            )
+        primitive_num = int(checkpoint_xyz.shape[-1])
+
+    if primitive_num <= 0:
+        raise ValueError("Checkpoint contains no primitives, cannot resume training.")
+    return primitive_num
+
+
+def _build_resume_init_tensors(state_dict: dict, cluster_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+    primitive_num = _get_resume_primitive_num(state_dict, cluster_size)
+    point_ids = torch.arange(primitive_num, device='cuda', dtype=torch.float32)
+    init_xyz_tensor = torch.stack(
+        (
+            point_ids,
+            torch.zeros_like(point_ids),
+            torch.zeros_like(point_ids),
+        ),
+        dim=1,
+    )
+    init_color_tensor = torch.zeros((primitive_num, 3), device='cuda', dtype=torch.float32)
+    return init_xyz_tensor, init_color_tensor
+
+
+def _load_checkpoint(path: str) -> tuple[dict, int]:
+    checkpoint = torch.load(path, map_location='cuda')
+    if "pipeline" not in checkpoint:
+        raise KeyError("Checkpoint is missing 'pipeline'.")
+    if "start_epoch" not in checkpoint:
+        raise KeyError("Checkpoint is missing 'start_epoch'.")
+
+    start_epoch = checkpoint["start_epoch"]
+    if isinstance(start_epoch, torch.Tensor):
+        start_epoch = int(start_epoch.item())
+    else:
+        start_epoch = int(start_epoch)
+
+    return checkpoint["pipeline"], start_epoch
+
+
+def _save_checkpoint(path: str, pipeline: RenderPipeline, start_epoch: int) -> None:
+    checkpoint = {
+        "pipeline": pipeline.state_dict(),
+        "start_epoch": int(start_epoch),
+    }
+    torch.save(checkpoint, path)
+    return
+
+
 def start(cfg:TrainConfig):
 
     cameras_info: dict[int, data.CameraInfo] = None
@@ -59,25 +126,33 @@ def start(cfg:TrainConfig):
     if cfg.densify.end < 0:
         cfg.densify.end = int(total_epoch * 0.8 / cfg.densify.opacity_reset_interval) * cfg.densify.opacity_reset_interval + 1
 
+    checkpoint_state_dict = None
+    start_epoch = 0
+    if cfg.resume is not None:
+        checkpoint_state_dict, start_epoch = _load_checkpoint(cfg.resume)
+
     # Create model
-    init_xyz_tensor = torch.tensor(init_xyz, dtype=torch.float32, device='cuda')
-    init_color_tensor = torch.tensor(init_color, dtype=torch.float32, device='cuda')
+    if checkpoint_state_dict is None:
+        init_xyz_tensor = torch.tensor(init_xyz, dtype=torch.float32, device='cuda')
+        init_color_tensor = torch.tensor(init_color, dtype=torch.float32, device='cuda')
+    else:
+        init_xyz_tensor, init_color_tensor = _build_resume_init_tensors(checkpoint_state_dict, cfg.model.cluster_size)
     model = GaussianSplattingModel.from_arrays(
         init_xyz_tensor, init_color_tensor, cfg.model,
         norm_radius, cfg.opt, cfg.densify
     )
     pipeline = RenderPipeline(cfg.pipeline, model ,trainingset)
     model=None
-    if cfg.resume is not None:
-        pipeline.load_state_dict(cfg.resume)
+    if checkpoint_state_dict is not None:
+        pipeline.load_state_dict(checkpoint_state_dict)
 
     StatisticsHelperInst.reset(pipeline.model.xyz.shape[-2], pipeline.model.xyz.shape[-1], pipeline.model.density_controller.is_densify_actived)
-    progress_bar = tqdm(range(pipeline.start_epoch, total_epoch), desc="Training progress")
+    progress_bar = tqdm(range(start_epoch, total_epoch), desc="Training progress")
     progress_bar.update(0)
 
     ops.set_default_backend(ops.Backend.CUDA)
 
-    for epoch in range(pipeline.start_epoch, total_epoch):
+    for epoch in range(start_epoch, total_epoch):
         pipeline.train()
         torch.cuda.synchronize()#sync for feedback buffer. Do not remove it!
         with StatisticsHelperInst.try_start(epoch):
@@ -153,8 +228,8 @@ def start(cfg:TrainConfig):
         if epoch in cfg.cp_epochs:
             os.makedirs(cfg.dataset.model_path, exist_ok = True) 
             file_path=os.path.join(cfg.dataset.model_path,"chkpnt_{0}.pth".format(epoch))
-            torch.save(pipeline.state_dict(),file_path)
-            config_path = os.path.join(cfg.dataset.model_path,"chkpnt_{0}_config.yaml".format(epoch))
+            _save_checkpoint(file_path, pipeline, epoch + 1)
+            config_path = os.path.join(cfg.dataset.model_path,"chkpnt_{0}_config.json".format(epoch))
             with open(config_path, "w") as f:
                 f.write(cfg.to_json())
             

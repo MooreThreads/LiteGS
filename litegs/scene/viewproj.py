@@ -74,19 +74,42 @@ class LearnableViewProj(nn.Module):
 
     def load_state_dict(self, state_dict, strict: bool = True):
         """
-        Override load_state_dict to handle optimizer states.
+        Override load_state_dict so explicit loads share the same recursive logic
+        as loads performed through a parent nn.Module.
         """
-        # Extract optimizer states
-        view_optimizer_state = state_dict.pop('view_optimizer_state_dict', None)
-        proj_optimizer_state = state_dict.pop('proj_optimizer_state_dict', None)
+        return super().load_state_dict(state_dict, strict=strict)
 
-        # Load parameters using parent's load_state_dict
-        super().load_state_dict(state_dict, strict=strict)
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        view_optimizer_state = state_dict.pop(prefix + 'view_optimizer_state_dict', None)
+        proj_optimizer_state = state_dict.pop(prefix + 'proj_optimizer_state_dict', None)
 
-        # Restore optimizer states
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
         if view_optimizer_state is not None:
-            self.view_optimizer.load_state_dict(view_optimizer_state)
+            try:
+                self.view_optimizer.load_state_dict(view_optimizer_state)
+            except Exception as exc:
+                error_msgs.append(f"Error(s) in loading view_optimizer_state_dict for {prefix or 'learnable_viewproj'}: {exc}")
         if proj_optimizer_state is not None:
-            self.proj_optimizer.load_state_dict(proj_optimizer_state)
-
-        return torch.nn.modules.module._IncompatibleKeys([], [])
+            try:
+                self.proj_optimizer.load_state_dict(proj_optimizer_state)
+            except Exception as exc:
+                error_msgs.append(f"Error(s) in loading proj_optimizer_state_dict for {prefix or 'learnable_viewproj'}: {exc}")
+        return
