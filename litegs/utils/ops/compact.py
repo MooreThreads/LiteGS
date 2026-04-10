@@ -145,21 +145,17 @@ def _compact_activate_nosh_script_forward(
     opacity: torch.Tensor,
 ):
     valid_chunk_num = _valid_chunk_count(visible_chunkid, visible_chunk_num)
-    allocate_chunk_num = int(visible_chunkid.shape[0])
     active_chunkid = visible_chunkid[:valid_chunk_num]
-
-    activated_position = torch.zeros((4, allocate_chunk_num, xyz.shape[-1]), device=xyz.device, dtype=xyz.dtype)
-    activated_scale = torch.zeros((scale.shape[0], allocate_chunk_num, scale.shape[-1]), device=scale.device, dtype=scale.dtype)
-    activated_rotation = torch.zeros((rot.shape[0], allocate_chunk_num, rot.shape[-1]), device=rot.device, dtype=rot.dtype)
-    activated_opacity = torch.zeros((opacity.shape[0], allocate_chunk_num, opacity.shape[-1]), device=opacity.device, dtype=opacity.dtype)
-
-    if valid_chunk_num > 0:
-        activated_position[:3, :valid_chunk_num, :] = xyz[..., active_chunkid, :]
-        activated_position[3, :valid_chunk_num, :] = 1.0
-        activated_scale[:, :valid_chunk_num, :] = scale[..., active_chunkid, :].exp()
-        activated_rotation[:, :valid_chunk_num, :] = torch.nn.functional.normalize(rot[..., active_chunkid, :], dim=0)
-        activated_opacity[:, :valid_chunk_num, :] = opacity[..., active_chunkid, :].sigmoid()
-
+    activated_position = torch.cat(
+        (
+            xyz[..., active_chunkid, :],
+            torch.ones((1, valid_chunk_num, xyz.shape[-1]), device=xyz.device, dtype=xyz.dtype),
+        ),
+        dim=0,
+    )
+    activated_scale = scale[..., active_chunkid, :].exp()
+    activated_rotation = torch.nn.functional.normalize(rot[..., active_chunkid, :], dim=0)
+    activated_opacity = opacity[..., active_chunkid, :].sigmoid()
     return activated_position, activated_scale, activated_rotation, activated_opacity
 
 
@@ -215,10 +211,10 @@ def compact_activate_nosh(
 
     Returns:
         A tuple ``(position, scale, rotation, opacity)``.
-        ``position`` has shape ``[4, A, K]`` and includes the homogeneous row of ones.
-        The remaining outputs preserve the clustered layout with shapes ``[3, A, K]``, ``[4, A, K]``,
-        and ``[1, A, K]``.
-        Entries beyond ``visible_chunk_num`` are zero-filled.
+        CUDA returns tensors with shape ``[4, A, K]`` / ``[3, A, K]`` / ``[4, A, K]`` / ``[1, A, K]``
+        where ``A`` is the allocated compact buffer length.
+        SCRIPT returns the exact valid prefix with shape ``[4, V, K]`` / ``[3, V, K]`` / ``[4, V, K]`` /
+        ``[1, V, K]`` where ``V = visible_chunk_num``.
     """
     selected_backend = normalize_backend(backend)
     if selected_backend == Backend.SCRIPT:
@@ -236,21 +232,13 @@ def _compact_sh_script_forward(
     sh_rest: torch.Tensor,
 ):
     valid_chunk_num = _valid_chunk_count(visible_chunkid, visible_chunk_num)
-    allocate_chunk_num = int(visible_chunkid.shape[0])
-    views_num = int(view_matrix.shape[0])
-    chunk_size = int(position.shape[-1])
     active_chunkid = visible_chunkid[:valid_chunk_num]
-
-    color = torch.zeros((views_num, 3, allocate_chunk_num, chunk_size), device=sh_base.device, dtype=sh_base.dtype)
-
-    if valid_chunk_num > 0:
-        with torch.no_grad():
-            camera_center = (-view_matrix[..., 3:4, :3] @ view_matrix[..., :3, :3].transpose(-1, -2)).squeeze(1)
-            dirs = position.detach()[..., active_chunkid, :].unsqueeze(0) - camera_center.unsqueeze(-1).unsqueeze(-1)
-            dirs = torch.nn.functional.normalize(dirs, dim=1)
-        sh = torch.cat((sh_base[..., active_chunkid, :], sh_rest[..., active_chunkid, :]), dim=0)
-        color[:, :, :valid_chunk_num, :] = spherical_harmonics.sh_to_rgb(sh_degree, sh, dirs)
-
+    with torch.no_grad():
+        camera_center = (-view_matrix[..., 3:4, :3] @ view_matrix[..., :3, :3].transpose(-1, -2)).squeeze(1)
+        dirs = position.detach()[..., active_chunkid, :].unsqueeze(0) - camera_center.unsqueeze(-1).unsqueeze(-1)
+        dirs = torch.nn.functional.normalize(dirs, dim=1)
+    sh = torch.cat((sh_base[..., active_chunkid, :], sh_rest[..., active_chunkid, :]), dim=0)
+    color = spherical_harmonics.sh_to_rgb(sh_degree, sh, dirs)
     return color
 
 
@@ -310,7 +298,8 @@ def compact_sh(
 
     Returns:
         RGB colors with shape ``[V, 3, A, K]`` in compacted chunk order.
-        Only the valid prefix ``:visible_chunk_num`` is defined.
+        CUDA may over-allocate to ``A`` for device-only valid counts.
+        SCRIPT returns the exact valid compacted shape ``[V, 3, visible_chunk_num, K]``.
     """
     selected_backend = normalize_backend(backend)
     if selected_backend == Backend.SCRIPT:

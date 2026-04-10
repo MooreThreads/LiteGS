@@ -82,13 +82,17 @@ class OpsArchitectureTests(unittest.TestCase):
             device="cuda",
         )
 
-        self.assertTrue(torch.equal(script_outputs[0][:, :valid_chunk_num, :], expected_position[:, :valid_chunk_num, :]))
+        self.assertEqual(script_outputs[0].shape, (4, valid_chunk_num, 2))
+        self.assertEqual(script_outputs[1].shape, (3, valid_chunk_num, 2))
+        self.assertEqual(script_outputs[2].shape, (4, valid_chunk_num, 2))
+        self.assertEqual(script_outputs[3].shape, (1, valid_chunk_num, 2))
+        self.assertTrue(torch.equal(script_outputs[0], expected_position[:, :valid_chunk_num, :]))
         self.assertTrue(torch.equal(cuda_outputs[0][:, :valid_chunk_num, :], expected_position[:, :valid_chunk_num, :]))
-        self.assertTrue(torch.equal(script_outputs[1][:, :valid_chunk_num, :], expected_scale[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(script_outputs[1], expected_scale[:, :valid_chunk_num, :]))
         self.assertTrue(torch.equal(cuda_outputs[1][:, :valid_chunk_num, :], expected_scale[:, :valid_chunk_num, :]))
-        self.assertTrue(torch.equal(script_outputs[2][:, :valid_chunk_num, :], expected_rot[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(script_outputs[2], expected_rot[:, :valid_chunk_num, :]))
         self.assertTrue(torch.equal(cuda_outputs[2][:, :valid_chunk_num, :], expected_rot[:, :valid_chunk_num, :]))
-        self.assertTrue(torch.equal(script_outputs[3][:, :valid_chunk_num, :], expected_opacity[:, :valid_chunk_num, :]))
+        self.assertTrue(torch.equal(script_outputs[3], expected_opacity[:, :valid_chunk_num, :]))
         self.assertTrue(torch.equal(cuda_outputs[3][:, :valid_chunk_num, :], expected_opacity[:, :valid_chunk_num, :]))
 
     def test_compact_activate_nosh_script_backward_matches_expected(self):
@@ -239,7 +243,8 @@ class OpsArchitectureTests(unittest.TestCase):
             device="cuda",
         )
 
-        self.assertTrue(torch.allclose(script_color[:, :, :valid_chunk_num, :], expected_color, atol=1e-6, rtol=1e-6))
+        self.assertEqual(script_color.shape, (1, 3, valid_chunk_num, 2))
+        self.assertTrue(torch.allclose(script_color, expected_color, atol=1e-6, rtol=1e-6))
         self.assertTrue(torch.allclose(cuda_color[:, :, :valid_chunk_num, :], expected_color, atol=1e-6, rtol=1e-6))
 
     def test_compact_sh_script_backward_matches_expected(self):
