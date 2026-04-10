@@ -37,20 +37,7 @@ def frustum_culling_aabb_script(
 
     visible_count = int(visibility.sum().item())
     visible_chunk_num = torch.tensor([visible_count], device=frustumplane.device, dtype=torch.int32)
-    visible_ids = visibility.nonzero(as_tuple=False)[:, 0].to(dtype=torch.int64)
-
-    if feedback_buffer is not None and data_idx is not None and data_idx.numel() > 0:
-        pred_visible_count = 0
-        for idx in data_idx.reshape(-1).tolist():
-            pred_visible_count = max(pred_visible_count, int(feedback_buffer[int(idx)].item()))
-        pred_visible_count = int(pred_visible_count * 1.2)
-        pred_visible_count = min(max(pred_visible_count, visible_count), int(aabb_origin.shape[1]))
-        allocated_ids = torch.arange(aabb_origin.shape[1], device=frustumplane.device, dtype=torch.int64)
-        if visible_count > 0:
-            allocated_ids[:visible_count] = visible_ids
-        visible_chunkid = allocated_ids[:pred_visible_count]
-    else:
-        visible_chunkid = visible_ids
+    visible_chunkid = visibility.nonzero(as_tuple=False)[:, 0].to(dtype=torch.int64)
 
     return visibility, visible_chunk_num, visible_chunkid
 
