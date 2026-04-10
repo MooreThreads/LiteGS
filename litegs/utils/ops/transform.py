@@ -183,7 +183,7 @@ def create_rayspace_transform_matrix_cuda(
 ) -> torch.Tensor:
     return fused.jacobianRayspace(view_pos, proj_matrix, output_shape[0], output_shape[1], valid_length)
 
-
+@torch.no_grad()
 def create_rayspace_transform_matrix(
     view_pos: torch.Tensor,
     proj_matrix: torch.Tensor,
