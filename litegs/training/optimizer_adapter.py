@@ -20,26 +20,22 @@ def sync_state_after_densify(
             param = group["params"][0]
             stored_state = optimizer.state.get(param, None)
             if param in exchange_dict.keys():
-                
-                if stored_state is None:
-                    continue
+                if stored_state is not None:
+                    name = group["name"]
+                    append_tensor = None if edits.append_params is None else getattr(edits.append_params, name)
+                    target_tensor = param.detach()
 
-                name = group["name"]
-                append_tensor = None if edits.append_params is None else getattr(edits.append_params, name)
-                target_tensor = param.detach()
+                    for key, value in stored_state.items():
+                        if not isinstance(value, torch.Tensor) or key=='step':
+                            continue
 
-                for key, value in stored_state.items():
-                    if not isinstance(value, torch.Tensor) or key=='step':
-                        continue
-
-                    remapped_value = value
-                    if edits.prune_index is not None:
-                        remapped_value = _prune_state_tensor(remapped_value, edits.prune_index, bcluster)
-                    if append_tensor is not None:
-                        zeros = torch.zeros_like(append_tensor, dtype=remapped_value.dtype, device=remapped_value.device)
-                        remapped_value = _append_state_tensor(remapped_value, zeros, bcluster)
-                    value.data = remapped_value
-                
+                        remapped_value = value
+                        if edits.prune_index is not None:
+                            remapped_value = _prune_state_tensor(remapped_value, edits.prune_index, bcluster)
+                        if append_tensor is not None:
+                            zeros = torch.zeros_like(append_tensor, dtype=remapped_value.dtype, device=remapped_value.device)
+                            remapped_value = _append_state_tensor(remapped_value, zeros, bcluster)
+                        value.data = remapped_value
                 group["params"][0] = exchange_dict[param]
                 optimizer.state[exchange_dict[param]] = stored_state
                 if exchange_dict[param] is not param:

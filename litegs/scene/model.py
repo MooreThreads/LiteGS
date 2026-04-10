@@ -131,6 +131,14 @@ class GaussianSplattingModel(nn.Module):
             sh_rest = self.sh_rest
             opacity = self.opacity
 
+        if edits.append_params is not None:
+            xyz = torch.cat((xyz, edits.append_params.xyz), dim=-1)
+            scale = torch.cat((scale, edits.append_params.scale), dim=-1)
+            rot = torch.cat((rot, edits.append_params.rot), dim=-1)
+            sh_0 = torch.cat((sh_0, edits.append_params.sh_0), dim=-1)
+            sh_rest = torch.cat((sh_rest, edits.append_params.sh_rest), dim=-1)
+            opacity = torch.cat((opacity, edits.append_params.opacity), dim=-1)
+        
         if edits.opacity_override is not None:
             opacity = edits.opacity_override
 
@@ -143,14 +151,6 @@ class GaussianSplattingModel(nn.Module):
             sh_0 = sh_0[..., keep_mask]
             sh_rest = sh_rest[..., keep_mask]
             opacity = opacity[..., keep_mask]
-
-        if edits.append_params is not None:
-            xyz = torch.cat((xyz, edits.append_params.xyz), dim=-1)
-            scale = torch.cat((scale, edits.append_params.scale), dim=-1)
-            rot = torch.cat((rot, edits.append_params.rot), dim=-1)
-            sh_0 = torch.cat((sh_0, edits.append_params.sh_0), dim=-1)
-            sh_rest = torch.cat((sh_rest, edits.append_params.sh_rest), dim=-1)
-            opacity = torch.cat((opacity, edits.append_params.opacity), dim=-1)
 
 
         if self.cluster_size > 0:

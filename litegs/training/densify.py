@@ -143,9 +143,11 @@ class DensityControllerOfficial(DensityControllerBase):
         )
 
     @torch.no_grad()
-    def reset_opacity(self, opacity_params: torch.Tensor, epoch: int) -> torch.Tensor | None:
+    def reset_opacity(self, opacity_params: torch.Tensor, epoch: int, append_opacity_params:torch.Tensor=None) -> torch.Tensor | None:
         def _inverse_sigmoid(x: torch.Tensor) -> torch.Tensor:
             return torch.log(x / (1 - x))
+        if append_opacity_params is not None:
+            opacity_params=torch.cat([opacity_params,append_opacity_params],dim=-1)
         actived_opacities = opacity_params.sigmoid()
         if self.densify_params.opacity_reset_mode == 'decay':
             decay_rate = 0.5
@@ -164,20 +166,23 @@ class DensityControllerOfficial(DensityControllerBase):
         if not (epoch < self.densify_params.end and epoch >= self.densify_params.start):
             return edits
 
-        if epoch % self.densify_params.opacity_reset_interval == 0:
-            edits.opacity_override = self.reset_opacity(params.opacity, epoch)
-            edits.clear_optimizer_state = self.densify_params.opacity_reset_mode == 'decay'
-            edits.changed = edits.changed or True
-
         if epoch % self.densify_params.interval == 0:
             append_params = self.split_and_clone(params, epoch)
             prune_index = self.get_prune_index(params.opacity.sigmoid(), params.scale.exp())
             edits.append_params = append_params
             edits.prune_index = prune_index
             edits.changed = edits.changed or True
-
+        
         if self.chunk_size>0 and edits.changed:
             self._fix_cluster_edits(edits,self.chunk_size)
+
+        if epoch % self.densify_params.opacity_reset_interval == 0:
+            append_opacity_params=None
+            if edits.append_params is not None:
+                append_opacity_params=edits.append_params.opacity
+            edits.opacity_override = self.reset_opacity(params.opacity, epoch, append_opacity_params)
+            edits.clear_optimizer_state = self.densify_params.opacity_reset_mode == 'decay'
+            edits.changed = edits.changed or True
 
         return edits
 

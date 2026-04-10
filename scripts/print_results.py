@@ -89,7 +89,7 @@ def get_dataset_averages(df, datasets):
 # ==========================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv", default="./output/litegs_aggressive_results_freeze.csv", help="CSV file path")
+    parser.add_argument("--csv", default="./output/litegs_aggressive_results.csv", help="CSV file path")
     args = parser.parse_args()
 
     df = load_data(args.csv)
