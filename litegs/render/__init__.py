@@ -85,7 +85,8 @@ def render(
     tile_start_index,sorted_pointId,primitive_visible=utils.ops.binning(
         ndc_pos,view_depth,inv_cov2d,opacity,
         valid_length,feedback_binning_allocate_size,idx_tensor,
-        output_shape,pp.tile_size
+        output_shape,pp.tile_size,
+        backend=utils.ops.Backend.CUDA
     )
 
     #raster
@@ -105,7 +106,8 @@ def render(
         ndc_pos,inv_cov2d,color,opacity,
         tiles,
         output_shape[0],output_shape[1],pp.tile_size[0],pp.tile_size[1],
-        pp.enable_transmitance,pp.enable_depth
+        pp.enable_transmitance,pp.enable_depth,
+        backend=utils.ops.Backend.CUDA
     )
     
     if StatisticsHelperInst.bStart and training_frame_buffer is not None:

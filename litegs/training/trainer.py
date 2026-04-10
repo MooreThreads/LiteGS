@@ -13,7 +13,8 @@ from .. import io_manager
 from ..utils.statistic_helper import StatisticsHelperInst
 from ..scene.model import GaussianSplattingModel
 from ..render.pipeline import RenderPipeline
-from litegs.arguments import TrainConfig,EvalConfig
+from ..arguments import TrainConfig,EvalConfig
+from ..utils import ops
 
 
 def __l1_loss(network_output: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
@@ -73,6 +74,8 @@ def start(cfg:TrainConfig):
     StatisticsHelperInst.reset(pipeline.model.xyz.shape[-2], pipeline.model.xyz.shape[-1], pipeline.model.density_controller.is_densify_actived)
     progress_bar = tqdm(range(pipeline.start_epoch, total_epoch), desc="Training progress")
     progress_bar.update(0)
+
+    ops.set_default_backend(ops.Backend.CUDA)
 
     for epoch in range(pipeline.start_epoch, total_epoch):
         pipeline.train()

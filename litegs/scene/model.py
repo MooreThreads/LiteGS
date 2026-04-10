@@ -359,7 +359,8 @@ class GaussianSplattingModel(nn.Module):
             xyz, scale, rot, opacity=utils.ops.compact_activate_nosh(
                 self.is_sparse_grad,
                 visible_chunkid,visible_chunks_num,
-                self.xyz,self.scale,self.rot,self.opacity
+                self.xyz,self.scale,self.rot,self.opacity,
+                backend=utils.ops.Backend.CUDA
             )
 
             # Step 2: Compact + SH (using activated position for view direction)
