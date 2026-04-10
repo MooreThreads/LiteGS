@@ -1,7 +1,6 @@
 import torch
 from simple_knn._C import distCUDA2
 from ..utils import rgb_to_sh0
-from . import cluster
 
 @torch.no_grad()
 def create_gaussians(xyz:torch.Tensor,color:torch.Tensor,sh_degree:int):
@@ -83,10 +82,7 @@ def get_morton_sorted_indices(xyz:torch.Tensor):
     return indices
 
 @torch.no_grad()
-def spatial_refine(bClustered:bool, xyz:torch.Tensor)->torch.Tensor:
-    if bClustered:
-        xyz,=cluster.uncluster(xyz)
-        
+def spatial_refine(xyz:torch.Tensor)->torch.Tensor:
     morton_code=_gen_morton_code(xyz)
     _,indices=morton_code.sort(stable=True)
     return indices

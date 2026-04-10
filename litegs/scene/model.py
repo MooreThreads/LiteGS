@@ -258,12 +258,11 @@ class GaussianSplattingModel(nn.Module):
 
         assert(self.xyz.grad is None)
 
-        indices = scene.spatial_refine(self.cluster_size > 0, self.xyz)
-
         if self.cluster_size > 0:
             xyz, scale, rot, sh_0, sh_rest, opacity = scene.cluster.uncluster(
                 self.xyz, self.scale, self.rot, self.sh_0, self.sh_rest, self.opacity
             )
+            indices = scene.spatial_refine(xyz)
             xyz = xyz[..., indices]
             scale = scale[..., indices]
             rot = rot[..., indices]
@@ -274,6 +273,7 @@ class GaussianSplattingModel(nn.Module):
                 self.cluster_size, xyz, scale, rot, sh_0, sh_rest, opacity
             )
         else:
+            indices = scene.spatial_refine(self.xyz)
             xyz = self.xyz.data[..., indices].contiguous()
             scale = self.scale.data[..., indices].contiguous()
             rot = self.rot.data[..., indices].contiguous()
