@@ -443,7 +443,9 @@ std::vector<at::Tensor> mvp_transform_forward(at::Tensor world_position, at::Ten
 
     int B = view_matrix.size(0);
     int N = world_position.size(1);
-    at::Tensor view_position = torch::empty({ B,4,N }, world_position.options());
+    // Points past valid_length are never written by the kernel, but binning
+    // sorts the whole depth row, so keep them finite rather than uninitialized.
+    at::Tensor view_position = torch::zeros({ B,4,N }, world_position.options());
     at::Tensor ndc_position = torch::empty({ B,4,N }, world_position.options());
 
     int threadsnum = 256;
