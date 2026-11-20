@@ -3,6 +3,10 @@ output
 ablation_output
 build
 *.egg-info
+*.hip
+*.so
+*_winhip.cu
+hip_errchk.*
 dist
 .pypirc
 trace_*.json

@@ -1,5 +1,9 @@
 #pragma once
+#if defined(USE_ROCM)
+#include <hip/hip_runtime.h>
+#else
 #include "cuda_runtime.h"
+#endif
 void cuda_error_check(const char* file, const char* function);
 
 //#define CUDA_DEBUG

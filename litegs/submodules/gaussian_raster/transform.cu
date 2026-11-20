@@ -1,11 +1,15 @@
+#if !defined(USE_ROCM)
 #ifndef __CUDACC__
     #define __CUDACC__
     #define __NVCC__
 #endif
+#endif
 #include "cuda_runtime.h"
 #include <cooperative_groups.h>
+#if !defined(USE_ROCM)
 #include <cooperative_groups/reduce.h>
 #include <cuda/atomic>
+#endif
 namespace cg = cooperative_groups;
 
 #include <ATen/core/TensorAccessor.h>
@@ -74,7 +78,7 @@ at::Tensor jacobianRayspace(
         translated_position.TYPE(), 
         __FUNCTION__, 
         [&] {
-            jacobian_rayspace_kernel<scalar_t> << <Block3d, threadsnum >> > (
+            jacobian_rayspace_kernel<scalar_t><<<Block3d, threadsnum>>> (
                 translated_position.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
                 proj_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
                 p_valid_length,
@@ -139,7 +143,7 @@ at::Tensor createTransformMatrix_forward(at::Tensor quaternion, at::Tensor scale
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
-    create_transform_matrix_forward_kernel << <blocknum, threadsnum >> > (
+    create_transform_matrix_forward_kernel<<<blocknum, threadsnum>>> (
         quaternion.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         p_valid_length,
@@ -242,7 +246,7 @@ std::vector<at::Tensor> createTransformMatrix_backward(at::Tensor transform_matr
 
     int threadsnum = 256;
     int blocknum=std::ceil(P / (float)threadsnum);
-    create_transform_matrix_backward_kernel << <blocknum, threadsnum >> > (
+    create_transform_matrix_backward_kernel<<<blocknum, threadsnum>>> (
         quaternion.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         scale.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         transform_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -582,7 +586,7 @@ at::Tensor mvp_transform_backward(
         p_valid_length = (*valid_length).data_ptr<int>();
     }
 
-    mvp_backward_data_kernel << <Block3d, threadsnum >> > (
+    mvp_backward_data_kernel<<<Block3d, threadsnum>>> (
         grad_ndc_pos.data_ptr<float>(),
         grad_view_pos.data_ptr<float>(),
         view_matrix.data_ptr<float>(),
@@ -659,7 +663,7 @@ std::vector<at::Tensor> world2ndc_forward(at::Tensor world_position,at::Tensor v
     int threadsnum = 256;
     dim3 Block3d(std::ceil(P / 256.0f), N, 1);
 
-    world2ndc_forward_kernel << <Block3d, threadsnum >> > (
+    world2ndc_forward_kernel<<<Block3d, threadsnum>>> (
         view_project_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         world_position.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
         ndc_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -721,7 +725,7 @@ at::Tensor world2ndc_backword(at::Tensor view_project_matrix, at::Tensor ndc_pos
     int threadsnum = 256;
     int blocknum = std::ceil(P / (float)threadsnum);
 
-    world2ndc_backword_kernel << <blocknum, threadsnum >> > (
+    world2ndc_backword_kernel<<<blocknum, threadsnum>>> (
         view_project_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         ndc_position.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         repc_hom_w.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -807,7 +811,7 @@ at::Tensor createCov2dDirectly_forward(
         transform_matrix.TYPE(), 
         __FUNCTION__, 
         [&] {
-            create_cov2d_forward<scalar_t> << <Block3d, threadsnum >> > (
+            create_cov2d_forward<scalar_t><<<Block3d, threadsnum>>> (
                 J.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
                 view_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
                 transform_matrix.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
@@ -914,7 +918,7 @@ at::Tensor createCov2dDirectly_backward(
     int blocknum=std::ceil(P / (float)threadsnum);
 
 
-    create_cov2d_backward<float> << <blocknum, threadsnum >> > (
+    create_cov2d_backward<float><<<blocknum, threadsnum>>> (
         cov2d_grad.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         J.packed_accessor32<float, 4, torch::RestrictPtrTraits>(),
         view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1050,28 +1054,28 @@ at::Tensor sh2rgb_forward(int64_t degree, at::Tensor sh_base, at::Tensor sh_rest
     switch (degree)
     {
     case 0:
-        sh2rgb_forward_kernel<float, 0> << <Block3d, threadsnum >> > (
+        sh2rgb_forward_kernel<float, 0><<<Block3d, threadsnum>>> (
             sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
-        sh2rgb_forward_kernel<float, 1> << <Block3d, threadsnum >> > (
+        sh2rgb_forward_kernel<float, 1><<<Block3d, threadsnum>>> (
             sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
-        sh2rgb_forward_kernel<float, 2> << <Block3d, threadsnum >> > (
+        sh2rgb_forward_kernel<float, 2><<<Block3d, threadsnum>>> (
             sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             rgb.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
-        sh2rgb_forward_kernel<float, 3> << <Block3d, threadsnum >> > (
+        sh2rgb_forward_kernel<float, 3><<<Block3d, threadsnum>>> (
             sh_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             sh_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1313,7 +1317,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
     switch (degree)
     {
     case 0:
-        sh2rgb_backward_kernel<float, 0> << <blocknum, threadsnum >> > (
+        sh2rgb_backward_kernel<float, 0><<<blocknum, threadsnum>>> (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1323,7 +1327,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
             dir_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
-        sh2rgb_backward_kernel<float, 1> << <blocknum, threadsnum >> > (
+        sh2rgb_backward_kernel<float, 1><<<blocknum, threadsnum>>> (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1333,7 +1337,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
             dir_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
-        sh2rgb_backward_kernel<float, 2> << <blocknum, threadsnum >> > (
+        sh2rgb_backward_kernel<float, 2><<<blocknum, threadsnum>>> (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1343,7 +1347,7 @@ std::vector<at::Tensor> sh2rgb_backward(int64_t degree, at::Tensor rgb_grad, int
             dir_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
-        sh2rgb_backward_kernel<float, 3> << <blocknum, threadsnum >> > (
+        sh2rgb_backward_kernel<float, 3><<<blocknum, threadsnum>>> (
             dir.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_base.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             SH_rest.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1378,7 +1382,7 @@ __global__ void eigh_and_inv_2x2matrix_kernel_forward(
     if (index >= input.size(3) || batch_id >= input.size(0) || (valid_length != nullptr && index >= valid_length[0]))
         return;
 
-    float input_matrix[2][2] = { {input[batch_id][0][0][index],input[batch_id][0][1][index]},{input[batch_id][1][0][index],input[batch_id][1][1][index]}};
+    float input_matrix[2][2] = { {(float)input[batch_id][0][0][index],(float)input[batch_id][0][1][index]},{(float)input[batch_id][1][0][index],(float)input[batch_id][1][1][index]}};
     float det = input_matrix[0][0] * input_matrix[1][1] - input_matrix[0][1] * input_matrix[1][0];
     //a*c-b*b  ->  (a-b)(c-b)+b*(a+c-2*b)
     float det1 = (input_matrix[0][0] - input_matrix[0][1]) * (input_matrix[1][1] - input_matrix[0][1]) + input_matrix[0][1] * (input_matrix[0][0] + input_matrix[1][1] - 2 * input_matrix[0][1]);
@@ -1475,7 +1479,7 @@ std::vector<at::Tensor> eigh_and_inv_2x2matrix_forward(at::Tensor input, std::op
         input.TYPE(), 
         __FUNCTION__, 
         [&] {
-            eigh_and_inv_2x2matrix_kernel_forward<scalar_t > << <Block3d, threadsnum >> > (
+            eigh_and_inv_2x2matrix_kernel_forward<scalar_t ><<<Block3d, threadsnum>>> (
                 input.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
                 p_valid_length,
                 val.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
@@ -1506,7 +1510,7 @@ at::Tensor inv_2x2matrix_backward(at::Tensor inv_matrix,at::Tensor dL_dInvMatrix
         inv_matrix.TYPE(), 
         __FUNCTION__, 
         [&] {
-            inv_2x2matrix_kernel_backward<scalar_t > << <Block3d, threadsnum >> > (
+            inv_2x2matrix_kernel_backward<scalar_t ><<<Block3d, threadsnum>>> (
                 inv_matrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
                 dL_dInvMatrix.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
                 p_valid_length,
