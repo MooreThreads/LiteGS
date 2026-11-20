@@ -86,7 +86,7 @@ Gaussian splatting is a powerful technique used in various computer graphics and
     pip install -r requirement.txt
     ```
 
-On Linux with AMD GPUs, install a ROCm build of PyTorch and run the same three extension installs with `--no-build-isolation`, so they build against it. `PYTORCH_ROCM_ARCH` selects the GPU architectures to compile for (for example `gfx90a`, `gfx942` or `gfx1100`).
+On Linux with AMD GPUs, install a ROCm build of PyTorch and run the same three extension installs with `--no-build-isolation`, so they build against it. `PYTORCH_ROCM_ARCH` selects the GPU architectures to compile for (for example `gfx90a`, `gfx942` or `gfx1100`). On Windows, run them from an x64 developer command prompt for the MSVC build tools with `DISTUTILS_USE_SDK=1`, `ROCM_PATH` set to the ROCm SDK root (`rocm-sdk path --root` prints it for the pip packages) and `HIP_DEVICE_LIB_PATH` set to its `lib/llvm/amdgcn/bitcode` directory.
 
     
 ### Train
