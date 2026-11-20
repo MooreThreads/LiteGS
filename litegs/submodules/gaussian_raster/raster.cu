@@ -1,11 +1,15 @@
+#if !defined(USE_ROCM)
 #ifndef __CUDACC__
 #define __CUDACC__
 #define __NVCC__
 #endif
+#endif
 #include "cuda_runtime.h"
 #include <cooperative_groups.h>
+#if !defined(USE_ROCM)
 #include <cooperative_groups/reduce.h>
 #include <cuda/atomic>
+#endif
 #include <math.h>
 #include <cuda_fp16.h>
 namespace cg = cooperative_groups;
@@ -14,6 +18,101 @@ namespace cg = cooperative_groups;
 
 #include "cuda_errchk.h"
 #include "raster.h"
+
+// The rasterizer launches blockDim.x == 32: each tile is a positional group of
+// 32 threads (one tile-row group). On a 64-wide AMD wavefront (gfx90a) two such
+// tiles share a wavefront, so every cross-lane primitive below must operate
+// WITHIN each 32-lane tile group (width 32), never across the full wavefront,
+// or the two tiles' partials would contaminate each other (and a full-wavefront
+// __any_sync would be called divergently when the two tiles' loops end on
+// different iterations -- a hardware fault).
+#if defined(USE_ROCM)
+static constexpr int kTileLanes = 32;
+
+// __h*2_mask on CUDA return a 32-bit word with 0xFFFF set per half lane that
+// passes; HIP <hip/hip_fp16.h> ships the comparing __h*2 (half2 of 1.0/0.0)
+// but not the *_mask form. Synthesize the 0xFFFF-per-half mask from the bool2
+// compare so the downstream `reinterpret_cast<unsigned*>(&x)[0] &= mask` and
+// `count += (0x00010001u & mask)` bit-masking behave exactly as on CUDA.
+__device__ __forceinline__ unsigned int half2_cmp_to_mask(half2 cmp)
+{
+    unsigned int lo = (__low2half(cmp) != half(0.0f)) ? 0x0000FFFFu : 0u;
+    unsigned int hi = (__high2half(cmp) != half(0.0f)) ? 0xFFFF0000u : 0u;
+    return lo | hi;
+}
+__device__ __forceinline__ unsigned int __hgt2_mask(half2 a, half2 b)
+{
+    return half2_cmp_to_mask(__hgt2(a, b));
+}
+__device__ __forceinline__ unsigned int __hge2_mask(half2 a, half2 b)
+{
+    return half2_cmp_to_mask(__hge2(a, b));
+}
+__device__ __forceinline__ unsigned int __hle2_mask(half2 a, half2 b)
+{
+    return half2_cmp_to_mask(__hle2(a, b));
+}
+// SIMD packed unsigned-16 compare-less-equal: per 16-bit lane, 0xFFFF if
+// a_lane <= b_lane else 0. Used for last_contributor index masking.
+__device__ __forceinline__ unsigned int __vcmpleu2(unsigned int a, unsigned int b)
+{
+    unsigned int alo = a & 0xFFFFu, ahi = a >> 16;
+    unsigned int blo = b & 0xFFFFu, bhi = b >> 16;
+    unsigned int lo = (alo <= blo) ? 0x0000FFFFu : 0u;
+    unsigned int hi = (ahi <= bhi) ? 0xFFFF0000u : 0u;
+    return lo | hi;
+}
+
+// HIP ships __hmin (scalar) but not __hmin2 (packed half2 min).
+__device__ __forceinline__ half2 __hmin2(half2 a, half2 b)
+{
+    half lo = __hlt(__low2half(a), __low2half(b)) ? __low2half(a) : __low2half(b);
+    half hi = __hlt(__high2half(a), __high2half(b)) ? __high2half(a) : __high2half(b);
+    return __halves2half2(lo, hi);
+}
+
+// sm_80 hardware warp-redux (__reduce_{add,max}_sync) does exist in HIP 7.2 but
+// reduces over the WHOLE 64-lane wavefront, which would fold the adjacent tile.
+// These tile_warp_reduce_* helpers butterfly-all-reduce confined to each 32-lane
+// tile group (width kTileLanes) so the result lands in every lane and the two
+// tiles sharing a wavefront stay independent. The integer domain keeps the
+// rasterizer's deliberate exponent-rescale path exact (int add is associative ->
+// bitwise-deterministic).
+template<class T>
+__device__ __forceinline__ T tile_warp_reduce_add(T v)
+{
+    #pragma unroll
+    for (int o = kTileLanes / 2; o > 0; o >>= 1)
+        v += __shfl_xor(v, o, kTileLanes);
+    return v;
+}
+__device__ __forceinline__ int tile_warp_reduce_max(int v)
+{
+    #pragma unroll
+    for (int o = kTileLanes / 2; o > 0; o >>= 1)
+        v = max(v, __shfl_xor(v, o, kTileLanes));
+    return v;
+}
+// Per-tile "any": OR-reduce a predicate within the 32-lane tile group via a
+// width-32 butterfly. CUDA's __any_sync over a 32-lane warp == one tile, so on
+// wave64 (two tiles per wavefront, EACH WITH ITS OWN loop bounds) a
+// __any_sync over the full 64-lane mask would be called divergently when one
+// tile's loop has ended and the other's has not -- undefined and faulting.
+// The butterfly stays inside the tile and never diverges across tiles.
+__device__ __forceinline__ bool tile_any(bool pred)
+{
+    int v = pred ? 1 : 0;
+    #pragma unroll
+    for (int o = kTileLanes / 2; o > 0; o >>= 1)
+        v |= __shfl_xor(v, o, kTileLanes);
+    return v != 0;
+}
+#else
+template<class T>
+__device__ __forceinline__ T tile_warp_reduce_add(T v) { return __reduce_add_sync(0xffffffff, v); }
+__device__ __forceinline__ int tile_warp_reduce_max(int v) { return __reduce_max_sync(0xffffffff, v); }
+__device__ __forceinline__ bool tile_any(bool pred) { return __any_sync(0xffffffff, pred); }
+#endif
 
 
 struct __align__(16) PackedParams
@@ -73,7 +172,13 @@ inline __device__ half2 fast_exp_approx(half2 input) {
     half2 output;
     half2 log2_e(1.4426950409f, 1.4426950409f);
     half2 scaled_input = input * log2_e;
+#if defined(USE_ROCM)
+    // hipcc cannot assemble NVIDIA PTX; ex2.approx.f16x2 is base-2 exp on a
+    // packed half2. h2exp2 is the HIP intrinsic for exactly that.
+    output = h2exp2(scaled_input);
+#else
     asm("ex2.approx.f16x2 %0, %1;" : "=r"(__HALF2_TO_UI(output)) : "r"(__HALF2_TO_CUI(scaled_input)));
+#endif
     return output;
 }
 
@@ -81,6 +186,18 @@ inline __device__ half2 fast_exp_approx(half2 input) {
 template<class T, bool boardcast>
 inline __device__ void warp_reduce_sum(T& data)
 {
+#if defined(USE_ROCM)
+    // Confine the down-shuffle reduction to each 32-lane tile group; HIP's
+    // __shfl_* default to width=warpSize (64), which would fold the adjacent
+    // tile in the same wavefront into this tile's sum.
+    data += __shfl_down(data, 16, kTileLanes);
+    data += __shfl_down(data, 8, kTileLanes);
+    data += __shfl_down(data, 4, kTileLanes);
+    data += __shfl_down(data, 2, kTileLanes);
+    data += __shfl_down(data, 1, kTileLanes);
+    if (boardcast)
+        data = __shfl(data, 0, kTileLanes);
+#else
     data += __shfl_down_sync(0xffffffff, data, 16);
     data += __shfl_down_sync(0xffffffff, data, 8);
     data += __shfl_down_sync(0xffffffff, data, 4);
@@ -88,26 +205,27 @@ inline __device__ void warp_reduce_sum(T& data)
     data += __shfl_down_sync(0xffffffff, data, 1);
     if (boardcast)
         data = __shfl_sync(0xffffffff, data, 0);
+#endif
 }
 
 template<>
 inline __device__ void warp_reduce_sum<unsigned int, false>(unsigned int& data)
 {
-    data = __reduce_add_sync(0xffffffff, data);
+    data = tile_warp_reduce_add(data);
 }
 
 template<>
 inline __device__ void warp_reduce_sum<float, false>(float& data)
 {
     int exponent = (__float_as_uint(data) >> 23) & 0xff;
-    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    exponent = tile_warp_reduce_max(exponent) - 127;
     int scale_exponent = 23 - exponent;
     bool valid = (exponent > -127) && (scale_exponent < 128);
 
     float scaler = __uint_as_float(0 | ((scale_exponent + 127) << 23));
     float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
     int scaled_value = static_cast<int>(data * scaler);
-    scaled_value = __reduce_add_sync(0xffffffff, scaled_value) * valid;
+    scaled_value = tile_warp_reduce_add(scaled_value) * valid;
 
     data = scaled_value * inv_scaler;
 }
@@ -117,7 +235,7 @@ inline __device__ void warp_reduce_sum<float2, false>(float2& data)
 {
     int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
     exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
-    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    exponent = tile_warp_reduce_max(exponent) - 127;
     int scale_exponent = 23 - exponent;
     bool valid = (exponent > -127) && (scale_exponent < 128);
 
@@ -125,10 +243,10 @@ inline __device__ void warp_reduce_sum<float2, false>(float2& data)
     float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
 
     int scaled_value_x = static_cast<int>(data.x * scaler);
-    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
+    scaled_value_x = tile_warp_reduce_add(scaled_value_x) * valid;
     data.x = scaled_value_x * inv_scaler;
     int scaled_value_y = static_cast<int>(data.y * scaler);
-    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
+    scaled_value_y = tile_warp_reduce_add(scaled_value_y) * valid;
     data.y = scaled_value_y * inv_scaler;
 }
 
@@ -138,7 +256,7 @@ inline __device__ void warp_reduce_sum<float3, false>(float3& data)
     int exponent = (__float_as_uint(data.x) >> 23) & 0xff;
     exponent = max(exponent, (__float_as_uint(data.y) >> 23) & 0xff);
     exponent = max(exponent, (__float_as_uint(data.z) >> 23) & 0xff);
-    exponent = __reduce_max_sync(0xffffffff, exponent) - 127;
+    exponent = tile_warp_reduce_max(exponent) - 127;
     int scale_exponent = 23 - exponent;
     bool valid = (exponent > -127) && (scale_exponent < 128);
 
@@ -146,13 +264,13 @@ inline __device__ void warp_reduce_sum<float3, false>(float3& data)
     float inv_scaler = __uint_as_float(0 | ((127 - scale_exponent) << 23));
 
     int scaled_value_x = static_cast<int>(data.x * scaler);
-    scaled_value_x = __reduce_add_sync(0xffffffff, scaled_value_x) * valid;
+    scaled_value_x = tile_warp_reduce_add(scaled_value_x) * valid;
     data.x = scaled_value_x * inv_scaler;
     int scaled_value_y = static_cast<int>(data.y * scaler);
-    scaled_value_y = __reduce_add_sync(0xffffffff, scaled_value_y) * valid;
+    scaled_value_y = tile_warp_reduce_add(scaled_value_y) * valid;
     data.y = scaled_value_y * inv_scaler;
     int scaled_value_z = static_cast<int>(data.z * scaler);
-    scaled_value_z = __reduce_add_sync(0xffffffff, scaled_value_z) * valid;
+    scaled_value_z = tile_warp_reduce_add(scaled_value_z) * valid;
     data.z = scaled_value_z * inv_scaler;
 }
 
@@ -223,7 +341,7 @@ __global__ void raster_forward_kernel(
             unsigned int any_active = 0xffffffffu;
             int index_in_tile = 0;
             auto points_id_in_tile = &sorted_points[batch_id][start_index_in_tile];
-            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && __any_sync(0xffffffff, any_active != 0); index_in_tile++)
+            for (; (index_in_tile+ start_index_in_tile < end_index_in_tile) && tile_any(any_active != 0); index_in_tile++)
             {
                 int point_id = points_id_in_tile[index_in_tile];
                 PackedParams params = packed_params[point_id];
@@ -370,7 +488,7 @@ tilesnum_x,packed_params.size(1)
 #define ENCODE(STATISTIC, TRANS, DEPTH) (((STATISTIC)*1)<<2)|(((TRANS)*1)<<1)|((DEPTH)*1)
 
 #define LAUNCH_RASTER_FORWARD_KERNEL(TILE_H, TILE_W, STATISTIC, TRANS, DEPTH) \
-    raster_forward_kernel<TILE_H, TILE_W, STATISTIC, TRANS, DEPTH> << <Block3d, Thread3d >> > (RASTER_FORWARD_PARAMS);
+    raster_forward_kernel<TILE_H, TILE_W, STATISTIC, TRANS, DEPTH><<<Block3d, Thread3d>>> (RASTER_FORWARD_PARAMS);
 
 #define DISPATCH_RASTER_FORWARD_KERNEL(STATISTIC, TRANS, DEPTH) \
     if (tile_h == 8 && tile_w == 16) { \
@@ -691,7 +809,7 @@ __global__ void raster_backward_kernel(
                 index_in_tile = max(max(index_in_tile, last0), last1);
                 shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x] = (last1 << 16 | last0);
             }
-            index_in_tile = __reduce_max_sync(0xffffffff, index_in_tile);
+            index_in_tile = tile_warp_reduce_max(index_in_tile);
             const int* points_in_tile = &sorted_points[batch_id][start_index_in_tile];
             for (; (index_in_tile >= 0); index_in_tile--)
             {
@@ -750,7 +868,7 @@ __global__ void raster_backward_kernel(
                     valid_mask &= __hge2_mask(alpha, half2(1.0f / 256, 1.0f / 256));
                     valid_mask &= __vcmpleu2(index_in_tile << 16 | index_in_tile, shared_last_contributor[i][threadIdx.y * blockDim.x + threadIdx.x]);
 
-                    if (__any_sync(0xffffffff, valid_mask!=0))
+                    if (tile_any(valid_mask!=0))
                     {
                         reinterpret_cast<unsigned int*>(&alpha)[0] &= valid_mask;
                         reinterpret_cast<unsigned int*>(&G)[0] &= valid_mask;
@@ -793,7 +911,7 @@ __global__ void raster_backward_kernel(
                 
                 PackedGrad* grad_addr = packed_grad + point_id;
                 //unsigned mask = __ballot_sync(0xffffffff, grad_opacity!=0);
-                if (__any_sync(0xffffffff, grad_a.x!=half(0)|| grad_a.y!=half(0)))
+                if (tile_any(grad_a.x!=half(0)|| grad_a.y!=half(0)))
                 {
                     half2 rg{ grad_r.x + grad_r.y ,grad_g.x + grad_g.y };
                     half2 ba{ grad_b.x + grad_b.y ,grad_a.x + grad_a.y };
@@ -901,7 +1019,7 @@ err_square_sum.packed_accessor32<float, 3, torch::RestrictPtrTraits >(),\
 tilesnum_x, img_h, img_w, packed_params.size(1)
 
 #define LAUNCH_RASTER_BACKWARD_KERNEL(TILE_H, TILE_W, STATISTIC, TRANS, DEPTH) \
-    raster_backward_kernel<TILE_H, TILE_W, STATISTIC, TRANS, DEPTH> << <Block3d, Thread3d >> > (RASTER_BACKWARD_PARAMS);
+    raster_backward_kernel<TILE_H, TILE_W, STATISTIC, TRANS, DEPTH><<<Block3d, Thread3d>>> (RASTER_BACKWARD_PARAMS);
 
 #define DISPATCH_RASTER_BACKWARD_KERNEL(STATISTIC, TRANS, DEPTH) \
     if (tile_h == 8 && tile_w == 16) { \
