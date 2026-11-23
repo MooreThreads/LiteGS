@@ -12,7 +12,9 @@
 #define BOX_SIZE 1024
 
 #include "cuda_runtime.h"
+#if !defined(USE_ROCM)
 #include "device_launch_parameters.h"
+#endif
 #include "simple_knn.h"
 #include <cfloat>
 #include <cub/cub.cuh>
@@ -21,9 +23,13 @@
 #include <cuda_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/sequence.h>
+#if !defined(USE_ROCM)
 #define __CUDACC__
+#endif
 #include <cooperative_groups.h>
+#if !defined(USE_ROCM)
 #include <cooperative_groups/reduce.h>
+#endif
 
 namespace cg = cooperative_groups;
 
@@ -202,7 +208,7 @@ void SimpleKNN::knn(int P, float3* points, float* meanDists)
 
 	thrust::device_vector<uint32_t> morton(P);
 	thrust::device_vector<uint32_t> morton_sorted(P);
-	coord2Morton << <(P + 255) / 256, 256 >> > (P, points, minn, maxx, morton.data().get());
+	coord2Morton<<<(P + 255) / 256, 256>>>(P, points, minn, maxx, morton.data().get());
 
 	thrust::device_vector<uint32_t> indices(P);
 	thrust::sequence(indices.begin(), indices.end());
@@ -215,8 +221,8 @@ void SimpleKNN::knn(int P, float3* points, float* meanDists)
 
 	uint32_t num_boxes = (P + BOX_SIZE - 1) / BOX_SIZE;
 	thrust::device_vector<MinMax> boxes(num_boxes);
-	boxMinMax << <num_boxes, BOX_SIZE >> > (P, points, indices_sorted.data().get(), boxes.data().get());
-	boxMeanDist << <num_boxes, BOX_SIZE >> > (P, points, indices_sorted.data().get(), boxes.data().get(), meanDists);
+	boxMinMax<<<num_boxes, BOX_SIZE>>>(P, points, indices_sorted.data().get(), boxes.data().get());
+	boxMeanDist<<<num_boxes, BOX_SIZE>>>(P, points, indices_sorted.data().get(), boxes.data().get(), meanDists);
 
 	cudaFree(result);
 }

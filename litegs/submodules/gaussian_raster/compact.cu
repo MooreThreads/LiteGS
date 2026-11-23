@@ -1,12 +1,29 @@
+#if !defined(USE_ROCM)
 #ifndef __CUDACC__
     #define __CUDACC__
     #define __NVCC__
 #endif
+#endif
 #include "cuda_runtime.h"
 #include <cooperative_groups.h>
+#if !defined(USE_ROCM)
 #include <cooperative_groups/reduce.h>
 #include <cuda/atomic>
+#endif
 namespace cg = cooperative_groups;
+
+// AMD wavefront is 64 on CDNA (gfx90a) and 32 on RDNA; NVIDIA warp is 32.
+#if defined(USE_ROCM)
+#if defined(__GFX9__)
+static constexpr int kWarpSize = 64;
+#else
+static constexpr int kWarpSize = 32;
+#endif
+#define WARP_FULL_MASK 0xffffffffffffffffULL
+#else
+static constexpr int kWarpSize = 32;
+#define WARP_FULL_MASK 0xffffffffu
+#endif
 
 #include <ATen/core/TensorAccessor.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -300,7 +317,7 @@ std::vector<at::Tensor> create_viewproj_backward(
     torch::Tensor grad_recp_tan_half_fov_x = torch::zeros_like(recp_tan_half_fov_x);
 
     int blocks_num = std::ceil(views_num / 128.0f);
-    create_viewproj_backward_kernel << <blocks_num, 128 >> > (
+    create_viewproj_backward_kernel<<<blocks_num, 128>>> (
         view_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         proj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
         viewproj_matrix_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -389,7 +406,7 @@ void adamUpdate(
         {
             valid_length_ptr = (*valid_length).data_ptr<int>();
         }
-        sparse_chunk_adam_kernel << <Block3d, param.size(2) >> > (
+        sparse_chunk_adam_kernel<<<Block3d, param.size(2)>>> (
             param.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             param_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
             exp_avg.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -474,17 +491,21 @@ __global__ void frustum_culling_aabb_kernel(
     visibility[m] = global_visible;
     __syncthreads();
 
-    // reduce lane
-    unsigned warp_mask = __ballot_sync(0xffffffff, global_visible);
-    int lane_id = threadIdx.x & 0x1f;
-    int lane_offset = __popc(warp_mask & ((1u << lane_id) - 1u));
+    // reduce lane -- one full-wavefront ballot. On wave64 a 32-bit mask/popc and
+    // lane_id = threadIdx.x & 0x1f double-count: lanes 0 and 32 both look like a
+    // leader and the 32-bit __popc drops the upper half-wavefront. Use a 64-bit
+    // ballot, __popcll, and a single leader per kWarpSize-lane wavefront so the
+    // compaction offsets are exact on both wave32 and wave64.
+    unsigned long long warp_mask = __ballot_sync(WARP_FULL_MASK, global_visible);
+    int lane_id = threadIdx.x & (kWarpSize - 1);
+    int lane_offset = __popcll(warp_mask & ((1ULL << lane_id) - 1ULL));
     //reduce warp
     int warp_offset = 0;
     if (lane_id == 0)
     {
-        warp_offset=atomicAdd(&visible_num_in_block, __popc(warp_mask));
+        warp_offset=atomicAdd(&visible_num_in_block, __popcll(warp_mask));
     }
-    warp_offset = __shfl_sync(0xffffffff, warp_offset, 0);
+    warp_offset = __shfl_sync(WARP_FULL_MASK, warp_offset, 0, kWarpSize);
     __syncthreads();
     //reduce block
     int block_offset = 0;
@@ -1024,7 +1045,7 @@ std::vector<at::Tensor> cull_compact_activate(
             );
         break;
     case 1:
-        activate_forward_kernel<1> << <allocate_chunks_num, chunksize, 0 >> > (
+        activate_forward_kernel<1><<<allocate_chunks_num, chunksize, 0>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1042,7 +1063,7 @@ std::vector<at::Tensor> cull_compact_activate(
             );
         break;
     case 2:
-        activate_forward_kernel<2> << <allocate_chunks_num, chunksize, 0 >> > (
+        activate_forward_kernel<2><<<allocate_chunks_num, chunksize, 0>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1060,7 +1081,7 @@ std::vector<at::Tensor> cull_compact_activate(
             );
         break;
     case 3:
-        activate_forward_kernel<3> << <allocate_chunks_num, chunksize, 0 >> > (
+        activate_forward_kernel<3><<<allocate_chunks_num, chunksize, 0>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1111,7 +1132,7 @@ std::vector<at::Tensor> activate_backward(
     switch (sh_degree)
     {
     case 0:
-        activate_backward_kernel<0> << <allocate_chunks_num, chunksize >> > (
+        activate_backward_kernel<0><<<allocate_chunks_num, chunksize>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1134,7 +1155,7 @@ std::vector<at::Tensor> activate_backward(
             compacted_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 1:
-        activate_backward_kernel<1> << <allocate_chunks_num, chunksize >> > (
+        activate_backward_kernel<1><<<allocate_chunks_num, chunksize>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1157,7 +1178,7 @@ std::vector<at::Tensor> activate_backward(
             compacted_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 2:
-        activate_backward_kernel<2> << <allocate_chunks_num, chunksize >> > (
+        activate_backward_kernel<2><<<allocate_chunks_num, chunksize>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1180,7 +1201,7 @@ std::vector<at::Tensor> activate_backward(
             compacted_opacity_grad.packed_accessor32<float, 3, torch::RestrictPtrTraits>());
         break;
     case 3:
-        activate_backward_kernel<3> << <allocate_chunks_num, chunksize >> > (
+        activate_backward_kernel<3><<<allocate_chunks_num, chunksize>>> (
             visible_chunk_id.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
             visible_chunks_num.packed_accessor32<int, 1, torch::RestrictPtrTraits>(),
             view_matrix.packed_accessor32<float, 3, torch::RestrictPtrTraits>(),
@@ -1304,7 +1325,7 @@ void gpu_driven_pipeline_sparse_op(
         [&] {
             switch (op_type) {
             case OP_ADD:
-                sparse_scatter_kernel<scalar_t, OP_ADD> << <grid, block >> > (
+                sparse_scatter_kernel<scalar_t, OP_ADD><<<grid, block>>> (
                     A.data_ptr<scalar_t>(),
                     B.data_ptr<scalar_t>(),
                     visible_chunk_ids.data_ptr<int64_t>(),
@@ -1313,7 +1334,7 @@ void gpu_driven_pipeline_sparse_op(
                     );
                 break;
             case OP_MIN:
-                sparse_scatter_kernel<scalar_t, OP_MIN> << <grid, block >> > (
+                sparse_scatter_kernel<scalar_t, OP_MIN><<<grid, block>>> (
                     A.data_ptr<scalar_t>(),
                     B.data_ptr<scalar_t>(),
                     visible_chunk_ids.data_ptr<int64_t>(),
@@ -1322,7 +1343,7 @@ void gpu_driven_pipeline_sparse_op(
                     );
                 break;
             case OP_MAX:
-                sparse_scatter_kernel<scalar_t, OP_MAX> << <grid, block >> > (
+                sparse_scatter_kernel<scalar_t, OP_MAX><<<grid, block>>> (
                     A.data_ptr<scalar_t>(),
                     B.data_ptr<scalar_t>(),
                     visible_chunk_ids.data_ptr<int64_t>(),
